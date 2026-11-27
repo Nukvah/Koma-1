@@ -24,9 +24,9 @@ a terminal-era screenshot as in a modern browser.
 │ // colls     │ └────────────────────────────────┘ └ also reading ┘    │
 │ status       │ ~/manga 214 series · sort · filter        grid|table   │
 │ (pinned)     │ cover cover cover cover                                │
-│              │ cover cover cover cover      4 × 3 = 12 per page       │
+│              │ cover cover cover cover      4 columns, scrolls on     │
 │              │ cover cover cover cover                                │
-│              │ keys · 1–12 of 214 · next ›                            │
+│              │ … more rows load as you scroll …                       │
 └──────────────┴────────────────────────────────────────────────────────┘
 ```
 
@@ -57,7 +57,7 @@ and the continue hero. Under the cover: title, then one line of facts (volumes, 
 
 - **Hero**: the series you're reading now (large cover, title, position, pages left,
   `read on` with the `r` shortcut) next to three "also reading" cards.
-- **Grid**: 4 columns × 3 rows, 12 series per page, with a grid/table toggle.
+- **Grid**: 4 columns that scroll on without end, with a grid/table toggle.
   The table view (not drawn yet) is a real `<table>`, as the manifesto requires.
 
 ## Series page
@@ -66,20 +66,22 @@ A dotted panel with the cover (offset amber shadow) next to a panel with the
 title, chips (author, volume count, status, size, reading direction), the summary
 and actions. Volumes below use the same cover card.
 
-## Paging vs infinite scroll
+## Infinite scroll
 
-Server-rendered pages with real URLs (`?page=2`) are the baseline. They work
-without JavaScript, keep links and the back button correct, and keep each
-library page under the 15 KB budget. Infinite scroll can be layered on as
-progressive enhancement without losing speed:
+The library scrolls without end; there are no next and previous buttons.
 
-1. When the last row approaches the viewport, fetch the next page's HTML and append it.
-2. Update the URL with `history.replaceState` so reload and back return to the same spot.
-3. Window the grid: rows far from the viewport keep their height but drop their
-   images. Every cover has a fixed 2:3 ratio, so heights are known and nothing shifts.
+1. The server renders the grid in chunks of 24–36 series. When the last row
+   approaches the viewport, the next chunk's HTML is fetched and appended.
+2. The camera trick: only rows near the viewport hold images. Rows far from it
+   keep their height but drop their covers. Every cover has a fixed 2:3 ratio,
+   so heights are known, nothing shifts, and memory stays flat however long
+   the library is.
+3. The URL follows the position with `history.replaceState`, so reload and back
+   return to the same spot.
 
 Covers are immutable and cached for a year, so scrolling back costs no network.
-Fetch 24–36 series per step.
+Without JavaScript the same chunks are plain pages (`?page=2`) with a next link,
+so the fallback is almost free and each chunk stays under the 15 KB budget.
 
 ## Tokens
 
