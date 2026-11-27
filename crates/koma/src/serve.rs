@@ -11,6 +11,7 @@
 //! | `GET /a/koma.{hash}.css`, `/a/scroll.{hash}.js` | the stylesheet and the library script, cached for a year |
 //! | `GET /s/{id}` | a series: its books |
 //! | `GET /r/{book}/{n}` | the reader, page `n` (1-based) |
+//! | `GET /b/{book}` | the book's pages and their variants, for the reader's script |
 //! | `GET /d/{book}` | the book's original file (a photo folder as a stored ZIP) |
 //! | `GET /p/{hash}.{ext}` | a page's bytes, cached for a year |
 //! | `GET /p/{hash}.{width}.v{version}.{format}` | a page variant (`jpg` or `webp`), cached for a year |
@@ -130,6 +131,7 @@ pub fn router(state: AppState) -> Router {
         .route("/s/{id}", get(series))
         .route("/r/{book}/{page}", get(reader))
         .route("/d/{book}", get(download))
+        .route("/b/{book}", get(book_json))
         .route("/p/{file}", get(page_bytes))
         .route("/healthz", get(healthz))
         .with_state(state)
@@ -467,6 +469,10 @@ async fn stylesheet(UrlPath(file): UrlPath<String>) -> Result<Response, Failure>
         ("text/css; charset=utf-8", html::CSS)
     } else if url == html::scroll_url() {
         ("text/javascript; charset=utf-8", html::SCROLL_JS)
+    } else if url == html::reader_css_url() {
+        ("text/css; charset=utf-8", html::READER_CSS)
+    } else if url == html::reader_js_url() {
+        ("text/javascript; charset=utf-8", html::READER_JS)
     } else {
         return Err(Failure::NotFound);
     };
@@ -530,13 +536,68 @@ async fn reader(
         .query(move |c| {
             let book = c.book(book_id)?.ok_or(Failure::NotFound)?;
             let series = c.series_by_id(book.series_id)?.ok_or(Failure::NotFound)?;
-            let pages = c.pages(book_id)?;
+            let pages = reader_pages(c, book_id)?;
             if number == 0 || number > pages.len() {
                 return Err(Failure::NotFound);
             }
-            Ok(Html(html::reader(&series, &book, &pages, number)))
+            // The book's own direction, else its library's.
+            let rtl = match c.details(&book.path)?.and_then(|d| d.direction) {
+                Some(d) => d == "rtl",
+                None => {
+                    let folder = libraries::library_of(&series.path);
+                    Library::from_folder(folder, 0, 0).direction
+                        == libraries::Direction::RightToLeft
+                }
+            };
+            Ok(Html(html::reader(&html::Reader {
+                series: &series,
+                book: &book,
+                page: &pages[number - 1],
+                number,
+                total: pages.len(),
+                rtl,
+            })))
         })
         .await
+}
+
+/// A book's pages with their variants, for the reader.
+fn reader_pages(c: &Catalog, book_id: i64) -> Result<Vec<html::ReaderPage>, Failure> {
+    let mut made: std::collections::HashMap<i64, Vec<(u32, u8)>> = Default::default();
+    for (number, width, format) in c.book_variants(book_id, variants::VERSION)? {
+        let bit = if format == "jpg" { 1 } else { 2 };
+        let list = made.entry(number).or_default();
+        match list.iter_mut().find(|(w, _)| *w == width) {
+            Some((_, m)) => *m |= bit,
+            None => list.push((width, bit)),
+        }
+    }
+    Ok(c.pages(book_id)?
+        .iter()
+        .map(|p| html::ReaderPage::new(p, made.remove(&p.number).unwrap_or_default()))
+        .collect())
+}
+
+/// `GET /b/<book>`: the book's pages and their variants, for the reader's
+/// script (see [`html::reader_json`]).
+async fn book_json(
+    State(state): State<AppState>,
+    UrlPath(book_id): UrlPath<i64>,
+) -> Result<Response, Failure> {
+    let json = state
+        .query(move |c| {
+            c.book(book_id)?.ok_or(Failure::NotFound)?;
+            Ok(html::reader_json(&reader_pages(c, book_id)?))
+        })
+        .await?;
+    Ok((
+        [
+            (CONTENT_TYPE, "application/json"),
+            (CACHE_CONTROL, "no-cache"),
+        ],
+        json,
+    )
+        .into_response())
 }
 
 /// `GET /d/<book>`: the book's original file, sent as it is; a photo folder

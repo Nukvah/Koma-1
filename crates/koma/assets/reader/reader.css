@@ -1,0 +1,23 @@
+/* Koma-1 reader: the page, nothing else, until a tap shows the bars.
+   Design: docs/design/reader*.html. */
+.reader{margin:0;height:100vh;overflow:hidden;background:#000;color:#D6DCE1;font:13px/1.4 ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+.reader a{color:inherit}
+.stage{height:100vh;display:flex;justify-content:center;align-items:center}
+.stage img{display:block;max-width:100vw;max-height:100vh;width:auto;height:auto}
+/* Tap thirds: links, so they work without JavaScript too. */
+.zones{position:fixed;inset:0;display:grid;grid-template-columns:1fr 1fr 1fr}
+.zones a{display:grid;place-items:center;color:transparent;text-decoration:none;-webkit-tap-highlight-color:transparent}
+.zones a:focus-visible{outline:2px solid #F2A33A;outline-offset:-4px}
+/* The first open shows them once, faintly. */
+.hint .zones a{color:#fff;background:#0008;border:1px dashed #fff6;font-size:12px;text-transform:uppercase;letter-spacing:.1em}
+.hint .zones a:nth-child(2){background:#0004}
+.hint .zones span{padding:4px 10px;background:#000}
+/* Bars, shown by a tap in the middle or a key (#bars without JavaScript). */
+.bars{display:none}.bars:target,.open .bars{display:block}
+.rbar{position:fixed;left:0;right:0;z-index:1;display:flex;align-items:center;gap:14px;padding:10px 16px;color:#D6DCE1;background:#0F1215F0;border:0 solid #3A424C}
+.rbar.top{top:0;border-bottom-width:2px}.rbar.bot{bottom:0;border-top-width:2px;flex-wrap:wrap}
+.rbar b{color:#fff}.rbar .dim{color:#8A949E}.rbar .end{margin-left:auto}
+.rbar kbd{font:inherit;font-size:11px;border:1px solid #3A424C;padding:0 4px}
+.seg{display:flex;border:1px solid #3A424C}.seg a{padding:2px 9px;color:#8A949E;text-decoration:none}
+.seg [aria-current]{background:#F2A33A;color:#0F1215}
+@media (max-width:760px){.rbar .dim:not(.end),.rbar .label{display:none}}

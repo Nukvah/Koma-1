@@ -1385,6 +1385,26 @@ impl Catalog {
         )
     }
 
+    /// The variants of every page of a book made with `version`, as
+    /// `(page number, width, format)`, by page then width.
+    pub fn book_variants(
+        &self,
+        book_id: i64,
+        version: i64,
+    ) -> Result<Vec<(i64, u32, String)>, Error> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT pages.number, variants.width, variants.format FROM pages
+             JOIN variants ON variants.hash = pages.hash
+             JOIN variant_pages vp ON vp.hash = pages.hash AND vp.version = ?2
+             WHERE pages.book_id = ?1
+             ORDER BY pages.number, variants.width, variants.format",
+        )?;
+        let rows = stmt.query_map(params![book_id, version], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?;
+        rows.collect()
+    }
+
     /// The variants of a page, as `(width, height, format)`, narrowest first.
     pub fn variants_of(&self, hash: &blake3::Hash) -> Result<Vec<(u32, u32, String)>, Error> {
         let mut stmt = self.conn.prepare_cached(
