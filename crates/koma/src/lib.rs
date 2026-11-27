@@ -11,6 +11,8 @@ pub mod cli;
 pub mod health;
 pub mod html;
 pub mod log;
+pub mod meta;
+pub mod names;
 pub mod natsort;
 pub mod scan;
 pub mod serve;

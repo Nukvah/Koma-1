@@ -87,9 +87,14 @@ times as tall as wide is a tall strip, as in webtoons (`Size::is_tall_strip`).
 `<data>/koma.db`, a SQLite database in WAL mode (`koma::catalog`); `koma serve`
 only reads it.
 
-- A series is a folder, and each CBZ or ZIP in it is a book. A book in the
-  library root is a series of its own. Hidden files and symbolic links are
-  skipped.
+- A series is a folder, and each CBZ or ZIP in it is a book. Books loose in
+  the library root group by the series their file name names (see
+  [naming.md](naming.md)). Hidden files and symbolic links are skipped.
+- Each book's details (title, number, chapter or volume, authors, genres,
+  tags…) come from `metadata.json` over `ComicInfo.xml`, with gaps filled
+  from the file name (`koma::meta`, `koma::names`; rules and every example in
+  [naming.md](naming.md), checked by `tests/naming_baseline.rs`). Authors,
+  publishers, genres and tags are in `book_terms`.
 - A photo folder is a folder that holds page images and nothing else that is
   read (no archives, no subfolders): it is one book, named as the folder, in
   the series of the folder above it. `cover.*` is its first page, then the
@@ -132,9 +137,9 @@ only reads it.
 - A file or folder that can't be read is logged, stored in `scan_errors`
   with the reason (and the file's size and time), and skipped; it never stops
   the scan, and is retried only once it changes.
-- The catalogue's schema version is in `PRAGMA user_version`. Version 1 (M1)
-  is dropped and rebuilt by the next scan: it holds nothing a scan can't
-  recreate.
+- The catalogue's schema version is in `PRAGMA user_version`. An older
+  version is dropped and rebuilt by the next scan: until accounts exist it
+  holds nothing a scan can't recreate.
 
 Order is natural everywhere: SQL uses the `natsort` collation, which is
 `koma::natsort::compare_paths`.

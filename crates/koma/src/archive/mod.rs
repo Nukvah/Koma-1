@@ -52,11 +52,13 @@ pub fn is_page(entry: &zip::Entry) -> bool {
     if entry.is_dir() || entry.encrypted || matches!(entry.method, zip::Method::Other(_)) {
         return false;
     }
-    let hidden = entry
-        .name
-        .split('/')
-        .any(|part| part.starts_with('.') || part == "__MACOSX");
-    !hidden && is_page_name(&entry.name)
+    !is_hidden(&entry.name) && is_page_name(&entry.name)
+}
+
+/// Whether an archive path is hidden or macOS metadata (`.x`, `__MACOSX/`).
+pub fn is_hidden(name: &str) -> bool {
+    name.split('/')
+        .any(|part| part.starts_with('.') || part == "__MACOSX")
 }
 
 /// Whether a file name has a page image's extension.

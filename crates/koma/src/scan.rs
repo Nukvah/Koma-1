@@ -35,9 +35,10 @@ use crate::archive::zip::{self, Limits, Method};
 use crate::archive::{self};
 use crate::blobs::BlobStore;
 use crate::catalog::{
-    self, Catalog, GONE_GRACE_SECS, JobKind, MAX_ATTEMPTS, NewBook, Page, Place, Stamp,
+    self, Catalog, Details, GONE_GRACE_SECS, JobKind, MAX_ATTEMPTS, NewBook, Page, Place, Stamp,
 };
 use crate::log;
+use crate::names;
 
 /// A folder modified less than this long before it is read is read again
 /// next time: file systems with coarse times (FAT, some network shares) could
@@ -313,6 +314,8 @@ struct Listing {
     archives: Found,
     /// Page images.
     images: Found,
+    /// Metadata files (`ComicInfo.xml`, `metadata.json`).
+    meta: Found,
 }
 
 impl Listing {
@@ -320,16 +323,16 @@ impl Listing {
     /// archives, no subfolders): it is one book, each image a page. A series
     /// folder with a `cover.jpg` next to its volumes is not one.
     ///
-    /// Its stamp is the images' total size and the latest time of the folder
-    /// and its images, so adding, removing or overwriting one changes it.
+    /// Its stamp is the total size of its images and metadata files and the
+    /// latest time of the folder and those files, so adding, removing or
+    /// overwriting one changes it.
     fn photo_stamp(&self, folder: &Metadata) -> Option<Stamp> {
         if self.images.is_empty() || !self.archives.is_empty() || !self.dirs.is_empty() {
             return None;
         }
-        let size = self.images.iter().map(|(_, m)| m.len()).sum();
-        let mtime = self
-            .images
-            .iter()
+        let files = || self.images.iter().chain(&self.meta);
+        let size = files().map(|(_, m)| m.len()).sum();
+        let mtime = files()
             .map(|(_, m)| mtime_ns(m))
             .fold(mtime_ns(folder), i64::max);
         Some((size, mtime))
@@ -343,6 +346,7 @@ fn list_folder(library: &Path, rel: &str) -> io::Result<Listing> {
         dirs: Vec::new(),
         archives: Vec::new(),
         images: Vec::new(),
+        meta: Vec::new(),
     };
     let dir = if rel.is_empty() {
         library.to_path_buf()
@@ -375,6 +379,8 @@ fn list_folder(library: &Path, rel: &str) -> io::Result<Listing> {
             listing.archives.push((child, meta));
         } else if meta.is_file() && archive::is_page_name(name) {
             listing.images.push((child, meta));
+        } else if meta.is_file() && crate::meta::layer_of(name).is_some() {
+            listing.meta.push((child, meta));
         }
     }
     Ok(listing)
@@ -445,7 +451,7 @@ fn index_job(
         Some(m) if m.is_file() => Some(((m.len(), mtime_ns(m)), Source::Archive)),
         Some(m) if m.is_dir() => list_folder(library, rel)
             .ok()
-            .and_then(|l| Some((l.photo_stamp(m)?, Source::Photos(l.images)))),
+            .and_then(|l| Some((l.photo_stamp(m)?, Source::Photos(l)))),
         _ => None,
     };
     let Some((stamp, source)) = found else {
@@ -465,8 +471,8 @@ fn index_job(
         path: rel,
         folder,
         name,
-        series_path,
-        series_name,
+        series_path: &series_path,
+        series_name: &series_name,
     };
     // A book already known by its stamp is placed without being read again:
     // the same file back at its path, or one moved or renamed outside Koma-1.
@@ -484,16 +490,18 @@ fn index_job(
         }
         return Ok(());
     }
-    let pages = match &source {
+    let read = match &source {
         Source::Archive => index_book(&path, blobs),
-        Source::Photos(images) => index_photos(library, images),
+        Source::Photos(listing) => index_photos(library, listing),
     };
-    match pages {
-        Ok(pages) => {
+    match read {
+        Ok((pages, meta_files)) => {
+            let details = details(name, &crate::meta::read(&meta_files));
             catalog.replace_book(
                 &NewBook {
-                    series_path,
-                    series_name,
+                    series_path: &series_path,
+                    series_name: &series_name,
+                    details: &details,
                     path: rel,
                     folder,
                     name,
@@ -517,8 +525,8 @@ fn index_job(
 
 enum Source {
     Archive,
-    /// A photo folder, with its images.
-    Photos(Found),
+    /// A photo folder, with its images and metadata files.
+    Photos(Listing),
 }
 
 /// The folder a file is in, relative to the library; `""` for the root.
@@ -533,20 +541,36 @@ fn is_archive(name: &str) -> bool {
     })
 }
 
-/// The series a book file belongs to: its folder, or the book itself in the root.
-fn series_of(rel: &str) -> (&str, &str) {
+/// Books in a series named "Unsorted": loose files in the library root whose
+/// name is only a number (`Ch. 12.cbz`).
+pub const UNSORTED: &str = "Unsorted";
+
+/// The series a book file belongs to, as `(key, name)`: its folder. A book
+/// loose in the library root goes in the series its file name names
+/// (`Starfall - Ch. 03.cbz` → Starfall), so loose chapters of one series
+/// group together; the key of such a series starts with a NUL, which no
+/// folder name has.
+fn series_of(rel: &str) -> (String, String) {
     match rel.rsplit_once('/') {
-        Some((dir, _)) => (dir, last_part(dir)),
-        None => (rel, stem(rel)),
+        Some((dir, _)) => (dir.to_owned(), last_part(dir).to_owned()),
+        None => {
+            let parsed = names::book_name(stem(rel));
+            let name = match parsed.series {
+                Some(series) => series,
+                None if parsed.number.is_some() => UNSORTED.to_owned(),
+                None => stem(rel).to_owned(),
+            };
+            (format!("\0{}", name.to_lowercase()), name)
+        }
     }
 }
 
 /// The series a photo folder belongs to: the folder above it, or the photo
 /// folder itself in the root.
-fn series_of_folder(rel: &str) -> (&str, &str) {
+fn series_of_folder(rel: &str) -> (String, String) {
     match rel.rsplit_once('/') {
-        Some((dir, _)) => (dir, last_part(dir)),
-        None => (rel, rel),
+        Some((dir, _)) => (dir.to_owned(), last_part(dir).to_owned()),
+        None => (rel.to_owned(), rel.to_owned()),
     }
 }
 
@@ -564,7 +588,8 @@ const MAX_PHOTO_PAGES: usize = 10_000;
 
 /// Indexes a photo folder: each image is a page, read in place from its own
 /// file. `cover.*` comes first, then natural order.
-fn index_photos(library: &Path, images: &Found) -> Result<Vec<Page>, String> {
+fn index_photos(library: &Path, listing: &Listing) -> Result<(Vec<Page>, MetaFiles), String> {
+    let images = &listing.images;
     if images.len() > MAX_PHOTO_PAGES {
         return Err(format!("too many pages: over {MAX_PHOTO_PAGES}"));
     }
@@ -575,7 +600,7 @@ fn index_photos(library: &Path, images: &Found) -> Result<Vec<Page>, String> {
             .cmp(&is_cover(a))
             .then_with(|| crate::natsort::compare_paths(a, b))
     });
-    order
+    let pages = order
         .into_iter()
         .enumerate()
         .map(|(number, (rel, meta))| {
@@ -600,7 +625,17 @@ fn index_photos(library: &Path, images: &Found) -> Result<Vec<Page>, String> {
                 size,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, String>>()?;
+    let meta_files = listing
+        .meta
+        .iter()
+        .filter(|(_, m)| m.len() <= crate::meta::MAX_META_BYTES)
+        .filter_map(|(rel, _)| {
+            let layer = crate::meta::layer_of(rel)?;
+            Some((layer, fs::read(library.join(rel)).ok()?))
+        })
+        .collect();
+    Ok((pages, meta_files))
 }
 
 /// `cover.jpg`, `Cover.PNG`… (any page extension).
@@ -623,15 +658,16 @@ fn mtime_ns(meta: &Metadata) -> i64 {
 
 /// Indexes one CBZ: every page hashed, stored pages located, compressed
 /// pages inflated into the blob store.
-fn index_book(path: &Path, blobs: &BlobStore) -> Result<Vec<Page>, String> {
+fn index_book(path: &Path, blobs: &BlobStore) -> Result<(Vec<Page>, MetaFiles), String> {
     let entries = zip::read_file_index(path, &Limits::default()).map_err(|e| e.to_string())?;
     let pages = archive::pages(&entries);
     if pages.is_empty() {
         return Err("no pages".into());
     }
     let file = File::open(path).map_err(|e| e.to_string())?;
+    let meta_files = archive_meta_files(&file, &entries);
     let limits = PageLimits::default();
-    pages
+    let pages = pages
         .iter()
         .enumerate()
         .map(|(number, entry)| {
@@ -661,7 +697,67 @@ fn index_book(path: &Path, blobs: &BlobStore) -> Result<Vec<Page>, String> {
             })
         })
         .collect::<Result<Vec<_>, PageError>>()
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    Ok((pages, meta_files))
+}
+
+/// Metadata files found in a book, as `(layer, bytes)` for [`crate::meta::read`].
+type MetaFiles = Vec<(usize, Vec<u8>)>;
+
+/// The metadata files of an archive, in any of its folders. One that can't
+/// be read (too big, corrupt) is left out: metadata never fails a book.
+fn archive_meta_files(file: &File, entries: &[zip::Entry]) -> MetaFiles {
+    let limits = PageLimits {
+        max_bytes: crate::meta::MAX_META_BYTES,
+        ..PageLimits::default()
+    };
+    entries
+        .iter()
+        .filter(|e| !e.is_dir() && !e.encrypted && !archive::is_hidden(&e.name))
+        .filter_map(|e| {
+            let layer = crate::meta::layer_of(&e.name)?;
+            let mut bytes = Vec::new();
+            copy_page(file, e, &limits, &mut bytes).ok()?;
+            Some((layer, bytes))
+        })
+        .collect()
+}
+
+/// A book's details: its metadata, with gaps filled from its file name.
+fn details(stem: &str, meta: &crate::meta::Meta) -> Details {
+    let from_name = names::book_name(stem);
+    let from_meta = |s: &str| s.trim().parse::<f64>().ok().filter(|n| n.is_finite());
+    let (kind, number) = match (
+        from_name.number,
+        from_meta(&meta.number),
+        from_meta(&meta.volume),
+    ) {
+        (Some(n), _, _) => (from_name.kind, Some(n)),
+        (None, Some(n), _) => (Some(names::Kind::Chapter), Some(n)),
+        (None, None, Some(n)) => (Some(names::Kind::Volume), Some(n)),
+        (None, None, None) => (None, None),
+    };
+    let or_name = |list: &Vec<String>, name: Option<String>| {
+        if list.is_empty() {
+            name.into_iter().collect()
+        } else {
+            list.clone()
+        }
+    };
+    Details {
+        title: meta.title.clone(),
+        number,
+        kind: kind.map(|k| k.as_str()),
+        summary: meta.summary.clone(),
+        year: meta.year,
+        language: meta.language.clone(),
+        direction: meta.direction.map(|d| d.as_str()),
+        cover_page: meta.cover_page,
+        authors: or_name(&meta.authors, from_name.author),
+        publishers: or_name(&meta.publishers, from_name.publisher),
+        genres: meta.genres.clone(),
+        tags: meta.tags.clone(),
+    }
 }
 
 fn inflate_to_blob(
@@ -717,26 +813,46 @@ impl<W: Write> Write for Tee<W> {
 mod tests {
     use super::*;
 
+    fn pair(key: &str, name: &str) -> (String, String) {
+        (key.to_owned(), name.to_owned())
+    }
+
     #[test]
     fn series_is_the_folder() {
         assert_eq!(
             series_of("Starfall/Starfall v01.cbz"),
-            ("Starfall", "Starfall")
+            pair("Starfall", "Starfall")
         );
         assert_eq!(
             series_of("Shelf/Starfall/v01.cbz"),
-            ("Shelf/Starfall", "Starfall")
-        );
-        assert_eq!(
-            series_of("Lone Comet.cbz"),
-            ("Lone Comet.cbz", "Lone Comet")
+            pair("Shelf/Starfall", "Starfall")
         );
     }
 
     #[test]
+    fn loose_books_group_by_the_series_their_name_names() {
+        assert_eq!(
+            series_of("Lone Comet.cbz"),
+            pair("\0lone comet", "Lone Comet")
+        );
+        assert_eq!(
+            series_of("[Moonforge (Mirelle)] Starfall Academy - Ch. 03.cbz"),
+            pair("\0starfall academy", "Starfall Academy")
+        );
+        assert_eq!(
+            series_of("Starfall Academy Vol. 2.cbz"),
+            pair("\0starfall academy", "Starfall Academy")
+        );
+        assert_eq!(series_of("Ch. 12.cbz"), pair("\0unsorted", UNSORTED));
+    }
+
+    #[test]
     fn photo_folder_series() {
-        assert_eq!(series_of_folder("Mirelle/Set 1.5"), ("Mirelle", "Mirelle"));
-        assert_eq!(series_of_folder("Set 1.5"), ("Set 1.5", "Set 1.5"));
+        assert_eq!(
+            series_of_folder("Mirelle/Set 1.5"),
+            pair("Mirelle", "Mirelle")
+        );
+        assert_eq!(series_of_folder("Set 1.5"), pair("Set 1.5", "Set 1.5"));
         assert!(is_cover("Set/Cover.JPG"));
         assert!(!is_cover("Set/cover 2.jpg"));
     }
