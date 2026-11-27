@@ -125,6 +125,11 @@ async fn the_reader_page() {
         )), "{page}");
         assert!(page.contains("data-dir=rtl"));
         assert!(page.contains("<div id=bars class=bars>"));
+        // The mode (by itself unless chosen) and the double-page shift.
+        for mode in ["auto aria-current=true>auto", "single>single", "double>double", "strip>strip"] {
+            assert!(page.contains(&format!("data-mode={mode}</a>")), "{mode}");
+        }
+        assert!(page.contains("data-shift>shift <kbd>s</kbd></a>"));
         assert!(page.contains(&format!("<link rel=next href=\"/r/{starfall}/2\">")));
 
         // The last page goes on to the series.

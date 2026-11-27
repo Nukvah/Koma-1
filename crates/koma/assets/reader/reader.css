@@ -4,6 +4,13 @@
 .reader a{color:inherit}
 .stage{height:100vh;display:flex;justify-content:center;align-items:center}
 .stage img{display:block;max-width:100vw;max-height:100vh;width:auto;height:auto}
+/* Double: two pages side by side, both on screen; right to left, the
+   first on the right. */
+.two img{max-width:50vw}.two.rtl{flex-direction:row-reverse}
+/* Strip: one column that scrolls; taps show the bars. */
+.reader.strip{height:auto;overflow:auto}.strip .zones{display:none}
+.strip .stage{height:auto;flex-direction:column}
+.strip .stage img{width:min(100vw,800px);max-width:none;max-height:none;height:auto}
 /* Tap thirds: links, so they work without JavaScript too. */
 .zones{position:fixed;inset:0;display:grid;grid-template-columns:1fr 1fr 1fr}
 .zones a{display:grid;place-items:center;color:transparent;text-decoration:none;-webkit-tap-highlight-color:transparent}

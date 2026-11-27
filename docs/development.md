@@ -284,6 +284,18 @@ the bars for the series. That choice and the position are kept in the
 browser (`localStorage`) until accounts (M5). The tap zones are shown once,
 faintly, on the first open.
 
+Three ways to read, chosen per series in the bars and kept in the browser:
+**single**; **double**, two pages side by side, both on screen (each at
+most half the window wide), the first on the right in right-to-left books:
+the cover alone, then pairs, a wide page (wider than 1.2 times its height,
+a spread already) alone with the pairs starting again after it, and `s`
+shifting every pair by one page; and **strip**, every page in one column at
+most 800 px wide, scrolled (space / `j` / `k` move by most of a screen, a
+tap shows the bars), where only pages within two screens hold their
+picture and the URL follows the page at the top. **Auto**, the default,
+reads a book as a strip when most of its pages are tall strips (at least
+three times as tall as wide), else one page at a time.
+
 Turns are instant because pages are made ahead. Each coming page is an image
 of its own with the page's `srcset` in one format (WebP where the browser
 takes it, else JPEG; with Save-Data, the 720 variant only), fetched at low
