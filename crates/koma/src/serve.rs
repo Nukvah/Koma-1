@@ -790,19 +790,6 @@ pub async fn serve<F>(listener: TcpListener, state: AppState, shutdown: F) -> io
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    use axum::serve::ListenerExt;
-    // No Nagle delay: a response written in two parts (head, then body)
-    // would otherwise wait for the client's delayed ACK of the previous
-    // response before its first byte leaves, adding up to tens of
-    // milliseconds on keep-alive connections.
-    let listener = listener.tap_io(|tcp| {
-        if let Err(e) = tcp.set_nodelay(true) {
-            log::error(
-                "serve: cannot set TCP_NODELAY",
-                &[("error", &e.to_string())],
-            );
-        }
-    });
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown)
         .await
