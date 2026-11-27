@@ -93,13 +93,15 @@ jobs:
           find "$RUNNER_TEMP/library" -name '*.cb7' -exec cp {} fuzz/corpus/sevenz/ \;
       - name: Build the fuzz targets
         working-directory: fuzz
-        run: cargo fuzz build
+        # cargo-fuzz defaults to the target it was itself built for (musl,
+        # from the prebuilt binary); the sanitizers need the gnu target.
+        run: cargo fuzz build --target x86_64-unknown-linux-gnu
       - name: Run each target for 60 s
         working-directory: fuzz
         run: |
           for target in $(cargo fuzz list); do
             echo "::group::$target"
-            cargo fuzz run "$target" -- -max_total_time=60
+            cargo fuzz run --target x86_64-unknown-linux-gnu "$target" -- -max_total_time=60
             echo "::endgroup::"
           done
       - name: Keep crashing inputs
