@@ -116,3 +116,5 @@ mark{background:none;color:var(--accent);font-weight:bold}
 .menu:not(:checked)~.layout .side{display:none}
 }
 .series .art .cover{max-width:100%}
+.vol{display:flex;flex-direction:column;gap:4px}
+.dl{font-size:12px;color:var(--dim)}

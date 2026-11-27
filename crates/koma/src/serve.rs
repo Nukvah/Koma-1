@@ -11,6 +11,7 @@
 //! | `GET /a/koma.{hash}.css` | the stylesheet, cached for a year |
 //! | `GET /s/{id}` | a series: its books |
 //! | `GET /r/{book}/{n}` | the reader, page `n` (1-based) |
+//! | `GET /d/{book}` | the book's original file (a photo folder as a stored ZIP) |
 //! | `GET /p/{hash}.{ext}` | a page's bytes, cached for a year |
 //! | `GET /p/{hash}.{width}.v{version}.{format}` | a page variant (`jpg` or `webp`), cached for a year |
 //! | `GET /healthz` | health check |
@@ -25,7 +26,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::extract::{Path as UrlPath, RawQuery, State};
-use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
+use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
@@ -35,7 +36,7 @@ use crate::blobs::BlobStore;
 use crate::catalog::{self, Catalog};
 use crate::cli::Paths;
 use crate::libraries::{self, Library};
-use crate::{html, log, signal, variants};
+use crate::{download, html, log, signal, variants};
 
 /// What every request handler shares. Cheap to clone.
 #[derive(Clone)]
@@ -128,6 +129,7 @@ pub fn router(state: AppState) -> Router {
         .route("/a/{file}", get(stylesheet))
         .route("/s/{id}", get(series))
         .route("/r/{book}/{page}", get(reader))
+        .route("/d/{book}", get(download))
         .route("/p/{file}", get(page_bytes))
         .route("/healthz", get(healthz))
         .with_state(state)
@@ -540,6 +542,58 @@ async fn reader(
             Ok(Html(html::reader(&series, &book, &pages, number)))
         })
         .await
+}
+
+/// `GET /d/<book>`: the book's original file, sent as it is; a photo folder
+/// as a stored ZIP of its images, made while it is sent.
+async fn download(
+    State(state): State<AppState>,
+    UrlPath(book_id): UrlPath<i64>,
+) -> Result<Response, Failure> {
+    let inner = Arc::clone(&state.inner);
+    let (body, name, media_type) = state
+        .query(move |c| {
+            let book = c.book(book_id)?.ok_or(Failure::NotFound)?;
+            if book.photos {
+                let mut entries = Vec::new();
+                for page in c.pages(book_id)? {
+                    let file = page.file.ok_or(Failure::NotFound)?;
+                    let name = file.rsplit('/').next().unwrap_or(&file).to_owned();
+                    entries.push(download::Entry {
+                        name,
+                        path: inside(&inner.library, &file)?,
+                        len: page.length,
+                    });
+                }
+                // Too big for a plain ZIP: copy the folder instead.
+                let len = download::zip_len(&entries).ok_or(Failure::NotFound)?;
+                let body = download::spawn(len, move |out| download::write_zip(&entries, out));
+                Ok((body, format!("{}.zip", book.name), "application/zip"))
+            } else {
+                let path = inside(&inner.library, &book.path)?;
+                let file_name = book
+                    .path
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&book.path)
+                    .to_owned();
+                let len = book.size;
+                let body = download::spawn(len, move |out| download::copy_file(&path, len, out));
+                Ok((body, file_name.clone(), download::media_type(&file_name)))
+            }
+        })
+        .await?;
+    let disposition = HeaderValue::from_str(&download::disposition(&name))
+        .map_err(|e| Failure::Internal(e.to_string()))?;
+    Ok((
+        [
+            (CONTENT_TYPE, HeaderValue::from_static(media_type)),
+            (CONTENT_DISPOSITION, disposition),
+            (CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        ],
+        axum::body::Body::new(body),
+    )
+        .into_response())
 }
 
 /// `GET /p/<hash>.<ext>`: the page's bytes, from the archive in place or
