@@ -23,9 +23,9 @@ Commands:
 Options:
   --listen <addr>   Address to listen on (serve) or probe (healthcheck).
                     Default: $KOMA_LISTEN, else 0.0.0.0:8080
-  --library <dir>   The library, read-only (worker, scan).
+  --library <dir>   The library, read-only (serve, worker, scan).
                     Default: $KOMA_LIBRARY, else /library
-  --data <dir>      Catalogue and blobs, writable (worker, scan).
+  --data <dir>      Catalogue and blobs (serve reads, worker and scan write).
                     Default: $KOMA_DATA, else /data
   -h, --help        Show this help
   -V, --version     Show the version
@@ -33,7 +33,7 @@ Options:
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
-    Serve { listen: SocketAddr },
+    Serve { listen: SocketAddr, paths: Paths },
     Worker(Paths),
     Scan(Paths),
     Scrub,
@@ -90,9 +90,10 @@ where
         "-h" | "--help" | "help" => Ok(Command::Help),
         "-V" | "--version" => Ok(Command::Version),
         "serve" => {
-            let opts = options(rest, &["--listen"])?;
+            let opts = options(rest, &["--listen", "--library", "--data"])?;
             Ok(Command::Serve {
-                listen: listen(opts.get("--listen"), env.listen)?,
+                listen: listen(opts.get("--listen"), env.listen.clone())?,
+                paths: paths_from(&opts, env)?,
             })
         }
         "healthcheck" => {
@@ -140,7 +141,10 @@ fn listen(flag: Option<&String>, env: Option<OsString>) -> Result<SocketAddr, St
 }
 
 fn paths(rest: &[String], env: Env) -> Result<Paths, String> {
-    let opts = options(rest, &["--library", "--data"])?;
+    paths_from(&options(rest, &["--library", "--data"])?, env)
+}
+
+fn paths_from(opts: &HashMap<&'static str, String>, env: Env) -> Result<Paths, String> {
     Ok(Paths {
         library: pick(
             opts.get("--library"),
@@ -182,6 +186,16 @@ mod tests {
         s.parse().unwrap()
     }
 
+    fn serve_on(listen: &str) -> Command {
+        Command::Serve {
+            listen: addr(listen),
+            paths: Paths {
+                library: DEFAULT_LIBRARY.into(),
+                data: DEFAULT_DATA.into(),
+            },
+        }
+    }
+
     #[test]
     fn subcommands() {
         assert_eq!(
@@ -199,21 +213,15 @@ mod tests {
 
     #[test]
     fn listen_precedence() {
-        let default = Command::Serve {
-            listen: addr(DEFAULT_LISTEN),
-        };
+        let default = serve_on(DEFAULT_LISTEN);
         assert_eq!(p(&["serve"], None), Ok(default));
         assert_eq!(
             p(&["serve"], Some("127.0.0.1:9000")),
-            Ok(Command::Serve {
-                listen: addr("127.0.0.1:9000")
-            })
+            Ok(serve_on("127.0.0.1:9000"))
         );
         assert_eq!(
             p(&["serve", "--listen", "[::1]:7000"], Some("127.0.0.1:9000")),
-            Ok(Command::Serve {
-                listen: addr("[::1]:7000")
-            })
+            Ok(serve_on("[::1]:7000"))
         );
         assert_eq!(
             p(&["healthcheck", "--listen=127.0.0.1:1"], None),
@@ -237,7 +245,7 @@ mod tests {
                 data: "/d".into()
             }))
         );
-        assert!(p(&["serve", "--library", "/x"], None).is_err());
+        assert!(p(&["healthcheck", "--library", "/x"], None).is_err());
     }
 
     #[test]

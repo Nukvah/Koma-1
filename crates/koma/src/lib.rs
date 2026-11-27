@@ -1,6 +1,6 @@
 //! Koma-1: one binary, three modes (`serve`, `worker`, `scrub`).
 //!
-//! So far: `serve` answers a health check; `worker` and `scan` index the
+//! So far: `serve` serves the library, a series and a bare reader; `worker` and `scan` index the
 //! library into the catalogue; `scrub` has nothing to check yet.
 
 pub mod archive;
@@ -8,6 +8,7 @@ pub mod blobs;
 pub mod catalog;
 pub mod cli;
 pub mod health;
+pub mod html;
 pub mod log;
 pub mod natsort;
 pub mod scan;
@@ -26,7 +27,7 @@ where
     I: IntoIterator<Item = OsString>,
 {
     match cli::parse(args, env) {
-        Ok(Command::Serve { listen }) => serve::run(listen),
+        Ok(Command::Serve { listen, paths }) => serve::run(listen, &paths),
         Ok(Command::Worker(paths)) => worker(&paths),
         Ok(Command::Scan(paths)) => match scan_once(&paths) {
             Ok(report) if report.failed == 0 => ExitCode::SUCCESS,

@@ -66,7 +66,7 @@ folder, with the extension only breaking ties.
 
 `koma worker` (at start) and `koma scan` index the library into
 `<data>/koma.db`, a SQLite database in WAL mode (`koma::catalog`); `koma serve`
-will only read it.
+only reads it.
 
 - A series is a folder, and each CBZ in it is a book. A CBZ in the library
   root is a series of its own. Hidden files and symbolic links are skipped.
@@ -85,3 +85,27 @@ will only read it.
 
 Order is natural everywhere: SQL uses the `natsort` collation, which is
 `koma::natsort::compare_paths`.
+
+## Serving
+
+`koma serve` (`koma::serve`) opens the catalogue read-only and renders plain
+HTML (`koma::html`): no JavaScript, a few lines of CSS. The real design
+(docs/design) comes with the library UI milestone.
+
+| Route | |
+|---|---|
+| `GET /` | the library: every series, natural order |
+| `GET /s/{id}` | a series: its books |
+| `GET /r/{book}/{n}` | the reader, page `n` (1-based); the image links to the next page, and the last page back to the series |
+| `GET /p/{hash}.{ext}` | a page's bytes, `Cache-Control: public, max-age=31536000, immutable`, `ETag` = hash |
+| `GET /healthz` | health check |
+
+Page bytes come from the book file at the recorded offset (stored pages) or
+from the blob store (pages that were compressed): nothing is decompressed or
+resized at request time. Each page is read with one positioned read; a true
+`sendfile()` path can replace it later if the budgets ask for it. Until the
+first scan, `/` answers 503.
+
+The test `crates/koma/tests/read.rs` is M1's done-test: it scans the made-up
+library, then walks it over HTTP from the library to the last page of every
+book and checks every image against the original bytes.

@@ -262,6 +262,57 @@ impl Catalog {
         rows.collect()
     }
 
+    /// All series with how many books each has, in natural order of their names.
+    pub fn series_with_counts(&self) -> Result<Vec<(Series, i64)>, Error> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT series.id, series.path, series.name, COUNT(books.id)
+             FROM series JOIN books ON books.series_id = series.id
+             GROUP BY series.id
+             ORDER BY series.name COLLATE natsort, series.path COLLATE natsort",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                Series {
+                    id: r.get(0)?,
+                    path: r.get(1)?,
+                    name: r.get(2)?,
+                },
+                r.get(3)?,
+            ))
+        })?;
+        rows.collect()
+    }
+
+    pub fn series_by_id(&self, id: i64) -> Result<Option<Series>, Error> {
+        self.conn
+            .prepare_cached("SELECT id, path, name FROM series WHERE id = ?1")?
+            .query_row([id], |r| {
+                Ok(Series {
+                    id: r.get(0)?,
+                    path: r.get(1)?,
+                    name: r.get(2)?,
+                })
+            })
+            .optional()
+    }
+
+    pub fn book(&self, id: i64) -> Result<Option<Book>, Error> {
+        self.conn
+            .prepare_cached(
+                "SELECT id, series_id, path, name, page_count FROM books WHERE id = ?1",
+            )?
+            .query_row([id], |r| {
+                Ok(Book {
+                    id: r.get(0)?,
+                    series_id: r.get(1)?,
+                    path: r.get(2)?,
+                    name: r.get(3)?,
+                    page_count: r.get(4)?,
+                })
+            })
+            .optional()
+    }
+
     /// The books of a series, in natural order of their file names.
     pub fn books(&self, series_id: i64) -> Result<Vec<Book>, Error> {
         let mut stmt = self.conn.prepare_cached(
