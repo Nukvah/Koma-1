@@ -249,16 +249,29 @@ the next scan, as before.
 
 ## Serving
 
-`koma serve` (`koma::serve`) opens the catalogue read-only and renders plain
-HTML (`koma::html`): no JavaScript, a few lines of CSS. The real design
-(docs/design) comes with the library UI milestone.
+`koma serve` (`koma::serve`) opens the catalogue read-only and renders HTML
+(`koma::html`) with no JavaScript, following docs/design: a top bar, a side
+panel (the libraries, the open one with its collections) that folds behind a
+`menu` button on phones (a checkbox and its label), and the page itself. One
+stylesheet, `crates/koma/assets/koma.css`, built into the binary and served
+at a URL named by its content (`html::css_url`), so it is cached for good;
+its size counts against the CSS budget. The reader keeps a few inline rules
+until its own design (M4).
+
+A library page shows its collections as stacked cards first, then its own
+series, `html::PER_PAGE` (24) cards a page. Each card's cover is the first
+page of the series' first book (or the page its metadata names), shown as its
+720-wide variant: WebP in a `<picture>` with JPEG to fall back on, or the page
+itself if it has no variants. Covers are looked up only for the cards on the
+page.
 
 | Route | |
 |---|---|
-| `GET /` | the default library, or the first one: its series, then its collections, natural order |
-| `GET /l/{folder}` | a library (folder name percent-encoded) |
+| `GET /` | the default library, or the first one: its collections, then its series, natural order |
+| `GET /l/{folder}` | a library (folder name percent-encoded); both take `?c={collection}` (one collection's series) and `?page={n}` |
 | `GET /settings` | the libraries and their settings, read-only |
-| `GET /s/{id}` | a series: its books |
+| `GET /s/{id}` | a series: its cover, facts and books, each with its cover |
+| `GET /a/koma.{hash}.css` | the stylesheet, cached for a year |
 | `GET /r/{book}/{n}` | the reader, page `n` (1-based); the image links to the next page, and the last page back to the series |
 | `GET /p/{hash}.{ext}` | a page's bytes, `Cache-Control: public, max-age=31536000, immutable`, `ETag` = hash |
 | `GET /p/{hash}.{width}.v{version}.{format}` | a page variant (`jpg` or `webp`; `variants::url`), cached the same way; 404 if that variant was not made, or not with this version |
@@ -267,7 +280,8 @@ HTML (`koma::html`): no JavaScript, a few lines of CSS. The real design
 Page bytes come from the book file at the recorded offset (stored pages) or
 from the blob store (pages that were compressed, and variants): nothing is
 decompressed or resized at request time. The reader still shows originals;
-`<picture>` and `srcset` over the variants come with the reader (M4). Each page is read with one positioned read; a true
+`<picture>` and `srcset` over the variants come with the reader (M4). Each
+page is read with one positioned read; a true
 `sendfile()` path can replace it later if the budgets ask for it. Until the
 first scan, `/` answers 503.
 

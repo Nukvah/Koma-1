@@ -192,6 +192,16 @@ pub struct Page {
     pub size: Option<Size>,
 }
 
+/// The page shown as a book's or series' cover.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cover {
+    pub hash: blake3::Hash,
+    /// The page's own format (file extension).
+    pub format: String,
+    /// Formats (`jpg`, `webp`) of its variant at the asked width, if made.
+    pub variant_formats: Vec<String>,
+}
+
 /// Where a page's bytes are, found by hash.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PageLocation {
@@ -847,6 +857,50 @@ impl Catalog {
             ))
         })?;
         rows.collect()
+    }
+
+    /// A book's cover: its `cover_page` (from its metadata) if it has that
+    /// many pages, else its first page; with the formats of its variant
+    /// `width` pixels wide made under `version`, if any.
+    pub fn book_cover(
+        &self,
+        book_id: i64,
+        width: u32,
+        version: i64,
+    ) -> Result<Option<Cover>, Error> {
+        self.conn
+            .prepare_cached(
+                "SELECT pages.hash, pages.format,
+                        (SELECT group_concat(v.format) FROM variants v
+                         JOIN variant_pages vp ON vp.hash = v.hash AND vp.version = ?3
+                         WHERE v.hash = pages.hash AND v.width = ?2)
+                 FROM books JOIN pages ON pages.book_id = books.id
+                  AND pages.number = CASE WHEN books.cover_page < books.page_count
+                                          THEN books.cover_page ELSE 0 END
+                 WHERE books.id = ?1",
+            )?
+            .query_row(params![book_id, width, version], |r| {
+                let formats: Option<String> = r.get(2)?;
+                Ok(Cover {
+                    hash: hash_from_row(r, 0)?,
+                    format: r.get(1)?,
+                    variant_formats: formats
+                        .map(|f| f.split(',').map(str::to_owned).collect())
+                        .unwrap_or_default(),
+                })
+            })
+            .optional()
+    }
+
+    /// The first present book of a series, in natural order of paths.
+    pub fn first_book(&self, series_id: i64) -> Result<Option<i64>, Error> {
+        self.conn
+            .prepare_cached(
+                "SELECT id FROM books WHERE series_id = ?1 AND gone IS NULL
+                 ORDER BY path COLLATE natsort LIMIT 1",
+            )?
+            .query_row([series_id], |r| r.get(0))
+            .optional()
     }
 
     pub fn series_by_id(&self, id: i64) -> Result<Option<Series>, Error> {

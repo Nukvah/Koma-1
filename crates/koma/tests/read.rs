@@ -104,7 +104,12 @@ async fn made_up_library_reads_front_to_back() {
         for series in links(&library.text(), "href", "/s/") {
             let page = get(addr, &series);
             assert_eq!(page.status, 200, "{series}");
-            for start in links(&page.text(), "href", "/r/") {
+            // Each book once, in page order: a "read from the start"
+            // button links to the first book a second time.
+            let mut starts = links(&page.text(), "href", "/r/");
+            let mut seen = std::collections::HashSet::new();
+            starts.retain(|s| seen.insert(s.clone()));
+            for start in starts {
                 let mut images = Vec::new();
                 let mut at = Some(start.clone());
                 let mut title = String::new();

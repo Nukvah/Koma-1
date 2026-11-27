@@ -189,41 +189,138 @@ async fn each_library_has_its_page() {
         let (status, home) = get(addr, "/");
         assert_eq!(status, 200);
         assert!(
-            home.contains("<a href=\"/\" aria-current=page>Library</a>"),
+            home.contains("<a class=on aria-current=true href=\"/\">▾ Library"),
             "{home}"
         );
-        assert!(home.contains("<a href=\"/l/manga\">Manga</a>"));
-        assert!(home.contains("<a href=\"/l/My%20Comics\">My Comics</a>"));
-        assert!(home.contains(">Starfall</a>") && home.contains(">Lone Comet</a>"));
-        assert!(!home.contains(">Moonforge</a>"));
+        assert!(home.contains("<a href=\"/l/manga\">▸ Manga<span class=n>3</span>"));
+        assert!(home.contains("<a href=\"/l/My%20Comics\">▸ My Comics"));
+        assert!(home.contains("<b>Starfall</b>") && home.contains("<b>Lone Comet</b>"));
+        assert!(!home.contains("<b>Moonforge</b>"));
 
-        // A library: its own series, then its collections.
+        // A library: its collections as stacks first, then its own series.
         let (status, manga) = get(addr, "/l/manga");
         assert_eq!(status, 200);
         let at = |s: &str| manga.find(s).unwrap_or_else(|| panic!("{s} in {manga}"));
-        assert!(at(">Moonforge</a>") < at("<h2>Saga</h2>"));
-        assert!(at("<h2>Saga</h2>") < at(">Starfall Tales</a>"));
-        assert!(!manga.contains(">Lone Comet</a>"));
+        assert!(
+            at("<a class=card href=\"/l/manga?c=Saga\"><div class=stack>") < at("<b>Moonforge</b>")
+        );
+        assert!(manga.contains("<b>Saga</b><span>2 series · 2 books</span>"));
+        assert!(!manga.contains("<b>Starfall Tales</b>"));
+        // The open library lists its collections in the side panel.
+        assert!(manga.contains("<a class=sub href=\"/l/manga?c=Saga\">  └─ Saga</a>"));
+
+        // One collection.
+        let (status, saga) = get(addr, "/l/manga?c=Saga");
+        assert_eq!(status, 200);
+        assert!(saga.contains("<b>Starfall Tales</b>") && saga.contains("<b>Starfall Zero</b>"));
+        assert!(!saga.contains("<b>Moonforge</b>"));
+        assert!(saga.contains("~/<a href=\"/l/manga\">manga</a>/<b>Saga</b>"));
+        assert_eq!(get(addr, "/l/manga?c=Nothing").0, 404);
+
+        // Pages of cards: there is only one here.
+        assert_eq!(get(addr, "/l/manga?page=1").0, 200);
+        assert_eq!(get(addr, "/l/manga?page=2").0, 404);
+        assert_eq!(get(addr, "/l/manga?page=0").0, 404);
+        assert_eq!(get(addr, "/?page=x").0, 404);
 
         // Names that need encoding.
         let (status, comics) = get(addr, "/l/My%20Comics");
         assert_eq!(status, 200);
-        assert!(comics.contains(">Harbor Lights</a>"));
+        assert!(comics.contains("<b>Harbor Lights</b>"));
 
         // No such library: not even the default one by its empty name.
         assert_eq!(get(addr, "/l/nothing").0, 404);
         assert_eq!(get(addr, "/l/").0, 404);
 
+        // A series in a collection: the breadcrumb leads back to both.
+        let zero = saga
+            .split("<a class=card href=\"/s/")
+            .nth(2)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap()
+            .to_owned();
+        let (status, series) = get(addr, &format!("/s/{zero}"));
+        assert_eq!(status, 200);
+        assert!(
+            series
+                .contains("~/<a href=\"/l/manga\">manga</a>/<a href=\"/l/manga?c=Saga\">Saga</a>/"),
+            "{series}"
+        );
+        assert!(series.contains("read from the start"));
+
         let (status, settings) = get(addr, "/settings");
         assert_eq!(status, 200);
-        assert!(settings.contains("<td>/library/manga<td>manga<td>right to left<td>teal<td>3"));
         assert!(
-            settings.contains("<td>/library/My Comics<td>comics<td>left to right<td>rose<td>1")
+            settings.contains("<td class=opt>/library/manga<td>manga<td class=opt>right to left")
         );
+        assert!(
+            settings.contains("<span class=swatch style=\"--c:#4FB3A9\"></span> teal<td class=r>3")
+        );
+        assert!(
+            settings
+                .contains("<td class=opt>/library/My Comics<td>comics<td class=opt>left to right")
+        );
+
+        // The stylesheet, at the URL every page names, cached for good.
+        let css_url = koma::html::css_url();
+        assert!(home.contains(&format!("<link rel=stylesheet href=\"{css_url}\">")));
+        let (status, css) = get(addr, css_url);
+        assert_eq!(status, 200);
+        assert!(css.contains("content-type: text/css"));
+        assert!(css.contains("cache-control: public, max-age=31536000, immutable"));
+        assert_eq!(get(addr, "/a/koma.0000000000000000.css").0, 404);
     })
     .await
     .unwrap();
 
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_long_library_comes_a_page_at_a_time() {
+    let root = temp_root("pages");
+    let lib = root.join("library");
+    for n in 1..=30 {
+        book(&lib.join(format!("manga/Series {n:02}/v01.cbz")), 100 + n);
+    }
+    let paths = koma::cli::Paths {
+        library: lib,
+        data: root.join("data"),
+    };
+    let mut catalog = Catalog::open(&paths.data.join("koma.db")).unwrap();
+    koma::scan::scan(&paths.library, &paths.data, &mut catalog).unwrap();
+    drop(catalog);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(koma::serve::serve(
+        listener,
+        koma::serve::AppState::new(&paths),
+        async {
+            let _ = stopped.await;
+        },
+    ));
+    tokio::task::spawn_blocking(move || {
+        // Every series is in the library "manga": it is the first, at /.
+        let (_, one) = get(addr, "/");
+        assert_eq!(one.matches("<a class=card").count(), koma::html::PER_PAGE);
+        assert!(one.contains("<b>Series 01</b>") && one.contains("<b>Series 24</b>"));
+        assert!(one.contains("1–24 of 30 · page 1/2 · <a href=\"/l/manga?page=2\" rel=next>"));
+        assert!(!one.contains("rel=prev"));
+
+        let (status, two) = get(addr, "/l/manga?page=2");
+        assert_eq!(status, 200);
+        assert_eq!(two.matches("<a class=card").count(), 6);
+        assert!(two.contains("<b>Series 25</b>") && two.contains("<b>Series 30</b>"));
+        assert!(two.contains("<a href=\"/l/manga?page=1\" rel=prev>"));
+        assert!(two.contains("25–30 of 30 · page 2/2</span>"));
+        assert_eq!(get(addr, "/l/manga?page=3").0, 404);
+    })
+    .await
+    .unwrap();
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
     let _ = fs::remove_dir_all(&root);
