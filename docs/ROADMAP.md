@@ -288,9 +288,6 @@ lossless JPEG XL archival and a dedicated phone layout.
   | Idle RAM (serve) | 25 MB | 40 MB | metadata and sync state |
   | Idle RAM (worker) | none | 64 MB | rename plans and upload buffers |
 
-- **CSS per area.** One CSS budget covers the library and both readers, though
-  each page loads only its own stylesheets. Split it so each area has its own
-  number (library, page reader, EPUB reader, curation), as the scripts are.
 - **Vertical writing.** EPUB books read horizontally for now; Japanese books
   written vertically (`writing-mode: vertical-rl`) want their own reading.
 - **ffmpeg.** Video thumbnails need ffmpeg, which alone is bigger than the image budget.
