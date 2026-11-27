@@ -67,7 +67,8 @@ impl Setup {
         let mut buf = vec![0u8; page.length as usize];
         match page.offset {
             Some(offset) => {
-                let file = fs::File::open(self.library.join(book_path)).unwrap();
+                let path = page.file.as_deref().unwrap_or(book_path);
+                let file = fs::File::open(self.library.join(path)).unwrap();
                 file.read_exact_at(&mut buf, offset).unwrap();
             }
             None => {
@@ -511,4 +512,85 @@ fn identical_pages_share_one_blob() {
         })
         .count();
     assert_eq!(count, 1);
+}
+
+#[test]
+fn photo_folders_are_books_with_the_cover_first() {
+    let mut s = Setup::new();
+    let set = s.library.join("Mirelle/Set 1.5");
+    fs::create_dir_all(&set).unwrap();
+    let page = |seed| koma_fixtures::png::page(20, 30, seed);
+    for (name, seed) in [("10.png", 10), ("2.png", 2), ("Cover.PNG", 99)] {
+        fs::write(set.join(name), page(seed)).unwrap();
+    }
+    fs::write(set.join("notes.txt"), b"not a page").unwrap();
+    fs::write(set.join(".thumbs.jpg"), page(7)).unwrap();
+    // A series folder with a cover image next to its volumes is not a photo folder.
+    fs::write(s.library.join("Starfall/cover.jpg"), page(5)).unwrap();
+    // A set kept as a plain zip is a book too.
+    let mut w = ZipWriter::new();
+    w.add("1.png", &page(1), Compression::Stored);
+    fs::write(s.library.join("Mirelle/Set 2.zip"), w.finish()).unwrap();
+
+    let report = s.scan();
+    assert_eq!((report.indexed, report.failed), (9, 0));
+    let mirelle = s
+        .catalog
+        .series()
+        .unwrap()
+        .into_iter()
+        .find(|x| x.name == "Mirelle")
+        .unwrap();
+    let books = s.catalog.books(mirelle.id).unwrap();
+    let names: Vec<&str> = books.iter().map(|b| b.name.as_str()).collect();
+    assert_eq!(names, ["Set 1.5", "Set 2"]);
+    assert_eq!(books[0].path, "Mirelle/Set 1.5");
+
+    let pages = s.catalog.pages(books[0].id).unwrap();
+    let files: Vec<&str> = pages.iter().map(|p| p.file.as_deref().unwrap()).collect();
+    assert_eq!(
+        files,
+        [
+            "Mirelle/Set 1.5/Cover.PNG",
+            "Mirelle/Set 1.5/2.png",
+            "Mirelle/Set 1.5/10.png"
+        ]
+    );
+    for (p, seed) in pages.iter().zip([99, 2, 10]) {
+        assert_eq!(s.read_page(&books[0].path, p), page(seed));
+        let at = s.catalog.page_by_hash(&p.hash).unwrap().unwrap();
+        assert_eq!(
+            (at.book_path.as_str(), at.offset),
+            (p.file.as_deref().unwrap(), Some(0))
+        );
+    }
+
+    // An image overwritten in place is found by a files check; one added, by
+    // a quick rescan.
+    backdate(&s.library);
+    s.quick_scan();
+    fs::write(set.join("2.png"), page(3)).unwrap();
+    fs::File::open(&set)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000))
+        .unwrap();
+    assert_eq!(s.quick_scan().indexed, 0);
+    assert_eq!(s.scan().indexed, 1);
+    fs::write(set.join("3.png"), page(4)).unwrap();
+    assert_eq!(s.quick_scan().indexed, 1);
+    let book = s.catalog.books(mirelle.id).unwrap().remove(0);
+    let pages = s.catalog.pages(book.id).unwrap();
+    assert_eq!(pages.len(), 4);
+    assert_eq!(s.read_page(&books[0].path, &pages[1]), page(3));
+
+    // A subfolder makes it a folder of books again: the photo book goes.
+    fs::create_dir(set.join("Extras")).unwrap();
+    fs::write(set.join("Extras/1.png"), page(8)).unwrap();
+    let report = s.scan();
+    assert_eq!((report.indexed, report.removed), (1, 1));
+    assert!(
+        s.book_paths()
+            .contains(&"Mirelle/Set 1.5/Extras".to_string())
+    );
+    assert!(!s.book_paths().contains(&"Mirelle/Set 1.5".to_string()));
 }

@@ -55,11 +55,13 @@ pub fn is_page(entry: &zip::Entry) -> bool {
         .name
         .split('/')
         .any(|part| part.starts_with('.') || part == "__MACOSX");
-    let extension = entry
-        .name
-        .rsplit_once('.')
-        .map(|(_, ext)| ext.to_ascii_lowercase());
-    !hidden && extension.is_some_and(|ext| PAGE_EXTENSIONS.contains(&ext.as_str()))
+    !hidden && is_page_name(&entry.name)
+}
+
+/// Whether a file name has a page image's extension.
+pub fn is_page_name(name: &str) -> bool {
+    name.rsplit_once('.')
+        .is_some_and(|(_, ext)| PAGE_EXTENSIONS.iter().any(|p| p.eq_ignore_ascii_case(ext)))
 }
 
 /// The pages of an archive in reading order (natural sort of their paths).

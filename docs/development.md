@@ -75,8 +75,16 @@ folder, with the extension only breaking ties.
 `<data>/koma.db`, a SQLite database in WAL mode (`koma::catalog`); `koma serve`
 only reads it.
 
-- A series is a folder, and each CBZ in it is a book. A CBZ in the library
-  root is a series of its own. Hidden files and symbolic links are skipped.
+- A series is a folder, and each CBZ or ZIP in it is a book. A book in the
+  library root is a series of its own. Hidden files and symbolic links are
+  skipped.
+- A photo folder is a folder that holds page images and nothing else that is
+  read (no archives, no subfolders): it is one book, named as the folder, in
+  the series of the folder above it. `cover.*` is its first page, then the
+  images in natural order. Each image is served in place from its own file
+  (`pages.file`). Its stamp is the images' total size and the latest time of
+  the folder and its images. A series folder with a `cover.jpg` next to its
+  volumes is not a photo folder.
 - Every page gets a BLAKE3 hash and has its CRC-32 and size checked against
   the archive.
 - Stored pages are recorded in place as (book file, offset, length), so they
