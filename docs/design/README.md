@@ -1,7 +1,17 @@
 # UI design proposal
 
 Static mockups of the chosen direction for every screen except the reader.
-Open `library.html` or `series.html` in a browser; both use `koma.css` and no JavaScript.
+Open any `.html` file here in a browser; they share `koma.css` and use no JavaScript.
+
+| File | Screen |
+|---|---|
+| `library.html` | the library: continue hero and cover grid |
+| `series.html` | a series and its volumes |
+| `table.html` | the library as a real `<table>`, sorted by a heading link |
+| `search.html` | search results across libraries, grouped by kind |
+| `collections.html` | collections as stacked covers, then what one holds |
+| `settings.html` | one library's settings, with the "applied by the worker" notice |
+| `states.html` | empty and error states, one block per screen |
 They follow `prefers-color-scheme`, so switch your OS theme to see dark and light.
 
 All titles, authors and users in the mockups are made up.
@@ -102,3 +112,20 @@ Font: `ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace`.
   when it becomes the real stylesheet.
 - Not designed yet: the reader, the table view, search results, ingest, settings, sign-in.
 - Phone layout is only the stacked fallback; a dedicated phone design is still to do.
+
+## Libraries and collections (M3)
+
+- Every top-level folder under `/library` is a library (`/library/manga`,
+  `/library/cosplay`…), with default settings for its type until changed.
+- Inside a library, a folder that holds series folders is a collection, shown as
+  a stack of covers that opens to its series.
+- Settings (name, type, reading direction, colour) are changed in the UI, but
+  `koma serve` never writes the catalogue: it queues the change, and the worker
+  applies it within seconds. The page says so until it has.
+
+## Search (M3)
+
+SQLite FTS5 with the trigram tokenizer over series names, book titles, authors,
+genres and tags, so any part of a word matches and Japanese and Korean titles
+need no word splitter. `author:`, `tag:` and `genre:` narrow it. Results are
+server-rendered and grouped: series, books, then tags and people.

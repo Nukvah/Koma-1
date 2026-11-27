@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Library settings · Koma-1</title>
+<link rel="stylesheet" href="koma.css">
+</head>
+<body>
+<header class="top">
+<a class="brand" href="library.html">KOMA-1</a>
+<form class="search" role="search" action="search.html">
+<label for="q">/</label>
+<input id="q" name="q" type="search" value="" placeholder="search all libraries: title, author:, tag:">
+</form>
+<a class="user" href="#"><span class="avatar" aria-hidden="true">M</span><span>mirelle ▾</span></a>
+</header>
+
+<div class="layout">
+<aside class="side" aria-label="Navigation and libraries">
+<nav aria-label="Main">
+<h2>// go</h2>
+<ul>
+<li><a href="library.html">&nbsp; library<span class="n">g l</span></a></li>
+<li><a href="#">&nbsp; recent<span class="n">g r</span></a></li>
+<li><a href="collections.html">&nbsp; collections<span class="n">g c</span></a></li>
+<li><a href="#">&nbsp; ingest<span class="n">g i</span></a></li>
+<li><a href="settings.html" aria-current="page">&gt; settings<span class="n">g s</span></a></li>
+</ul>
+</nav>
+<hr>
+<section class="tree">
+<h2>// libraries</h2>
+<ul>
+<li><a class="on" href="library.html" aria-current="true">▾ ~/manga<span class="n">214</span></a></li>
+<li><a class="sub" href="#">  ├─ reading<span class="n">6</span></a></li>
+<li><a class="sub" href="#">  ├─ unread<span class="n">41</span></a></li>
+<li><a class="sub" href="#">  └─ finished<span class="n">88</span></a></li>
+<li><a href="#">▸ ~/webtoons<span class="n">38</span></a></li>
+<li><a href="#">▸ ~/comics<span class="n">61</span></a></li>
+<li><a href="#">▸ ~/cosplay<span class="n">12</span></a></li>
+</ul>
+</section>
+<hr>
+<section>
+<h2>// collections</h2>
+<ul>
+<li><a href="collections.html">Starfall Saga<span class="n">4</span></a></li>
+<li><a href="collections.html">Harbor Stories<span class="n">3</span></a></li>
+</ul>
+</section>
+<hr>
+<p class="status"><span class="ok">●</span> ingest idle · 4m ago<br>2,251 vols · <a href="#">rescan</a></p>
+</aside>
+
+<main>
+<div class="toolbar"><h1>settings · library <b>~/manga</b></h1></div>
+
+<p class="note">Saved. The worker applies it within a few seconds; this page shows the new settings once it has.</p>
+
+<form class="form" action="#" method="post">
+<label for="name">name</label>
+<input id="name" name="name" type="text" value="Manga">
+<span class="help">How the library is shown. Its folder stays <code>/library/manga</code>: every top-level folder there is a library.</span>
+
+<label for="type">type</label>
+<select id="type" name="type"><option selected>manga</option><option>comics</option><option>cosplay</option></select>
+<span class="help">Sets how file names are read (docs/naming.md) and the default reading direction.</span>
+
+<label for="dir">reading direction</label>
+<select id="dir" name="dir"><option selected>right to left</option><option>left to right</option></select>
+<span class="help">A book's own metadata (ComicInfo.xml, metadata.json) wins over this.</span>
+
+<label for="colour">colour</label>
+<select id="colour" name="colour"><option selected>amber</option><option>teal</option><option>rose</option><option>slate</option></select>
+<span class="help"><span class="swatch" style="--c:#F2A33A"></span> marks the library in the side panel and on its covers.</span>
+
+<div class="row"><button class="btn primary" type="submit">save</button><a class="btn" href="library.html">cancel</a></div>
+</form>
+
+<h2 class="section-h">other libraries</h2>
+<table class="tbl">
+<thead><tr><th scope="col">library</th><th scope="col" class="opt">folder</th><th scope="col">type</th><th scope="col" class="opt">direction</th><th scope="col" class="r">series</th></tr></thead>
+<tbody>
+<tr><td><a href="#">Webtoons</a></td><td class="opt">/library/webtoons</td><td>manga</td><td class="opt">left to right</td><td class="r">38</td></tr>
+<tr><td><a href="#">Comics</a></td><td class="opt">/library/comics</td><td>comics</td><td class="opt">left to right</td><td class="r">61</td></tr>
+<tr><td><a href="#">Cosplay</a></td><td class="opt">/library/cosplay</td><td>cosplay</td><td class="opt">left to right</td><td class="r">12</td></tr>
+</tbody>
+</table>
+<p class="status">A new folder in <code>/library</code> becomes a library by itself at the next scan, with default settings for its type.</p>
+</main>
+</div>
+</body>
+</html>
