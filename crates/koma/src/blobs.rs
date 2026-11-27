@@ -3,6 +3,7 @@
 //! here once, named by their BLAKE3 hash.
 //!
 //! `blobs/ab/abcdef….png`: two-character fan-out keeps directories small.
+//! A page's variants sit next to it: `blobs/ab/abcdef….720.webp`.
 
 use std::fs::{self, File};
 use std::io;
@@ -22,6 +23,21 @@ impl BlobStore {
     pub fn path(&self, hash: &blake3::Hash, format: &str) -> PathBuf {
         let hex = hash.to_hex();
         self.root.join(&hex[..2]).join(format!("{hex}.{format}"))
+    }
+
+    /// Where a page's variant is kept.
+    pub fn variant_path(&self, hash: &blake3::Hash, width: u32, format: &str) -> PathBuf {
+        self.path(hash, &format!("{width}.{format}"))
+    }
+
+    /// Moves a finished temp file to `path` (from [`BlobStore::variant_path`]),
+    /// replacing what is there: variants made again under new settings take
+    /// the place of the old ones.
+    pub fn commit_replacing(&self, temp: &Path, path: &Path) -> io::Result<()> {
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir)?;
+        }
+        fs::rename(temp, path)
     }
 
     /// A temporary file in the store, renamed into place by [`BlobStore::commit`].

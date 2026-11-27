@@ -17,6 +17,7 @@ pub mod natsort;
 pub mod scan;
 pub mod serve;
 mod signal;
+pub mod variants;
 
 use std::ffi::OsString;
 use std::io;

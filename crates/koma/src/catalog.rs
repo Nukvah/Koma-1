@@ -14,7 +14,7 @@ pub use crate::archive::size::Size;
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// How long a book whose file vanished is remembered, so that a folder that
 /// comes back (a drive mounted late, a move noticed in two steps) keeps its
@@ -101,6 +101,21 @@ CREATE TABLE jobs (
     attempts  INTEGER NOT NULL DEFAULT 0,
     UNIQUE (kind, path)
 );
+-- Page variants (see crate::variants), by page content: a page in two books,
+-- or moved, has them once. Their bytes are blobs named <hash>.<width>.<format>.
+CREATE TABLE variants (
+    hash    BLOB NOT NULL,           -- the page's
+    width   INTEGER NOT NULL,
+    format  TEXT NOT NULL,           -- 'jpg' or 'webp'
+    height  INTEGER NOT NULL,
+    length  INTEGER NOT NULL,
+    PRIMARY KEY (hash, width, format)
+) WITHOUT ROWID;
+CREATE TABLE variant_pages (
+    hash     BLOB PRIMARY KEY,       -- a page whose variants are made (maybe none)
+    version  INTEGER NOT NULL,       -- variants::VERSION they were made with
+    error    TEXT                    -- why it has none, if it could not be decoded
+) WITHOUT ROWID;
 ";
 
 /// Tables of earlier schema versions, dropped when upgrading: until accounts
@@ -113,6 +128,8 @@ DROP TABLE IF EXISTS series;
 DROP TABLE IF EXISTS scan_errors;
 DROP TABLE IF EXISTS folders;
 DROP TABLE IF EXISTS jobs;
+DROP TABLE IF EXISTS variants;
+DROP TABLE IF EXISTS variant_pages;
 DROP TABLE IF EXISTS sqlite_sequence;
 ";
 
@@ -669,11 +686,13 @@ impl Catalog {
     }
 
     /// Takes the oldest waiting job and marks it running, counting the attempt.
+    /// Variants jobs wait for every other kind: new books are readable first.
     pub fn claim_job(&self) -> Result<Option<Job>, Error> {
         self.conn
             .prepare_cached(
                 "UPDATE jobs SET running = 1, attempts = attempts + 1
-                 WHERE id = (SELECT id FROM jobs WHERE running = 0 ORDER BY id LIMIT 1)
+                 WHERE id = (SELECT id FROM jobs WHERE running = 0
+                             ORDER BY kind = 'variants', id LIMIT 1)
                  RETURNING id, kind, path, attempts",
             )?
             .query_row([], |r| {
@@ -697,6 +716,16 @@ impl Catalog {
     /// Removes a job that is done (or given up).
     pub fn finish_job(&self, id: i64) -> Result<(), Error> {
         self.conn.execute("DELETE FROM jobs WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Puts a job claimed but not worked on back in the queue, without
+    /// counting the attempt: the worker is stopping.
+    pub fn release_job(&self, id: i64) -> Result<(), Error> {
+        self.conn.execute(
+            "UPDATE jobs SET running = 0, attempts = attempts - 1 WHERE id = ?1",
+            [id],
+        )?;
         Ok(())
     }
 
@@ -852,6 +881,126 @@ impl Catalog {
             })
             .optional()
     }
+
+    /// Queues a variants job for every present book with a page that lacks
+    /// variants made with `version` and may need some: wider than
+    /// `min_width`, or of unknown size. Returns how many were queued.
+    pub fn queue_missing_variants(&self, version: i64, min_width: u32) -> Result<usize, Error> {
+        self.conn.execute(
+            "INSERT INTO jobs (kind, path)
+             SELECT 'variants', books.path FROM books
+             JOIN pages ON pages.book_id = books.id
+             LEFT JOIN variant_pages v ON v.hash = pages.hash AND v.version = ?1
+             WHERE books.gone IS NULL AND v.hash IS NULL
+               AND (pages.width IS NULL OR pages.width > ?2)
+             GROUP BY books.id ORDER BY books.id
+             ON CONFLICT (kind, path) DO NOTHING",
+            params![version, min_width],
+        )
+    }
+
+    /// The pages of the present book at `path` that lack variants made with
+    /// `version` and may need some (see [`Catalog::queue_missing_variants`]),
+    /// each page content once, in reading order.
+    pub fn pages_lacking_variants(
+        &self,
+        path: &str,
+        version: i64,
+        min_width: u32,
+    ) -> Result<Vec<(blake3::Hash, PageLocation)>, Error> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT pages.hash, COALESCE(pages.file, books.path), pages.format, pages.length,
+                    pages.offset, MIN(pages.number) AS first
+             FROM books JOIN pages ON pages.book_id = books.id
+             LEFT JOIN variant_pages v ON v.hash = pages.hash AND v.version = ?2
+             WHERE books.path = ?1 AND books.gone IS NULL AND v.hash IS NULL
+               AND (pages.width IS NULL OR pages.width > ?3)
+             GROUP BY pages.hash ORDER BY first",
+        )?;
+        let rows = stmt.query_map(params![path, version, min_width], |r| {
+            Ok((
+                hash_from_row(r, 0)?,
+                PageLocation {
+                    book_path: r.get(1)?,
+                    format: r.get(2)?,
+                    length: r.get::<_, i64>(3)? as u64,
+                    offset: r.get::<_, Option<i64>>(4)?.map(|o| o as u64),
+                },
+            ))
+        })?;
+        rows.collect()
+    }
+
+    /// Records a page's variants (`(width, height, format, length)`; their
+    /// blobs already written), made with `version`, replacing any it had.
+    /// `error` says why a page has none.
+    pub fn store_variants(
+        &mut self,
+        hash: &blake3::Hash,
+        version: i64,
+        variants: &[(u32, u32, &str, u64)],
+        error: Option<&str>,
+    ) -> Result<(), Error> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM variants WHERE hash = ?1", [hash.as_bytes()])?;
+        {
+            let mut insert = tx.prepare_cached(
+                "INSERT INTO variants (hash, width, format, height, length)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            for &(width, height, format, length) in variants {
+                insert.execute(params![
+                    hash.as_bytes(),
+                    width,
+                    format,
+                    height,
+                    length as i64
+                ])?;
+            }
+        }
+        tx.execute(
+            "INSERT INTO variant_pages (hash, version, error) VALUES (?1, ?2, ?3)
+             ON CONFLICT (hash) DO UPDATE SET version = excluded.version, error = excluded.error",
+            params![hash.as_bytes(), version, error],
+        )?;
+        tx.commit()
+    }
+
+    /// How many page contents have their variants made with `version`.
+    pub fn variant_page_count(&self, version: i64) -> Result<i64, Error> {
+        self.conn.query_row(
+            "SELECT COUNT(*) FROM variant_pages WHERE version = ?1",
+            [version],
+            |r| r.get(0),
+        )
+    }
+
+    /// The variants of a page, as `(width, height, format)`, narrowest first.
+    pub fn variants_of(&self, hash: &blake3::Hash) -> Result<Vec<(u32, u32, String)>, Error> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT width, height, format FROM variants WHERE hash = ?1 ORDER BY width, format",
+        )?;
+        let rows = stmt.query_map([hash.as_bytes()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect()
+    }
+
+    /// Whether a page of a present book has this variant.
+    pub fn has_variant(
+        &self,
+        hash: &blake3::Hash,
+        width: u32,
+        format: &str,
+    ) -> Result<bool, Error> {
+        self.conn
+            .prepare_cached(
+                "SELECT 1 FROM variants WHERE hash = ?1 AND width = ?2 AND format = ?3
+                   AND EXISTS (SELECT 1 FROM pages JOIN books ON books.id = pages.book_id
+                               WHERE pages.hash = ?1 AND books.gone IS NULL)",
+            )?
+            .query_row(params![hash.as_bytes(), width, format], |_| Ok(()))
+            .optional()
+            .map(|r| r.is_some())
+    }
 }
 
 /// What a job does.
@@ -859,18 +1008,22 @@ impl Catalog {
 pub enum JobKind {
     /// Index a book file: hash and locate its pages.
     Index,
+    /// Make the variants of a book's pages that lack them.
+    Variants,
 }
 
 impl JobKind {
     fn as_str(self) -> &'static str {
         match self {
             JobKind::Index => "index",
+            JobKind::Variants => "variants",
         }
     }
 
     fn parse(s: &str) -> Option<Self> {
         match s {
             "index" => Some(JobKind::Index),
+            "variants" => Some(JobKind::Variants),
             _ => None,
         }
     }

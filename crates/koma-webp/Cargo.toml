@@ -1,0 +1,20 @@
+[package]
+name = "koma-webp"
+version = "0.0.0"
+description = "Lossy WebP encoding for Koma-1: one safe function over libwebp"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# libwebp 1.6, built from its vendored C source with `cc`: nothing at runtime.
+libwebp-sys = { version = "0.14.4", default-features = false, features = ["std"] }
+
+# The only crate in the workspace allowed `unsafe`: the calls into libwebp.
+# Every other lint of the workspace applies.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"

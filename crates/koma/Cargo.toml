@@ -9,7 +9,13 @@ publish.workspace = true
 [dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
 blake3 = "1.8"
+# Page variants: pure-Rust decoders (no colour-management or EXR/TIFF extras),
+# resizing and JPEG; WebP through libwebp in koma-webp.
+fast_image_resize = { version = "6.2", default-features = false, features = ["std"] }
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
+jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
+koma-webp = { path = "../koma-webp" }
 rusqlite = { version = "0.43", features = ["bundled", "collation"] }
 serde_json = "1"
 # 7z (CB7) in pure Rust; LZMA and LZMA2 only (no encryption, no extra codecs).
