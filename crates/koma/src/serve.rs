@@ -7,6 +7,7 @@
 //! | `GET /` | the default library (or the first): its series and collections |
 //! | `GET /l/{folder}` | a library: its series and collections |
 //! | `GET /settings` | the libraries and their settings, read-only |
+//! | `GET /a/koma.{hash}.css` | the stylesheet, cached for a year |
 //! | `GET /s/{id}` | a series: its books |
 //! | `GET /r/{book}/{n}` | the reader, page `n` (1-based) |
 //! | `GET /p/{hash}.{ext}` | a page's bytes, cached for a year |
@@ -22,7 +23,7 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
-use axum::extract::{Path as UrlPath, State};
+use axum::extract::{Path as UrlPath, RawQuery, State};
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
@@ -32,8 +33,8 @@ use tokio::net::TcpListener;
 use crate::blobs::BlobStore;
 use crate::catalog::{self, Catalog};
 use crate::cli::Paths;
-use crate::libraries::Library;
-use crate::{html, log, signal};
+use crate::libraries::{self, Library};
+use crate::{html, log, signal, variants};
 
 /// What every request handler shares. Cheap to clone.
 #[derive(Clone)]
@@ -122,6 +123,7 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(library))
         .route("/l/{folder}", get(named_library))
         .route("/settings", get(settings))
+        .route("/a/{file}", get(stylesheet))
         .route("/s/{id}", get(series))
         .route("/r/{book}/{page}", get(reader))
         .route("/p/{file}", get(page_bytes))
@@ -134,36 +136,164 @@ async fn healthz() -> impl IntoResponse {
 }
 
 /// `GET /`: the default library, or the first one if every series is in a
-/// library folder.
-async fn library(State(state): State<AppState>) -> Result<Html<String>, Failure> {
-    state
-        .query(|c| {
-            let libraries = Library::all(c.library_keys()?);
-            let Some(first) = libraries.first() else {
-                return Ok(Html(html::library(&[], None, &[])));
-            };
-            let series = c.series_in_library(&first.folder)?;
-            Ok(Html(html::library(&libraries, Some(first), &series)))
-        })
-        .await
-}
-
-/// `GET /l/<folder>`: one library.
-async fn named_library(
+/// library folder. `?c=<collection>` and `?page=<n>` as for [`named_library`].
+async fn library(
     State(state): State<AppState>,
-    UrlPath(folder): UrlPath<String>,
+    RawQuery(query): RawQuery,
 ) -> Result<Html<String>, Failure> {
     state
         .query(move |c| {
             let libraries = Library::all(c.library_keys()?);
-            let current = libraries
-                .iter()
-                .find(|l| !l.folder.is_empty() && l.folder == folder)
-                .ok_or(Failure::NotFound)?;
-            let series = c.series_in_library(&current.folder)?;
-            Ok(Html(html::library(&libraries, Some(current), &series)))
+            if libraries.is_empty() {
+                return Ok(Html(html::empty()));
+            }
+            shelf(c, &libraries, 0, query.as_deref())
         })
         .await
+}
+
+/// `GET /l/<folder>`: one library: its collections as stacks, then its
+/// series. `?c=<collection>` shows one collection's series; `?page=<n>` the
+/// `n`th page of cards.
+async fn named_library(
+    State(state): State<AppState>,
+    UrlPath(folder): UrlPath<String>,
+    RawQuery(query): RawQuery,
+) -> Result<Html<String>, Failure> {
+    state
+        .query(move |c| {
+            let libraries = Library::all(c.library_keys()?);
+            let at = libraries
+                .iter()
+                .position(|l| !l.folder.is_empty() && l.folder == folder)
+                .ok_or(Failure::NotFound)?;
+            shelf(c, &libraries, at, query.as_deref())
+        })
+        .await
+}
+
+/// The cards of one library page, with covers looked up only for the cards
+/// on that page.
+fn shelf(
+    c: &Catalog,
+    libraries: &[Library],
+    at: usize,
+    query: Option<&str>,
+) -> Result<Html<String>, Failure> {
+    let library = &libraries[at];
+    let collection = query_value(query, "c");
+    let page = match query_value(query, "page") {
+        None => 1,
+        Some(p) => p
+            .parse::<usize>()
+            .ok()
+            .filter(|&p| p > 0)
+            .ok_or(Failure::NotFound)?,
+    };
+    let all = c.series_in_library(&library.folder)?;
+    // Collections in natural order, each with its series.
+    let mut groups: Vec<(String, Vec<&(catalog::Series, i64)>)> = Vec::new();
+    for item in &all {
+        if let Some(name) = libraries::collection_of(&item.0.path) {
+            match groups.iter_mut().find(|(n, _)| n == name) {
+                Some((_, list)) => list.push(item),
+                None => groups.push((name.to_owned(), vec![item])),
+            }
+        }
+    }
+    groups.sort_by(|a, b| crate::natsort::compare_paths(&a.0, &b.0));
+    let collections: Vec<String> = groups.iter().map(|(n, _)| n.clone()).collect();
+
+    enum Card<'a> {
+        Series(&'a (catalog::Series, i64)),
+        Collection(&'a str, &'a [&'a (catalog::Series, i64)]),
+    }
+    let cards: Vec<Card<'_>> = match &collection {
+        Some(name) => {
+            let (_, list) = groups
+                .iter()
+                .find(|(n, _)| n == name)
+                .ok_or(Failure::NotFound)?;
+            list.iter().map(|s| Card::Series(s)).collect()
+        }
+        None => groups
+            .iter()
+            .map(|(n, list)| Card::Collection(n, list))
+            .chain(
+                all.iter()
+                    .filter(|s| libraries::collection_of(&s.0.path).is_none())
+                    .map(Card::Series),
+            )
+            .collect(),
+    };
+    let start = (page - 1) * html::PER_PAGE;
+    if start >= cards.len() && page > 1 {
+        return Err(Failure::NotFound);
+    }
+    let series_cover = |id: i64| -> Result<Option<catalog::Cover>, Failure> {
+        Ok(match c.first_book(id)? {
+            Some(book) => c.book_cover(book, html::COVER_WIDTH, variants::VERSION)?,
+            None => None,
+        })
+    };
+    let mut items = Vec::new();
+    for card in cards.iter().skip(start).take(html::PER_PAGE) {
+        items.push(match card {
+            Card::Series((series, books)) => html::Item::Series {
+                cover: series_cover(series.id)?,
+                series: series.clone(),
+                books: *books,
+            },
+            Card::Collection(name, list) => html::Item::Collection {
+                name: (*name).to_owned(),
+                series: list.len() as i64,
+                books: list.iter().map(|(_, b)| b).sum(),
+                cover: series_cover(list[0].0.id)?,
+            },
+        });
+    }
+    Ok(Html(html::library(&html::Shelf {
+        libraries,
+        library,
+        collections: &collections,
+        collection: collection.as_deref(),
+        items: &items,
+        page,
+        total: cards.len(),
+    })))
+}
+
+/// The value of `key` in a URL query string, percent-decoded (`+` as a
+/// space). `None` if absent or not valid UTF-8 once decoded.
+fn query_value(query: Option<&str>, key: &str) -> Option<String> {
+    query?.split('&').find_map(|pair| {
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        (k == key).then(|| percent_decode(v)).flatten()
+    })
+}
+
+fn percent_decode(s: &str) -> Option<String> {
+    let mut out = Vec::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' => {
+                let hex = s.get(i + 1..i + 3)?;
+                out.push(u8::from_str_radix(hex, 16).ok()?);
+                i += 3;
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 /// `GET /settings`: the libraries and their settings, read-only.
@@ -173,6 +303,23 @@ async fn settings(State(state): State<AppState>) -> Result<Html<String>, Failure
         .await
 }
 
+/// `GET /a/koma.<hash>.css`: the stylesheet, cached for good (its URL
+/// changes with its content).
+async fn stylesheet(UrlPath(file): UrlPath<String>) -> Result<Response, Failure> {
+    if format!("/a/{file}") != html::css_url() {
+        return Err(Failure::NotFound);
+    }
+    Ok((
+        [
+            (CONTENT_TYPE, "text/css; charset=utf-8"),
+            (CACHE_CONTROL, "public, max-age=31536000, immutable"),
+        ],
+        html::CSS,
+    )
+        .into_response())
+}
+
+/// `GET /s/<id>`: a series and its books.
 async fn series(
     State(state): State<AppState>,
     UrlPath(id): UrlPath<i64>,
@@ -180,10 +327,44 @@ async fn series(
     state
         .query(move |c| {
             let series = c.series_by_id(id)?.ok_or(Failure::NotFound)?;
-            let books = c.books(id)?;
-            Ok(Html(html::series(&series, &books)))
+            let mut books = Vec::new();
+            for book in c.books(id)? {
+                let cover = c.book_cover(book.id, html::COVER_WIDTH, variants::VERSION)?;
+                books.push((book, cover));
+            }
+            if books.is_empty() {
+                return Err(Failure::NotFound);
+            }
+            let libraries = Library::all(c.library_keys()?);
+            let folder = libraries::library_of(&series.path);
+            let library = libraries
+                .iter()
+                .find(|l| l.folder == folder)
+                .ok_or(Failure::NotFound)?;
+            let collections = collections_of(c, &library.folder)?;
+            Ok(Html(html::series(
+                &libraries,
+                library,
+                &collections,
+                &series,
+                &books,
+            )))
         })
         .await
+}
+
+/// A library's collections, in natural order.
+fn collections_of(c: &Catalog, library: &str) -> Result<Vec<String>, Failure> {
+    let mut names: Vec<String> = Vec::new();
+    for (s, _) in c.series_in_library(library)? {
+        if let Some(n) = libraries::collection_of(&s.path)
+            && !names.iter().any(|x| x == n)
+        {
+            names.push(n.to_owned());
+        }
+    }
+    names.sort_by(|a, b| crate::natsort::compare_paths(a, b));
+    Ok(names)
 }
 
 async fn reader(

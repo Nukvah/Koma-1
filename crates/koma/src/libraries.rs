@@ -132,6 +132,17 @@ impl Library {
     }
 }
 
+/// The library folder a series is in, from its path, as the catalogue's
+/// `series.library` column has it: `""` for the default library.
+pub fn library_of(series_path: &str) -> &str {
+    if series_path.starts_with('\0') {
+        return "";
+    }
+    series_path
+        .split_once('/')
+        .map_or("", |(library, _)| library)
+}
+
 /// The collection a series is in, from its path: the folder above the series
 /// folder when that is not the library folder itself.
 /// `manga/Starfall Saga/Starfall` → `Starfall Saga`; `manga/Starfall` → none.
@@ -185,6 +196,14 @@ mod tests {
         assert_eq!(Library::from_folder("", 0, 1).name, "Library");
         // Colours go round.
         assert_eq!(Library::from_folder("x", 6, 1).colour.0, "amber");
+    }
+
+    #[test]
+    fn library_of_a_series() {
+        assert_eq!(library_of("manga/Starfall Saga/Starfall"), "manga");
+        assert_eq!(library_of("manga/Starfall"), "manga");
+        assert_eq!(library_of("Starfall"), "");
+        assert_eq!(library_of("\0starfall"), "");
     }
 
     #[test]
