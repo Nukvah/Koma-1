@@ -4,7 +4,9 @@
 //!
 //! | Route | |
 //! |---|---|
-//! | `GET /` | the library: every series |
+//! | `GET /` | the default library (or the first): its series and collections |
+//! | `GET /l/{folder}` | a library: its series and collections |
+//! | `GET /settings` | the libraries and their settings, read-only |
 //! | `GET /s/{id}` | a series: its books |
 //! | `GET /r/{book}/{n}` | the reader, page `n` (1-based) |
 //! | `GET /p/{hash}.{ext}` | a page's bytes, cached for a year |
@@ -30,6 +32,7 @@ use tokio::net::TcpListener;
 use crate::blobs::BlobStore;
 use crate::catalog::{self, Catalog};
 use crate::cli::Paths;
+use crate::libraries::Library;
 use crate::{html, log, signal};
 
 /// What every request handler shares. Cheap to clone.
@@ -117,6 +120,8 @@ impl IntoResponse for Failure {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(library))
+        .route("/l/{folder}", get(named_library))
+        .route("/settings", get(settings))
         .route("/s/{id}", get(series))
         .route("/r/{book}/{page}", get(reader))
         .route("/p/{file}", get(page_bytes))
@@ -128,9 +133,44 @@ async fn healthz() -> impl IntoResponse {
     ([(CACHE_CONTROL, "no-store")], "ok\n")
 }
 
+/// `GET /`: the default library, or the first one if every series is in a
+/// library folder.
 async fn library(State(state): State<AppState>) -> Result<Html<String>, Failure> {
-    let series = state.query(|c| Ok(c.series_with_counts()?)).await?;
-    Ok(Html(html::library(&series)))
+    state
+        .query(|c| {
+            let libraries = Library::all(c.library_keys()?);
+            let Some(first) = libraries.first() else {
+                return Ok(Html(html::library(&[], None, &[])));
+            };
+            let series = c.series_in_library(&first.folder)?;
+            Ok(Html(html::library(&libraries, Some(first), &series)))
+        })
+        .await
+}
+
+/// `GET /l/<folder>`: one library.
+async fn named_library(
+    State(state): State<AppState>,
+    UrlPath(folder): UrlPath<String>,
+) -> Result<Html<String>, Failure> {
+    state
+        .query(move |c| {
+            let libraries = Library::all(c.library_keys()?);
+            let current = libraries
+                .iter()
+                .find(|l| !l.folder.is_empty() && l.folder == folder)
+                .ok_or(Failure::NotFound)?;
+            let series = c.series_in_library(&current.folder)?;
+            Ok(Html(html::library(&libraries, Some(current), &series)))
+        })
+        .await
+}
+
+/// `GET /settings`: the libraries and their settings, read-only.
+async fn settings(State(state): State<AppState>) -> Result<Html<String>, Failure> {
+    state
+        .query(|c| Ok(Html(html::settings(&Library::all(c.library_keys()?)))))
+        .await
 }
 
 async fn series(
