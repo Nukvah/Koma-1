@@ -420,6 +420,13 @@ pub fn run_jobs(
         let Some(job) = catalog.claim_job()? else {
             if !looked_for_variants {
                 looked_for_variants = true;
+                // Indexing is done: bring search up to date before the
+                // (long) variants work starts.
+                if report.indexed + report.removed + report.moved > 0
+                    || catalog.search_needs_filling()?
+                {
+                    catalog.rebuild_search()?;
+                }
                 let min_width = variants::WIDTHS[0];
                 if catalog.queue_missing_variants(variants::VERSION, min_width)? > 0 {
                     continue;

@@ -78,18 +78,25 @@ pub struct Here<'a> {
     pub collection: Option<&'a str>,
     /// Which `// go` link is current: "library" or "settings".
     pub go: &'static str,
+    /// The search box's text.
+    pub query: &'a str,
 }
 
 /// A page in the shell: top bar, side panel (folded behind `menu` on
 /// phones, without JavaScript) and `main`.
 fn shell(title: &str, libraries: &[Library], here: &Here<'_>, main: &str) -> String {
     let mut b = String::with_capacity(main.len() + 2048);
-    b.push_str(
+    let _ = write!(
+        b,
         "<input type=checkbox id=menu class=menu aria-label=\"show the menu\">\
-         <header class=top><a class=brand href=\"/\">KOMA-1</a><span class=search></span>\
+         <header class=top><a class=brand href=\"/\">KOMA-1</a>\
+         <form class=search role=search action=\"/search\"><label for=q>/</label>\
+         <input id=q name=q type=search value=\"{}\" \
+         placeholder=\"search all libraries: title, author:, tag:\"></form>\
          <label for=menu class=menu-btn aria-hidden=true>menu</label></header>\
          <div class=layout><aside class=side aria-label=\"Navigation and libraries\">\
          <nav aria-label=Main><h2>// go</h2><ul>",
+        escape(here.query)
     );
     for (name, href) in [("library", "/"), ("settings", "/settings")] {
         let on = here.go == name;
@@ -297,6 +304,7 @@ pub fn library(shelf: &Shelf<'_>) -> String {
         collections: shelf.collections,
         collection: shelf.collection,
         go: "library",
+        query: "",
     };
     shell(&title, shelf.libraries, &here, &m)
 }
@@ -410,6 +418,7 @@ pub fn series(
         collections,
         collection,
         go: "library",
+        query: "",
     };
     shell(&series.name, libraries, &here, &m)
 }
@@ -425,8 +434,146 @@ pub fn empty() -> String {
         collections: &[],
         collection: None,
         go: "library",
+        query: "",
     };
     shell("Library", &[], &here, main)
+}
+
+/// `text`, escaped, with every range of `marks` (byte offsets from
+/// [`crate::search::matches`]) in a `<mark>`.
+fn marked(text: &str, marks: &[(usize, usize)]) -> String {
+    let mut out = String::new();
+    let mut at = 0;
+    for &(from, to) in marks {
+        out.push_str(&escape(&text[at..from]));
+        let _ = write!(out, "<mark>{}</mark>", escape(&text[from..to]));
+        at = to;
+    }
+    out.push_str(&escape(&text[at..]));
+    out
+}
+
+/// What a search found, for [`search`].
+pub struct Found<'a> {
+    pub libraries: &'a [Library],
+    pub query: &'a str,
+    /// Words to mark in results.
+    pub needles: &'a [&'a str],
+    /// The library searched, or all.
+    pub library: Option<&'a Library>,
+    /// `(series, books, cover, library name)`.
+    pub series: &'a [(Series, i64, Option<Cover>, String)],
+    /// `(book, its series' name, library name)`.
+    pub books: &'a [(Book, String, String)],
+    /// `(kind, name, books)`.
+    pub terms: &'a [(String, String, i64)],
+}
+
+pub fn search(f: &Found<'_>) -> String {
+    let q = f.query.trim();
+    let mut m = String::from("<div class=toolbar><h1>search ");
+    let _ = write!(
+        m,
+        "<b>{}</b> · {} · {}",
+        escape(q),
+        plural(f.series.len() as i64, "series", "series"),
+        plural(f.books.len() as i64, "book", "books")
+    );
+    let encoded = crate::libraries::encode_path_part(q);
+    let _ = write!(
+        m,
+        "</h1><div class=seg><a href=\"/search?q={encoded}\"{}>all</a>",
+        if f.library.is_none() {
+            " aria-current=page"
+        } else {
+            ""
+        }
+    );
+    for l in f.libraries {
+        let on = f.library.is_some_and(|x| x.folder == l.folder);
+        let _ = write!(
+            m,
+            "<a href=\"/search?q={encoded}&amp;l={}\"{}>{}</a>",
+            crate::libraries::encode_path_part(&l.folder),
+            if on { " aria-current=page" } else { "" },
+            escape(&l.name.to_lowercase())
+        );
+    }
+    m.push_str("</div></div>");
+    let mark = |text: &str| marked(text, &crate::search::matches(text, f.needles));
+    if q.is_empty() {
+        m.push_str(
+            "<div class=empty><strong>Search your libraries</strong><p>Type part of a \
+             title, a person, a genre or a tag in the box above.</p></div>",
+        );
+    } else if f.series.is_empty() && f.books.is_empty() && f.terms.is_empty() {
+        let _ = write!(
+            m,
+            "<div class=empty><strong>Nothing matches “{}”</strong><p>Search looks at \
+             titles, people, genres and tags, in every library. Try fewer letters, or \
+             <kbd>tag:</kbd> <kbd>author:</kbd> <kbd>genre:</kbd> to look in one place.</p></div>",
+            escape(q)
+        );
+    }
+    if !f.series.is_empty() {
+        m.push_str("<h2 class=section-h>series</h2><div class=grid>");
+        for (s, books, c, library) in f.series {
+            let _ = write!(m, "<a class=card href=\"/s/{}\">", s.id);
+            cover(&mut m, c.as_ref(), shade(s.id), &s.name);
+            let _ = write!(
+                m,
+                "<b>{}</b><span>{} · {}</span></a>",
+                mark(&s.name),
+                plural(*books, "book", "books"),
+                escape(library)
+            );
+        }
+        m.push_str("</div>");
+    }
+    if !f.books.is_empty() {
+        m.push_str("<h2 class=section-h>books</h2><div class=hits>");
+        for (b, series, library) in f.books {
+            let _ = write!(
+                m,
+                "<a href=\"/r/{}/1\"><span>{} · <b>{}</b></span><small>{}</small></a>",
+                b.id,
+                escape(series),
+                mark(&b.name),
+                escape(library)
+            );
+        }
+        m.push_str("</div>");
+    }
+    if !f.terms.is_empty() {
+        m.push_str("<h2 class=section-h>people, genres and tags</h2><div class=chips>");
+        for (kind, name, books) in f.terms {
+            let field = match kind.as_str() {
+                "genre" => "genre",
+                "tag" => "tag",
+                _ => "author",
+            };
+            let query = format!("{field}:\"{name}\"");
+            let _ = write!(
+                m,
+                "<a href=\"/search?q={}\">{kind}: {} · {books}</a>",
+                crate::libraries::encode_path_part(&query),
+                mark(name)
+            );
+        }
+        m.push_str("</div>");
+    }
+    m.push_str(
+        "<p class=status>Matches any part of a word, so Japanese and Korean titles work \
+         too. Narrow it with <kbd>author:</kbd> <kbd>tag:</kbd> <kbd>genre:</kbd>.</p>",
+    );
+    let here = Here {
+        library: f.library,
+        collections: &[],
+        collection: None,
+        go: "",
+        query: q,
+    };
+    shell(&format!("Search: {q}"), f.libraries, &here, &m)
 }
 
 /// The libraries and their settings, read-only until accounts (M5).
@@ -472,6 +619,7 @@ pub fn settings(libraries: &[Library]) -> String {
         collections: &[],
         collection: None,
         go: "settings",
+        query: "",
     };
     shell("Settings", libraries, &here, &m)
 }

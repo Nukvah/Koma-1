@@ -108,8 +108,9 @@ fn series_land_in_their_library() {
     let _ = fs::remove_dir_all(&root);
 }
 
-/// The catalogue of schema 7 (before libraries) is upgraded in place: the
-/// same series, books and page variants, now with their library.
+/// The catalogue of schema 7 (before libraries and search) is upgraded in
+/// place, both steps: the same series, books and page variants, now with
+/// their library.
 #[test]
 fn schema_7_is_upgraded_in_place() {
     let root = temp_root("upgrade");
@@ -125,7 +126,8 @@ fn schema_7_is_upgraded_in_place() {
     // variant row standing for the work an upgrade must not lose.
     let conn = rusqlite::Connection::open(&db).unwrap();
     conn.execute_batch(
-        "DROP INDEX series_library;
+        "DROP TABLE search;
+         DROP INDEX series_library;
          ALTER TABLE series DROP COLUMN library;
          INSERT INTO variant_pages (hash, version, error) VALUES (x'00', 1, NULL);
          PRAGMA user_version = 7;",
@@ -142,7 +144,7 @@ fn schema_7_is_upgraded_in_place() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 8);
+    assert_eq!(version, 9);
     let _ = fs::remove_dir_all(&root);
 }
 
