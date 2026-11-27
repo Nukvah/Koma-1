@@ -284,6 +284,20 @@ the bars for the series. That choice and the position are kept in the
 browser (`localStorage`) until accounts (M5). The tap zones are shown once,
 faintly, on the first open.
 
+Turns are instant because pages are made ahead. Each coming page is an image
+of its own with the page's `srcset` in one format (WebP where the browser
+takes it, else JPEG; with Save-Data, the 720 variant only), fetched at low
+priority and decoded (`img.decode()`) before it is needed; a turn swaps the
+decoded image in, at high priority if it is still loading. How far ahead
+follows the reading speed: enough pages for two seconds, from the last five
+times between turns (pauses over a minute left out), 2 to 8 pages, plus the
+page before; pages outside that are dropped. Measured in Chromium with the
+network throttled to 1.6 Mbit/s and 150 ms round trips, reading a page every
+4 s and then every 0.6 s: at every turn the page on screen was already
+loaded and decoded (at most 3 ms waiting on `decode()`), and no page was
+fetched at the turn. That is M4's exit check for pictures; EPUB's (its
+position on another device) comes with accounts.
+
 ## Search
 
 `koma::search` and the `search` table: SQLite FTS5 with the trigram
