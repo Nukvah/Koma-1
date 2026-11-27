@@ -901,9 +901,11 @@ fn place_in_series(
         })
         .optional()?;
     if let Some(id) = existing {
+        let old: String =
+            tx.query_row("SELECT name FROM series WHERE id = ?1", [id], |r| r.get(0))?;
         tx.execute(
             "UPDATE series SET name = ?2 WHERE id = ?1",
-            params![id, name],
+            params![id, series_name(&old, name)],
         )?;
         return Ok(id);
     }
@@ -928,6 +930,18 @@ fn place_in_series(
     Ok(tx.last_insert_rowid())
 }
 
+/// The name a series shows when its books name it differently: books loose
+/// in the root group by their name without case (`starfall academy v03.cbz`
+/// joins `Starfall Academy - Ch. 01.cbz`). The best-capitalised spelling wins,
+/// then the first in order, so the name doesn't depend on scan order.
+fn series_name<'a>(a: &'a str, b: &'a str) -> &'a str {
+    let capitals = |s: &str| s.chars().filter(|c| c.is_uppercase()).count();
+    match capitals(a).cmp(&capitals(b)).then_with(|| b.cmp(a)) {
+        std::cmp::Ordering::Less => b,
+        _ => a,
+    }
+}
+
 fn last_part(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
@@ -943,4 +957,24 @@ fn prune_series(tx: &rusqlite::Transaction<'_>) -> Result<(), Error> {
 fn hash_from_row(r: &rusqlite::Row<'_>, i: usize) -> Result<blake3::Hash, Error> {
     let bytes: [u8; 32] = r.get(i)?;
     Ok(blake3::Hash::from_bytes(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::series_name;
+
+    #[test]
+    fn series_name_does_not_depend_on_order() {
+        for (a, b) in [
+            ("starfall academy", "Starfall Academy"),
+            ("Starfall academy", "starfall Academy"),
+            ("Starfall", "Starfall"),
+        ] {
+            assert_eq!(series_name(a, b), series_name(b, a), "{a} / {b}");
+        }
+        assert_eq!(
+            series_name("starfall academy", "Starfall Academy"),
+            "Starfall Academy"
+        );
+    }
 }
