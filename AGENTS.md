@@ -8,8 +8,8 @@ A self-hosted manga server with a web library and reader, shipped as Docker on L
 
 ## Build this
 
-- **One Rust binary** (axum + tokio, libvips) with three modes: `serve`, `worker`, `scrub`. Static musl build, `FROM scratch` image.
-- **Ingest does the work, serving does not.** Workers scan the library, hash pages (BLAKE3), index archives and pre-generate image variants (720/1080/1440/original; AVIF, WebP, JPEG). Grayscale pages stored as 8-bit gray.
+- **One Rust binary** (axum + tokio; pure-Rust image decoding and resizing, small vendored C encoders such as libwebp where Rust has none) with three modes: `serve`, `worker`, `scrub`. Static musl build, `FROM scratch` image.
+- **Ingest does the work, serving does not.** Workers scan the library, hash pages (BLAKE3), index archives and pre-generate image variants (720/1080/1440 below the page's width, the original served as is; WebP and JPEG, AVIF from M9). Grayscale pages stored as 8-bit gray.
 - **Content-addressed, immutable page URLs** (`/p/<hash>.<width>.<format>`, cached for a year).
 - **Zero-copy CBZ serving:** index the zip central directory, `sendfile()` byte ranges.
 - **SQLite** (WAL, FTS5 trigram search) for metadata; local disk or S3-compatible storage for blobs.

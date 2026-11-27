@@ -6,6 +6,7 @@
 |---|---|
 | `crates/koma` | The `koma` binary and its library: CLI, server, archives, catalogue, scan |
 | `crates/koma-fixtures` | Made-up test material: PNG pages, zip and 7z writers, a test library |
+| `crates/koma-webp` | Lossy WebP encoding: one safe function over libwebp, the only crate allowed `unsafe` |
 | `fuzz` | Fuzz targets for every parser of hostile input (nightly, own lock file) |
 | `xtask` | Project tasks: `cargo xtask budgets`, `cargo xtask fixtures` |
 | `budgets.toml` | Every performance and size budget |
@@ -83,7 +84,8 @@ folder, with the extension only breaking ties.
 ## Fuzzing
 
 Every parser of hostile input has a fuzz target in `fuzz/` (cargo-fuzz,
-nightly): `zip_index`, `sevenz`, `page_size`, `metadata` and `names`. CI runs
+nightly): `zip_index`, `sevenz`, `page_size`, `metadata`, `names` and
+`variants` (decoding, resizing and encoding a page). CI runs
 each for 60 seconds on every pull request, seeded with the made-up library,
 and keeps any crashing input as a build artifact. To run one locally:
 
@@ -106,6 +108,52 @@ the reader can lay pages out before they load. A header that can't be read
 gives no size (NULL); the reader falls back to a default shape. A page wider
 than 1.2 times its height is a spread (`Size::is_spread`); one at least three
 times as tall as wide is a tall strip, as in webtoons (`Size::is_tall_strip`).
+
+## Page variants
+
+The worker makes smaller copies of every page once, after indexing, so that
+serving never resizes or transcodes (`koma::variants`):
+
+- Widths 720, 1080 and 1440, only those narrower than the page: the original
+  is always served as it is, and a page no wider than 720 has none. Each width
+  in JPEG (quality 82, through `jpeg-encoder`, pure Rust) and WebP (quality 80,
+  through `koma-webp`: libwebp 1.6 built from its vendored C source). AVIF
+  variants come in M9. WebP stops at 16,383 pixels, so a very long strip's
+  720 variant may be JPEG only. A variant that comes out no smaller than the
+  original is dropped: clean line art saved as PNG is often smaller than any
+  lossy copy of it, and the original serves instead.
+- On made-up scan-like pages (1600 x 2400, JPEG at quality 90, 1.7 MB each)
+  the WebP variants were 7% (720), 23% (1080) and 51% (1440) of the page's
+  size, and all six variants together about 1.7 times the originals' space.
+  On the 2-CPU, 1 GB budget container: about 0.9 s a page, at most 35 MiB of
+  memory, back to 3.4 MiB idle.
+- Pages are decoded in pure Rust (`image`: JPEG, PNG, WebP, GIF's first frame,
+  BMP) and resized with Lanczos3 (`fast_image_resize`). AVIF and JPEG XL pages
+  get no variants yet; they are served as they are.
+- EXIF orientation is applied, so variants have none; transparency is
+  flattened onto white. A page whose every pixel has its channels within 8 of
+  each other is neutral gray and is encoded as 8-bit gray; a tinted page
+  (sepia, yellowed paper) keeps its colour.
+- Limits before decoding: 64 million pixels and 512 MiB for the decoder.
+  A page over them, or one that can't be decoded, is logged and kept
+  without variants (`variant_pages.error`).
+- Variants belong to page content, not to books: `variants` and
+  `variant_pages` are keyed by the page's hash, so a page in two books, or a
+  book moved, is not redone. Their bytes are blobs next to the page,
+  `<data>/blobs/ab/<hash>.<width>.<format>`.
+- Once the job queue is empty, every present book with a page lacking
+  variants gets a `variants` job. Index jobs always go first, so a new book is
+  readable before its variants exist. A job makes one page at a time and
+  records each before the next, so a stop (checked between pages; the job
+  goes back in the queue without counting the attempt) or a kill redoes at
+  most one page. If the worker dies on the same page three times, that page
+  alone is given up. The test `tests/variants.rs` kills `koma worker` with
+  SIGKILL mid-book and checks that a restart finishes, redoing nothing else.
+- `variants::VERSION` names the settings (widths, formats, qualities).
+  Raising it makes the worker redo every page under the new settings, in
+  place, at the same URLs.
+- One page at a time on one thread: on the 2-CPU target the other CPU stays
+  free for `koma serve`.
 
 ## Catalogue and scan
 
@@ -182,11 +230,13 @@ HTML (`koma::html`): no JavaScript, a few lines of CSS. The real design
 | `GET /s/{id}` | a series: its books |
 | `GET /r/{book}/{n}` | the reader, page `n` (1-based); the image links to the next page, and the last page back to the series |
 | `GET /p/{hash}.{ext}` | a page's bytes, `Cache-Control: public, max-age=31536000, immutable`, `ETag` = hash |
+| `GET /p/{hash}.{width}.{format}` | a page variant (`jpg` or `webp`), cached the same way; 404 if that variant was not made |
 | `GET /healthz` | health check |
 
 Page bytes come from the book file at the recorded offset (stored pages) or
-from the blob store (pages that were compressed): nothing is decompressed or
-resized at request time. Each page is read with one positioned read; a true
+from the blob store (pages that were compressed, and variants): nothing is
+decompressed or resized at request time. The reader still shows originals;
+`<picture>` and `srcset` over the variants come with the reader (M4). Each page is read with one positioned read; a true
 `sendfile()` path can replace it later if the budgets ask for it. Until the
 first scan, `/` answers 503.
 

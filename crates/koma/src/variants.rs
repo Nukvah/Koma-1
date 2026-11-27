@@ -3,6 +3,7 @@
 //!
 //! - Widths [`WIDTHS`], only those narrower than the page. The original is
 //!   always served as it is, so a page no wider than 720 pixels has none.
+//! - A variant no smaller than the original is dropped: the original serves.
 //! - Each width in JPEG (quality [`JPEG_QUALITY`]) and WebP (quality
 //!   [`WEBP_QUALITY`]). AVIF comes later (M9).
 //! - Sizes are as displayed: a JPEG's EXIF orientation is applied first, so
@@ -70,12 +71,25 @@ impl Format {
 }
 
 /// One encoded variant.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Variant {
     pub width: u32,
     pub height: u32,
     pub format: Format,
     pub bytes: Vec<u8>,
+}
+
+impl fmt::Debug for Variant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}x{} {} ({} bytes)",
+            self.width,
+            self.height,
+            self.format.ext(),
+            self.bytes.len()
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -258,9 +272,11 @@ fn luma(r: u8, g: u8, b: u8) -> u8 {
     ((77 * u32::from(r) + 150 * u32::from(g) + 29 * u32::from(b) + 128) >> 8) as u8
 }
 
-/// Every variant of a page: each width in [`widths_for`], in each format.
-/// Empty for a page no wider than the smallest width.
+/// Every variant of a page: each width in [`widths_for`], in each format,
+/// except those that come out no smaller than the page itself. Empty for a
+/// page no wider than the smallest width.
 pub fn make(bytes: &[u8], limits: &Limits) -> Result<Vec<Variant>, Error> {
+    let original_len = bytes.len();
     let pixels = decode(bytes, limits)?;
     let mut out = Vec::new();
     let mut resizer = Resizer::new();
@@ -291,6 +307,11 @@ pub fn make(bytes: &[u8], limits: &Limits) -> Result<Vec<Variant>, Error> {
                     Err(e) => return Err(Error::Encode(e.to_string())),
                 },
             };
+            // A copy no smaller than the original is no use: clean line art
+            // in PNG can be smaller than any lossy version of it.
+            if bytes.len() >= original_len {
+                continue;
+            }
             out.push(Variant {
                 width,
                 height,
@@ -465,6 +486,16 @@ mod tests {
         orientation: Option<u16>,
         pixel: impl Fn(u32, u32) -> [u8; 3],
     ) -> Vec<u8> {
+        jpeg_q(95, w, h, orientation, pixel)
+    }
+
+    fn jpeg_q(
+        quality: u8,
+        w: u16,
+        h: u16,
+        orientation: Option<u16>,
+        pixel: impl Fn(u32, u32) -> [u8; 3],
+    ) -> Vec<u8> {
         let mut rgb = Vec::new();
         for y in 0..u32::from(h) {
             for x in 0..u32::from(w) {
@@ -472,7 +503,7 @@ mod tests {
             }
         }
         let mut out = Vec::new();
-        let mut e = jpeg_encoder::Encoder::new(&mut out, 95);
+        let mut e = jpeg_encoder::Encoder::new(&mut out, quality);
         if let Some(o) = orientation {
             // Big-endian TIFF, one IFD entry: orientation (0x0112), SHORT.
             let mut t = b"MM\0\x2a\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x01".to_vec();
@@ -492,6 +523,13 @@ mod tests {
             .position(|m| m[0] == 0xff && matches!(m[1], 0xc0..=0xc2))
             .unwrap();
         j[at + 9]
+    }
+
+    fn first_jpeg(vs: &[Variant]) -> &[u8] {
+        &vs.iter()
+            .find(|v| v.format == Format::Jpeg)
+            .expect("a JPEG variant")
+            .bytes
     }
 
     fn decoded(v: &Variant) -> DynamicImage {
@@ -539,26 +577,31 @@ mod tests {
             assert_eq!((img.width(), img.height()), (v.width, v.height));
             assert!(img.color().has_color());
         }
-        assert_eq!(components_of_jpeg(&vs[0].bytes), 3);
+        assert_eq!(components_of_jpeg(first_jpeg(&vs)), 3);
     }
 
     #[test]
     fn a_neutral_page_is_stored_gray_and_a_tinted_one_is_not() {
         // Black ink on white with a little scanner noise between channels.
-        let ink = jpeg(800, 1200, None, |x, y| {
+        let ink = jpeg(1600, 2400, None, |x, y| {
             let v = if (x / 40 + y / 40) % 2 == 0 { 20 } else { 235 };
             [v, v + 3, v.saturating_sub(2)]
         });
         let vs = make(&ink, &Limits::default()).unwrap();
-        assert_eq!(components_of_jpeg(&vs[0].bytes), 1);
-        assert!(!decoded(&vs[0]).color().has_color());
+        assert_eq!(components_of_jpeg(first_jpeg(&vs)), 1);
+        assert!(
+            !image::load_from_memory(first_jpeg(&vs))
+                .unwrap()
+                .color()
+                .has_color()
+        );
 
-        let sepia = jpeg(800, 1200, None, |x, _| {
+        let sepia = jpeg(1600, 2400, None, |x, _| {
             let v = (x % 200) as u8 + 40;
             [v, v.saturating_sub(20), v.saturating_sub(45)]
         });
         let vs = make(&sepia, &Limits::default()).unwrap();
-        assert_eq!(components_of_jpeg(&vs[0].bytes), 3);
+        assert_eq!(components_of_jpeg(first_jpeg(&vs)), 3);
     }
 
     #[test]
@@ -583,12 +626,26 @@ mod tests {
         let png = koma_fixtures::png::page(900, 1300, 3);
         let vs = make(&png, &Limits::default()).unwrap();
         assert_eq!(vs.len(), 2);
-        assert_eq!(components_of_jpeg(&vs[0].bytes), 1);
+        assert_eq!(components_of_jpeg(first_jpeg(&vs)), 1);
 
         // Fully transparent becomes white.
         assert_eq!(over_white(0, 0), 255);
         assert_eq!(over_white(0, 255), 0);
         assert_eq!(over_white(100, 128), 177);
+    }
+
+    #[test]
+    fn a_variant_bigger_than_the_page_is_dropped() {
+        // A page saved at a low quality: a 720 JPEG of it at quality 82
+        // takes more bytes than the whole page.
+        let texture = |x: u32, y: u32| {
+            let v = ((x * 7 + y * 13) ^ (x * y)) as u8;
+            [v, v / 2 + 60, 255 - v]
+        };
+        let page = jpeg_q(20, 1000, 1500, None, texture);
+        let vs = make(&page, &Limits::default()).unwrap();
+        assert!(vs.iter().all(|v| v.bytes.len() < page.len()), "{vs:?}");
+        assert!(vs.iter().all(|v| v.format != Format::Jpeg), "{vs:?}");
     }
 
     #[test]

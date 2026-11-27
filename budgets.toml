@@ -9,7 +9,7 @@
 # Units: KiB = 1024 bytes, MiB = 1024 KiB. Asset sizes are raw bytes on disk.
 
 [image]
-max_mib = 40          # FROM scratch; leaves room for the AVIF encoder and libvips
+max_mib = 40          # FROM scratch; leaves room for the AVIF encoder
 
 [memory]
 serve_idle_mib = 40   # resident memory of `koma serve`, idle and after a burst
