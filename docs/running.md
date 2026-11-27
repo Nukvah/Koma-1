@@ -86,6 +86,11 @@ never re-indexed, so a restart re-reads nothing. A book overwritten in place
 doesn't change its folder's time; the worker looks at every known book once
 a day and on each start, and `koma scan` always does, so those are found too.
 
+Books and series keep their ids, and the date they were added, when you move
+or rename them, also with a file manager. A book that disappears is kept out
+of sight for 30 days, so a drive mounted late or a folder put back brings its
+books back as they were, without reading them again.
+
 Only one worker or `koma scan` can use a data folder at a time; a second one
 exits with an error. A worker that is stopped or killed in the middle of a
 book picks that book up again when it restarts. A book that stops the worker

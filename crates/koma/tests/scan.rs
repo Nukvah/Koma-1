@@ -312,11 +312,12 @@ fn quick_rescans_read_only_changed_folders() {
             .all(|x| x.name != "Moonforge")
     );
 
-    // A folder renamed: the old path is forgotten, the new one indexed.
+    // A folder renamed: its books are found again at the new path without
+    // being read (see stable_ids.rs).
     settle(&mut s);
     fs::rename(&starfall, s.library.join("Starfall (old)")).unwrap();
     let report = s.quick_scan();
-    assert_eq!((report.indexed, report.removed), (4, 4));
+    assert_eq!((report.indexed, report.removed, report.moved), (0, 4, 4));
     assert!(s.book_paths().iter().all(|p| !p.starts_with("Starfall/")));
 
     settle(&mut s);
