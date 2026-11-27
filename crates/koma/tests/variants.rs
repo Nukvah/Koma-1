@@ -362,7 +362,7 @@ fn get(addr: SocketAddr, path: &str) -> (u16, String, Vec<u8>) {
         .unwrap();
     write!(
         stream,
-        "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: localhost\r\nRemote-User: mirelle\r\nConnection: close\r\n\r\n"
     )
     .unwrap();
     let mut raw = Vec::new();
@@ -407,7 +407,10 @@ async fn variants_are_served_at_their_own_immutable_urls() {
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(koma::serve::serve(
         listener,
-        koma::serve::AppState::new(&paths),
+        koma::serve::AppState::with_auth(
+            &paths,
+            koma::auth::Config::parse(Some("Remote-User"), Some("127.0.0.1")).unwrap(),
+        ),
         async {
             let _ = stopped.await;
         },

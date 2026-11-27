@@ -7,6 +7,13 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Accounts: passwords (argon2id, pure Rust), random tokens from the OS, and
+# passkey signatures (ES256 and EdDSA, RustCrypto, pure Rust).
+argon2 = "0.6.0"
+ed25519-dalek = { version = "3", default-features = false }
+getrandom = "0.4.3"
+p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
+sha2 = "0.11.2"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
 blake3 = "1.8"
 # Streaming downloads: a response body fed from a blocking reader.

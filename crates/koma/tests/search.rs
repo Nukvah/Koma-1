@@ -71,7 +71,9 @@ fn temp_root(name: &str) -> PathBuf {
 /// The names of the series and books a query finds, each sorted.
 fn find(c: &Catalog, query: &str, library: Option<&str>) -> (Vec<String>, Vec<String>) {
     let p = plan(&parse(query));
-    let hits = c.search(p.fts.as_deref(), &p.likes, library, 100).unwrap();
+    let hits = c
+        .search(p.fts.as_deref(), &p.likes, library, "mirelle", 100)
+        .unwrap();
     let mut series = Vec::new();
     let mut books = Vec::new();
     for (kind, id) in hits {
@@ -131,7 +133,7 @@ fn every_kind_of_query() {
     assert_eq!(find(&c, "50%", None), (vec![], vec![]));
 
     let terms = c
-        .matching_terms(&koma::search::like_pattern("harbor"), 10)
+        .matching_terms(&koma::search::like_pattern("harbor"), "mirelle", 10)
         .unwrap();
     assert_eq!(terms, [("tag".to_owned(), "harbor-town".to_owned(), 2)]);
     let _ = fs::remove_dir_all(&root);
@@ -200,7 +202,7 @@ fn get(addr: SocketAddr, path: &str) -> (u16, String) {
         .unwrap();
     write!(
         stream,
-        "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: localhost\r\nRemote-User: mirelle\r\nConnection: close\r\n\r\n"
     )
     .unwrap();
     let mut raw = Vec::new();
@@ -225,7 +227,10 @@ async fn the_results_page() {
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(koma::serve::serve(
         listener,
-        koma::serve::AppState::new(&paths),
+        koma::serve::AppState::with_auth(
+            &paths,
+            koma::auth::Config::parse(Some("Remote-User"), Some("127.0.0.1")).unwrap(),
+        ),
         async {
             let _ = stopped.await;
         },

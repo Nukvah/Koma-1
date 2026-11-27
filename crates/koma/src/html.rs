@@ -11,6 +11,7 @@ use std::sync::LazyLock;
 
 use crate::catalog::{Book, Cover, Page, Series, TocRow};
 use crate::libraries::Library;
+use crate::pages::Me;
 use crate::variants::{self, Format};
 
 /// Escapes text for HTML element content and quoted attribute values.
@@ -93,11 +94,13 @@ pub struct Here<'a> {
     pub query: &'a str,
     /// Loads the infinite-scroll script (library grids).
     pub scroll: bool,
+    /// Who is signed in: the user menu.
+    pub me: &'a Me<'a>,
 }
 
 /// A page in the shell: top bar, side panel (folded behind `menu` on
 /// phones, without JavaScript) and `main`.
-fn shell(title: &str, libraries: &[Library], here: &Here<'_>, main: &str) -> String {
+pub(crate) fn shell(title: &str, libraries: &[Library], here: &Here<'_>, main: &str) -> String {
     let mut b = String::with_capacity(main.len() + 2048);
     let _ = write!(
         b,
@@ -106,10 +109,11 @@ fn shell(title: &str, libraries: &[Library], here: &Here<'_>, main: &str) -> Str
          <form class=search role=search action=\"/search\"><label for=q>/</label>\
          <input id=q name=q type=search value=\"{}\" \
          placeholder=\"search all libraries: title, author:, tag:\"></form>\
-         <label for=menu class=menu-btn aria-hidden=true>menu</label></header>\
+         <label for=menu class=menu-btn aria-hidden=true>menu</label>{}</header>\
          <div class=layout><aside class=side aria-label=\"Navigation and libraries\">\
          <nav aria-label=Main><h2>// go</h2><ul>",
-        escape(here.query)
+        escape(here.query),
+        crate::pages::user_menu(here.me)
     );
     for (name, href) in [("library", "/"), ("settings", "/settings")] {
         let on = here.go == name;
@@ -121,37 +125,17 @@ fn shell(title: &str, libraries: &[Library], here: &Here<'_>, main: &str) -> Str
         );
     }
     b.push_str("</ul></nav><hr><section class=tree><h2>// libraries</h2><ul>");
-    for l in libraries {
-        let open = here.library.is_some_and(|h| h.folder == l.folder);
-        let _ = write!(
-            b,
-            "<li><a{} href=\"{}\">{} {}<span class=n>{}</span></a></li>",
-            if open {
-                " class=on aria-current=true"
-            } else {
-                ""
-            },
-            l.url(),
-            if open { "▾" } else { "▸" },
-            escape(&l.name),
-            l.series
-        );
-        if open {
-            let last = here.collections.len().saturating_sub(1);
-            for (i, c) in here.collections.iter().enumerate() {
-                let _ = write!(
-                    b,
-                    "<li><a class=sub href=\"{}\"{}>  {} {}</a></li>",
-                    collection_url(l, c),
-                    if here.collection == Some(c.as_str()) {
-                        " aria-current=page"
-                    } else {
-                        ""
-                    },
-                    if i == last { "└─" } else { "├─" },
-                    escape(c)
-                );
+    let (shared, own): (Vec<&Library>, Vec<&Library>) =
+        libraries.iter().partition(|l| l.owner().is_none());
+    for (i, list) in [shared, own].into_iter().enumerate() {
+        if i == 1 {
+            if list.is_empty() {
+                break;
             }
+            b.push_str("</ul></section><hr><section class=tree><h2>// only yours</h2><ul>");
+        }
+        for l in list {
+            tree_entry(&mut b, l, here);
         }
     }
     b.push_str("</ul></section></aside><main>");
@@ -170,6 +154,41 @@ fn shell(title: &str, libraries: &[Library], here: &Here<'_>, main: &str) -> Str
         ),
         &b,
     )
+}
+
+/// A library in the side panel; the open one with its collections.
+fn tree_entry(b: &mut String, l: &Library, here: &Here<'_>) {
+    let open = here.library.is_some_and(|h| h.folder == l.folder);
+    let _ = write!(
+        b,
+        "<li><a{} href=\"{}\">{} {}<span class=n>{}</span></a></li>",
+        if open {
+            " class=on aria-current=true"
+        } else {
+            ""
+        },
+        l.url(),
+        if open { "▾" } else { "▸" },
+        escape(&l.name),
+        l.series
+    );
+    if open {
+        let last = here.collections.len().saturating_sub(1);
+        for (i, c) in here.collections.iter().enumerate() {
+            let _ = write!(
+                b,
+                "<li><a class=sub href=\"{}\"{}>  {} {}</a></li>",
+                collection_url(l, c),
+                if here.collection == Some(c.as_str()) {
+                    " aria-current=page"
+                } else {
+                    ""
+                },
+                if i == last { "└─" } else { "├─" },
+                escape(c)
+            );
+        }
+    }
 }
 
 fn collection_url(library: &Library, collection: &str) -> String {
@@ -281,6 +300,7 @@ pub struct Shelf<'a> {
     pub items: &'a [Item],
     pub page: usize,
     pub total: usize,
+    pub me: &'a Me<'a>,
 }
 
 pub fn library(shelf: &Shelf<'_>) -> String {
@@ -340,6 +360,7 @@ pub fn library(shelf: &Shelf<'_>) -> String {
         collection: shelf.collection,
         go: "library",
         query: "",
+        me: shelf.me,
         scroll: true,
     };
     shell(&title, shelf.libraries, &here, &m)
@@ -490,6 +511,7 @@ pub struct Table<'a> {
     pub sort: (SortKey, bool),
     pub page: usize,
     pub total: usize,
+    pub me: &'a Me<'a>,
 }
 
 /// `YYYY-MM-DD` (UTC) of unix seconds.
@@ -586,6 +608,7 @@ pub fn table(t: &Table<'_>) -> String {
         collection: t.collection,
         go: "library",
         query: "",
+        me: t.me,
         scroll: false,
     };
     let title = match t.collection {
@@ -597,6 +620,7 @@ pub fn table(t: &Table<'_>) -> String {
 
 /// A series: its cover and facts, then its books.
 pub fn series(
+    me: &Me<'_>,
     libraries: &[Library],
     library: &Library,
     collections: &[String],
@@ -696,13 +720,14 @@ pub fn series(
         collection,
         go: "library",
         query: "",
+        me,
         scroll: false,
     };
     shell(&series.name, libraries, &here, &m)
 }
 
 /// Nothing scanned yet.
-pub fn empty() -> String {
+pub fn empty(me: &Me<'_>) -> String {
     let main = "<div class=empty><span class=label>no books</span>\
         <strong>Nothing here yet</strong><p>The worker adds books as it scans /library. \
         Each top-level folder that holds series folders becomes a library: \
@@ -713,6 +738,7 @@ pub fn empty() -> String {
         collection: None,
         go: "library",
         query: "",
+        me,
         scroll: false,
     };
     shell("Library", &[], &here, main)
@@ -746,6 +772,7 @@ pub struct Found<'a> {
     pub books: &'a [(Book, String, String)],
     /// `(kind, name, books)`.
     pub terms: &'a [(String, String, i64)],
+    pub me: &'a Me<'a>,
 }
 
 pub fn search(f: &Found<'_>) -> String {
@@ -851,58 +878,10 @@ pub fn search(f: &Found<'_>) -> String {
         collection: None,
         go: "",
         query: q,
+        me: f.me,
         scroll: false,
     };
     shell(&format!("Search: {q}"), f.libraries, &here, &m)
-}
-
-/// The libraries and their settings, read-only until accounts (M5).
-pub fn settings(libraries: &[Library]) -> String {
-    let mut m = String::from(
-        "<div class=toolbar><h1>settings · <b>libraries</b></h1></div>\
-         <p class=note>Read-only until accounts arrive: then an admin can change a \
-         library's name, type, reading direction and colour here.</p>\
-         <table class=tbl><thead><tr><th scope=col>library<th scope=col class=opt>folder\
-         <th scope=col>type<th scope=col class=opt>direction<th scope=col class=opt>colour\
-         <th scope=col class=r>series</thead><tbody>",
-    );
-    for l in libraries {
-        let folder = if l.folder.is_empty() {
-            "/library".to_owned()
-        } else {
-            format!("/library/{}", l.folder)
-        };
-        let _ = write!(
-            m,
-            "<tr><td><a href=\"{}\">{}</a><td class=opt>{}<td>{}<td class=opt>{}\
-             <td class=opt><span class=swatch style=\"--c:{}\"></span> {}<td class=r>{}",
-            l.url(),
-            escape(&l.name),
-            escape(&folder),
-            l.kind.as_str(),
-            l.direction.as_str(),
-            l.colour.1,
-            l.colour.0,
-            l.series
-        );
-    }
-    m.push_str(
-        "</tbody></table><div class=status><p>Every top-level folder in /library that holds \
-         series folders is a library; series, books and photo folders straight in /library \
-         are in “Library”.</p><p>name: the folder's name, capitalised. type: comics if it \
-         says “comic”, cosplay if it says “cosplay”, else manga. direction: right to left \
-         for manga, left to right otherwise; a book's own metadata wins. colour: the next \
-         in a fixed list.</p></div>",
-    );
-    let here = Here {
-        library: None,
-        collections: &[],
-        collection: None,
-        go: "settings",
-        query: "",
-        scroll: false,
-    };
-    shell("Settings", libraries, &here, &m)
 }
 
 /// The reader's stylesheet and script, served like [`CSS`].
@@ -1004,6 +983,7 @@ pub fn reader_json(
     series: &Series,
     book: &Book,
     next: Option<&(Book, Option<Cover>)>,
+    next_at: Option<i64>,
 ) -> String {
     let p: Vec<serde_json::Value> = pages
         .iter()
@@ -1023,16 +1003,21 @@ pub fn reader_json(
         Some((b, c)) => {
             cover(&mut end, c.as_ref(), shade(b.series_id), &b.name);
             let name = escape(&b.name);
+            // Where the account left it, if it started it.
+            let at = next_at.filter(|&n| n > 1 && n <= b.page_count);
+            let (href, state) = match at {
+                Some(n) => (format!("/r/{}/{n}", b.id), format!("at page {n}")),
+                None => (read_url(b), "not started".to_owned()),
+            };
             let _ = write!(
                 end,
                 "<section><p>end of {} · {} pages</p><strong>{name}</strong>\
-                 <p>{} · <span class=at>not started</span></p>\
-                 <a class=\"btn primary\" href=\"{}\" data-next={}>read {name} <kbd>space</kbd></a>\
+                 <p>{} · <span class=at>{state}</span></p>\
+                 <a class=\"btn primary\" href=\"{href}\" data-next={}>read {name} <kbd>space</kbd></a>\
                  <a class=btn href=\"/s/{}\">back to {back}</a></section>",
                 escape(&book.name),
                 book.page_count,
                 length(b),
-                read_url(b),
                 b.id,
                 series.id
             );
@@ -1063,6 +1048,9 @@ pub struct Reader<'a> {
     pub total: usize,
     /// `true`: right to left.
     pub rtl: bool,
+    /// What the account keeps for this book and series ([`crate::kept`]),
+    /// a JSON object, for the script.
+    pub kept: &'a str,
 }
 
 pub fn reader(r: &Reader<'_>) -> String {
@@ -1141,10 +1129,11 @@ pub fn reader(r: &Reader<'_>) -> String {
     );
     let title = format!("{} · {number}/{total} · Koma-1", book.name);
     format!(
-        "<!doctype html>\n<html lang=en><head><meta charset=utf-8>\
+        "<!doctype html>\n<html lang=en data-kept=\"{}\"><head><meta charset=utf-8>\
          <meta name=viewport content=\"width=device-width,initial-scale=1\">\
          <title>{}</title>{head}</head><body class=reader data-book={} data-series={} \
          data-n={number} data-dir={}>{b}</body></html>\n",
+        escape(r.kept),
         escape(&title),
         book.id,
         r.series.id,
@@ -1166,6 +1155,8 @@ pub struct EpubPage<'a> {
     pub language: &'a str,
     /// On the last chapter: the next book in the series, if there is one.
     pub next_book: Option<&'a Book>,
+    /// What the account keeps for this book ([`crate::kept`]), JSON.
+    pub kept: &'a str,
 }
 
 /// An EPUB chapter: a column of text on paper. Without JavaScript it reads,
@@ -1297,10 +1288,11 @@ pub fn epub_chapter(e: &EpubPage<'_>) -> String {
         format!("{here} · {name} · Koma-1")
     };
     format!(
-        "<!doctype html>\n<html lang=en><head><meta charset=utf-8>\
+        "<!doctype html>\n<html lang=en data-kept=\"{}\"><head><meta charset=utf-8>\
          <meta name=viewport content=\"width=device-width,initial-scale=1\">\
          <title>{title}</title>{head}</head><body class=\"reader book\" data-book={} data-n={n} \
          data-total={total}>{b}</body></html>\n",
+        escape(e.kept),
         book.id
     )
 }

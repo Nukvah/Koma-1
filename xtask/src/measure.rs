@@ -180,7 +180,11 @@ fn serve_container(
     ];
     args.extend(LIMITS);
     args.extend(HARDENING);
-    args.extend([image, "serve"]);
+    // Pages need an account: every request signs in through the proxy
+    // header, believed from anywhere here (the container sees the host
+    // through Docker's network). Never do this outside a test.
+    let trust = format!("--trust-header={}", http::BENCH_USER);
+    args.extend([image, "serve", &trust, "--trust-proxy=0.0.0.0/0,::/0"]);
     let c = Container::start(&args)?;
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
 

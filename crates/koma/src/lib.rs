@@ -1,10 +1,15 @@
 //! Koma-1: one binary, three modes (`serve`, `worker`, `scrub`).
 //!
-//! So far: `serve` serves the library, a series and a bare reader; `worker` and `scan` index the
-//! library into the catalogue, and the worker keeps it up to date; `scrub` has nothing to check
-//! yet.
+//! So far: `serve` serves the library and the readers to signed-in accounts; `worker` and
+//! `scan` index the library into the catalogue, and the worker keeps it up to date and applies
+//! library settings changed in the UI; `account link` makes a sign-in link from the shell;
+//! `scrub` has nothing to check yet.
 
+pub mod accounts;
+pub mod admin;
 pub mod archive;
+pub mod auth;
+pub mod b64;
 pub mod blobs;
 pub mod catalog;
 pub mod cli;
@@ -12,16 +17,20 @@ pub mod download;
 pub mod epub;
 pub mod health;
 pub mod html;
+pub mod kept;
 pub mod libraries;
 pub mod log;
 pub mod meta;
 pub mod names;
 pub mod natsort;
+pub mod pages;
+pub mod password;
 pub mod scan;
 pub mod search;
 pub mod serve;
 mod signal;
 pub mod variants;
+pub mod webauthn;
 
 use std::ffi::OsString;
 use std::io;
@@ -36,7 +45,12 @@ where
     I: IntoIterator<Item = OsString>,
 {
     match cli::parse(args, env) {
-        Ok(Command::Serve { listen, paths }) => serve::run(listen, &paths),
+        Ok(Command::Serve {
+            listen,
+            paths,
+            auth,
+        }) => serve::run(listen, &paths, auth),
+        Ok(Command::AccountLink { data, name }) => account_link(&data, &name),
         Ok(Command::Worker { paths, rescan }) => worker(paths, rescan),
         Ok(Command::Scan(paths)) => match scan_once(&paths) {
             Ok(true) => ExitCode::SUCCESS,
@@ -71,6 +85,73 @@ where
         }
     }
 }
+
+/// `koma account link <name>`: a sign-in link for `name`, made from the
+/// shell (a lost admin password, or the first account without the setup
+/// code). An account of that name is made if there is none: the admin if
+/// it is the first.
+fn account_link(data: &std::path::Path, name: &str) -> ExitCode {
+    let made = auth::open(data).map_err(|e| e.to_string()).and_then(|a| {
+        let account = match a.by_name(name).map_err(|e| e.to_string())? {
+            Some(account) => account,
+            None => a
+                .create(name, accounts::Role::Reader, None)
+                .map_err(|e| match e {
+                    accounts::CreateError::BadName => {
+                        "a name is lower-case letters, digits, '.', '_' and '-', at most 32"
+                            .to_owned()
+                    }
+                    e => format!("{e:?}"),
+                })?,
+        };
+        let token = a.new_link(account.id).map_err(|e| e.to_string())?;
+        Ok((account, token))
+    });
+    match made {
+        Ok((account, token)) => {
+            println!(
+                "A sign-in link for {} ({}), good once, for 24 hours. Open it on your server:\n\n  /join/{}\n\nfor example http://localhost:8080/join/{}",
+                account.name,
+                account.role.as_str(),
+                b64::encode(&token),
+                b64::encode(&token)
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("koma account link: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Applies the library settings changed in the UI that the catalogue has
+/// not taken yet (queued by `koma serve` in accounts.db). Errors are logged.
+fn apply_settings(data: &std::path::Path, catalog: &catalog::Catalog) {
+    let result = (|| -> Result<usize, rusqlite::Error> {
+        let Some(a) = accounts::Accounts::open_read_only(&data.join("accounts.db"))? else {
+            return Ok(0);
+        };
+        let changes = a.changes_after(catalog.settings_applied()?)?;
+        for c in &changes {
+            catalog.apply_setting(c)?;
+            log::info(
+                "worker: library settings changed",
+                &[("library", &c.folder), ("name", &c.name)],
+            );
+        }
+        Ok(changes.len())
+    })();
+    if let Err(e) = result {
+        log::error(
+            "worker: cannot apply library settings",
+            &[("error", &e.to_string())],
+        );
+    }
+}
+
+/// How often the worker looks for library settings changed in the UI.
+const SETTINGS_EVERY: Duration = Duration::from_secs(5);
 
 /// Opens the catalogue under `paths.data` for writing, holding the worker
 /// lock so that only one process indexes into it. Errors are logged.
@@ -168,6 +249,7 @@ fn pass(
     check: scan::Check,
     should_stop: &dyn Fn() -> bool,
 ) -> Result<(), ()> {
+    apply_settings(&paths.data, catalog);
     let started = std::time::Instant::now();
     log::info(
         "scan: started",
@@ -225,11 +307,21 @@ fn worker(paths: cli::Paths, rescan: Option<Duration>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // A second connection applies library settings between jobs, while the
+    // first is busy with a scan.
+    let settings = catalog::Catalog::open(&paths.data.join("koma.db")).ok();
     let (stop, stopped) = std::sync::mpsc::channel::<()>();
     let work = move || {
         let _lock = lock;
         let stop_seen = std::cell::Cell::new(false);
+        let settings_checked = std::cell::Cell::new(std::time::Instant::now());
         let should_stop = || {
+            if let Some(c) = &settings
+                && settings_checked.get().elapsed() >= SETTINGS_EVERY
+            {
+                settings_checked.set(std::time::Instant::now());
+                apply_settings(&paths.data, c);
+            }
             if !stop_seen.get() {
                 stop_seen.set(!matches!(
                     stopped.try_recv(),
@@ -254,14 +346,23 @@ fn worker(paths: cli::Paths, rescan: Option<Duration>) -> ExitCode {
                 return;
             }
             log::info("worker: idle", &[]);
-            let next = match rescan {
-                Some(every) => stopped.recv_timeout(every),
-                None => stopped
-                    .recv()
-                    .map_err(|_| std::sync::mpsc::RecvTimeoutError::Disconnected),
-            };
-            if !matches!(next, Err(std::sync::mpsc::RecvTimeoutError::Timeout)) {
-                return;
+            // Until the next rescan, a look for changed library settings
+            // every few seconds.
+            let idle_since = std::time::Instant::now();
+            loop {
+                let wait = match rescan {
+                    Some(every) => every.saturating_sub(idle_since.elapsed()),
+                    None => SETTINGS_EVERY,
+                };
+                if wait.is_zero() {
+                    break;
+                }
+                match stopped.recv_timeout(wait.min(SETTINGS_EVERY)) {
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        apply_settings(&paths.data, &catalog);
+                    }
+                    _ => return,
+                }
             }
         }
     };

@@ -21,11 +21,22 @@ cold_start_ms = 200   # process start to first successful health check (median o
 
 # Static assets, summed per group. Groups with no files yet pass at 0.
 [[assets]]
-name = "CSS"
+name = "Library CSS"  # every page but the readers: library, series, search, settings, accounts
 dir = "crates/koma/assets"
+suffix = "koma.css"
+max_kib = 12
+
+[[assets]]
+name = "Reader CSS"   # the picture reader; also under the EPUB reader
+dir = "crates/koma/assets/reader"
 suffix = ".css"
-max_kib = 16          # 10 until M3, 12 until M4, 14 until EPUB: the library UI's and both readers'
-                      # together (to be split per area: see docs/ROADMAP.md, Open questions)
+max_kib = 6
+
+[[assets]]
+name = "EPUB reader CSS"  # on EPUB chapter pages only, with the reader's
+dir = "crates/koma/assets/epub"
+suffix = ".css"
+max_kib = 3
 
 [[assets]]
 name = "Reader JS"
@@ -42,6 +53,12 @@ max_kib = 16
 [[assets]]
 name = "Library JS"   # infinite scroll on library pages; they work without it
 dir = "crates/koma/assets/library"
+suffix = ".js"
+max_kib = 4
+
+[[assets]]
+name = "Account JS"   # passkeys, on the sign-in and account pages only; forms work without it
+dir = "crates/koma/assets/account"
 suffix = ".js"
 max_kib = 4
 

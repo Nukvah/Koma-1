@@ -14,7 +14,7 @@ pub use crate::archive::size::Size;
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 
 /// How long a book whose file vanished is remembered, so that a folder that
 /// comes back (a drive mounted late, a move noticed in two steps) keeps its
@@ -154,8 +154,12 @@ CREATE TABLE variant_pages (
 
 /// The library a series is in, from its path (see `crate::libraries`): the
 /// first folder of a path with more than one, else `''`, the default library.
-const LIBRARY_OF_PATH: &str = "CASE WHEN substr(path, 1, 1) <> char(0) AND instr(path, '/') > 0 \
-     THEN substr(path, 1, instr(path, '/') - 1) ELSE '' END";
+const LIBRARY_OF_PATH: &str = "CASE WHEN substr(path, 1, 1) = char(0) THEN '' \
+     WHEN substr(path, 1, 1) = '~' THEN CASE \
+       WHEN instr(path, '/') = 0 THEN path \
+       WHEN instr(substr(path, instr(path, '/') + 1), '/') = 0 THEN substr(path, 1, instr(path, '/') - 1) \
+       ELSE substr(path, 1, instr(path, '/') + instr(substr(path, instr(path, '/') + 1), '/') - 1) END \
+     WHEN instr(path, '/') > 0 THEN substr(path, 1, instr(path, '/') - 1) ELSE '' END";
 
 /// Schema 7 to 8: series get their library. Nothing else changes, so the
 /// catalogue (and the page variants, which are costly to remake) is kept.
@@ -166,13 +170,14 @@ fn migrate_7_to_8() -> String {
     )
 }
 
-/// The collection a series is in, from its path (see `crate::libraries`):
-/// the folders between the library and the series, else `''`. The parent
-/// folder is the path with its last part cut (`rtrim` by every character
-/// but `/`).
-const COLLECTION_OF_PATH: &str = "CASE WHEN substr(path, 1, 1) = char(0) OR instr(path, '/') = 0 \
-     THEN '' ELSE substr(rtrim(path, replace(path, '/', '')), instr(path, '/') + 1, \
-     max(length(rtrim(path, replace(path, '/', ''))) - instr(path, '/') - 1, 0)) END";
+/// The collection a series is in, from its path and library (see
+/// `crate::libraries`): the folders between the library's and the series',
+/// else `''`. The parent folder of the rest is cut with `rtrim` by every
+/// character but `/`.
+const COLLECTION_OF_PATH: &str = "CASE WHEN library = '' OR length(library) >= length(path) THEN '' \
+     WHEN instr(substr(path, length(library) + 2), '/') = 0 THEN '' \
+     ELSE substr(substr(path, length(library) + 2), 1, length(rtrim(substr(path, length(library) + 2), \
+     replace(substr(path, length(library) + 2), '/', ''))) - 1) END";
 
 /// Schema 9 to 10: series get their collection, and an index that pages a
 /// library's shelf without reading all of it.
@@ -201,8 +206,36 @@ CREATE TABLE toc (
     PRIMARY KEY (book_id, pos)) WITHOUT ROWID;
 UPDATE folders SET mtime = NULL;";
 
-/// Tables of earlier schema versions, dropped when upgrading: until accounts
-/// exist the catalogue holds nothing that the next scan cannot rebuild.
+/// Schema 11 to 12: a library in an account's folder is its first two
+/// folders (`~mirelle/sketchbooks`), and library settings changed in the UI
+/// are kept. The generated columns are made again; nothing else changes.
+fn migrate_11_to_12() -> String {
+    format!(
+        "DROP INDEX series_library; DROP INDEX series_shelf; DROP INDEX series_names;
+         ALTER TABLE series DROP COLUMN collection;
+         ALTER TABLE series DROP COLUMN library;
+         ALTER TABLE series ADD COLUMN library TEXT GENERATED ALWAYS AS ({LIBRARY_OF_PATH}) VIRTUAL;
+         ALTER TABLE series ADD COLUMN collection TEXT GENERATED ALWAYS AS ({COLLECTION_OF_PATH}) VIRTUAL;
+         CREATE INDEX series_library ON series(library);
+         CREATE INDEX series_shelf ON series(library, collection, name COLLATE natsort, path COLLATE natsort);
+         CREATE INDEX series_names ON series(library, name COLLATE natsort, path COLLATE natsort);
+         {LIBRARY_SETTINGS}"
+    )
+}
+
+/// Library settings changed in the UI (`koma serve` queues them in
+/// accounts.db, the worker writes them here).
+const LIBRARY_SETTINGS: &str = "CREATE TABLE IF NOT EXISTS library_settings (
+    folder    TEXT PRIMARY KEY,       -- the library's folder, '' for the default one
+    name      TEXT NOT NULL,
+    kind      TEXT NOT NULL,          -- 'manga', 'comics' or 'cosplay'
+    direction TEXT NOT NULL,          -- 'rtl' or 'ltr'
+    colour    TEXT NOT NULL,          -- a name from libraries::COLOURS
+    change    INTEGER NOT NULL        -- the id of the queued change applied last
+) WITHOUT ROWID;";
+
+/// Tables of schema versions before 7, dropped when upgrading: until then
+/// the catalogue held nothing that the next scan cannot rebuild.
 const DROP_OLD: &str = "
 DROP TABLE IF EXISTS toc;
 DROP TABLE IF EXISTS chapters;
@@ -216,8 +249,18 @@ DROP TABLE IF EXISTS jobs;
 DROP TABLE IF EXISTS variants;
 DROP TABLE IF EXISTS variant_pages;
 DROP TABLE IF EXISTS search;
+DROP TABLE IF EXISTS library_settings;
 DROP TABLE IF EXISTS sqlite_sequence;
 ";
+
+/// SQL that is true when the library `column` may be seen by the account
+/// whose folder (`~name`) is parameter `?n`: shared libraries, and those in
+/// its own folder.
+fn visible(column: &str, n: usize) -> String {
+    format!(
+        "(substr({column}, 1, 1) <> '~' OR {column} = ?{n} OR substr({column}, 1, length(?{n}) + 1) = ?{n} || '/')"
+    )
+}
 
 /// A file's size and modification time (nanoseconds since the epoch): if
 /// both are unchanged, the file is not read again.
@@ -426,7 +469,7 @@ impl Catalog {
         match version {
             // From 7 on the catalogue is upgraded in place, one step at a
             // time: remaking page variants is too costly to start over.
-            7..=10 => {
+            7..=11 => {
                 let mut steps = String::new();
                 if version == 7 {
                     steps.push_str(&migrate_7_to_8());
@@ -437,7 +480,10 @@ impl Catalog {
                 if version <= 9 {
                     steps.push_str(&migrate_9_to_10());
                 }
-                steps.push_str(MIGRATE_10_TO_11);
+                if version <= 10 {
+                    steps.push_str(MIGRATE_10_TO_11);
+                }
+                steps.push_str(&migrate_11_to_12());
                 self.conn.execute_batch(&format!(
                     "BEGIN; {steps} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
                 ))?;
@@ -448,7 +494,8 @@ impl Catalog {
                 let drop = if version > 0 { DROP_OLD } else { "" };
                 let schema = SCHEMA
                     .replace("{LIBRARY_OF_PATH}", LIBRARY_OF_PATH)
-                    .replace("{COLLECTION_OF_PATH}", COLLECTION_OF_PATH);
+                    .replace("{COLLECTION_OF_PATH}", COLLECTION_OF_PATH)
+                    + LIBRARY_SETTINGS;
                 self.conn.execute_batch(&format!(
                     "BEGIN; {drop} {schema} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
                 ))?;
@@ -979,6 +1026,67 @@ impl Catalog {
 
     /// Every library with a present book, as `(folder, series count)`:
     /// `''` (the default library) first, then folders in natural order.
+    /// Library settings changed in the UI.
+    pub fn library_settings(&self) -> Result<Vec<crate::libraries::Settings>, Error> {
+        use crate::libraries::{Direction, Kind, Settings, colour};
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT folder, name, kind, direction, colour FROM library_settings")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (folder, name, kind, direction, c) = row?;
+            out.push(Settings {
+                folder,
+                name,
+                kind: Kind::parse(&kind).unwrap_or(Kind::Manga),
+                direction: Direction::from_code(&direction).unwrap_or(Direction::RightToLeft),
+                colour: colour(&c).unwrap_or(crate::libraries::COLOURS[0]),
+            });
+        }
+        Ok(out)
+    }
+
+    /// The settings of one library, if changed in the UI.
+    pub fn library_setting(
+        &self,
+        folder: &str,
+    ) -> Result<Option<crate::libraries::Settings>, Error> {
+        Ok(self
+            .library_settings()?
+            .into_iter()
+            .find(|s| s.folder == folder))
+    }
+
+    /// The id of the last queued settings change applied; 0 if none.
+    pub fn settings_applied(&self) -> Result<i64, Error> {
+        self.conn.query_row(
+            "SELECT coalesce(max(change), 0) FROM library_settings",
+            [],
+            |r| r.get(0),
+        )
+    }
+
+    /// Writes a queued settings change (the worker's job).
+    pub fn apply_setting(&self, c: &crate::accounts::SettingChange) -> Result<(), Error> {
+        self.conn.execute(
+            "INSERT INTO library_settings (folder, name, kind, direction, colour, change)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT (folder) DO UPDATE SET name = ?2, kind = ?3, direction = ?4,
+               colour = ?5, change = ?6",
+            params![c.folder, c.name, c.kind, c.direction, c.colour, c.id],
+        )?;
+        Ok(())
+    }
+
     pub fn library_keys(&self) -> Result<Vec<(String, i64)>, Error> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT library, COUNT(*) FROM series
@@ -1091,13 +1199,15 @@ impl Catalog {
 
     /// Runs a search built by [`crate::search`]: `fts` is an FTS5 query (or
     /// none), each of `likes` a `(column, LIKE pattern)` every hit must also
-    /// match (for terms too short for trigrams), all in `library` if given.
+    /// match (for terms too short for trigrams), all in `library` if given,
+    /// and only in libraries the account `viewer` may see.
     /// Returns `(kind, id)`, best first: `'s'` for series, `'b'` for books.
     pub fn search(
         &self,
         fts: Option<&str>,
         likes: &[(&str, String)],
         library: Option<&str>,
+        viewer: &str,
         limit: usize,
     ) -> Result<Vec<(String, i64)>, Error> {
         let mut sql = String::from(
@@ -1133,6 +1243,11 @@ impl Catalog {
                 args.len()
             ));
         }
+        args.push(format!("~{viewer}").into());
+        sql.push_str(&format!(
+            " AND {}",
+            visible("coalesce(series.library, bs.library)", args.len())
+        ));
         sql.push_str(if fts.is_some() {
             " ORDER BY search.kind DESC, rank"
         } else {
@@ -1148,19 +1263,23 @@ impl Catalog {
     }
 
     /// People, genres and tags whose name contains `pattern` (a LIKE
-    /// pattern), as `(kind, name, books)`, most books first.
+    /// pattern), as `(kind, name, books)`, most books first, counting only
+    /// books the account `viewer` may see.
     pub fn matching_terms(
         &self,
         pattern: &str,
+        viewer: &str,
         limit: usize,
     ) -> Result<Vec<(String, String, i64)>, Error> {
-        let mut stmt = self.conn.prepare_cached(
+        let mut stmt = self.conn.prepare_cached(&format!(
             "SELECT kind, name, COUNT(DISTINCT book_id) AS n FROM book_terms
              WHERE name LIKE ?1 ESCAPE '\\'
-               AND EXISTS (SELECT 1 FROM books WHERE id = book_id AND gone IS NULL)
+               AND EXISTS (SELECT 1 FROM books JOIN series ON series.id = books.series_id
+                           WHERE books.id = book_id AND gone IS NULL AND {})
              GROUP BY kind, name ORDER BY n DESC, name COLLATE natsort LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(params![pattern, limit as i64], |r| {
+            visible("series.library", 3)
+        ))?;
+        let rows = stmt.query_map(params![pattern, limit as i64, format!("~{viewer}")], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })?;
         rows.collect()

@@ -196,7 +196,7 @@ Chosen with the owner:
   library-setting changes. The catalogue stays the worker's alone; the
   worker applies queued changes on its next pass (within a minute).
 
-Proposed, for review with these mockups:
+Also chosen with the owner (built in M5 as proposed here):
 
 - **First start.** With no account, every page leads to `/setup`. Creating
   the admin there needs a code that `koma serve` prints to its log at start,
@@ -213,11 +213,11 @@ Proposed, for review with these mockups:
   (`Secure` on HTTPS), signed with a key in the data folder and stored only
   as a hash; the account page lists each device and signs one out. "Keep me
   signed in" lasts 90 days from the last visit; without it, until the
-  browser closes. Changing the password signs out the other devices. Every
+  browser closes, and at most a day unused. Changing the password signs out the other devices. Every
   form that changes something also checks the request's `Origin`.
 - **Sign-in through a proxy.** `--trust-header Remote-User` with
   `--trust-proxy <address>`: the header is believed only from that address.
-  A name with no account gets one, as a reader.
+  A name with no account gets one, as a reader (the very first, the admin).
 - **Progress and reader settings** move from the browser to the account. On
   the first sign-in in a browser, what it kept is sent once and added where
   the account has nothing for that book or series.
@@ -225,6 +225,8 @@ Proposed, for review with these mockups:
   of that name exists again; its progress and sessions are deleted.
 - **Failed sign-ins**: after 5 wrong passwords in a row a name waits a
   minute before the next try.
+- Not built: the mockup's "undo" on a queued settings change (change it
+  back instead).
 - **Page images stay public.** `/p/<hash>` URLs name a page's content and are
   cached for a year by any cache; only someone who already has the page can
   know its hash. Every HTML page, `/b/`, `/e/` and `/d/` need a signed-in

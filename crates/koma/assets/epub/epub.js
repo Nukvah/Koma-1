@@ -1,14 +1,17 @@
-// Koma-1 EPUB reader: the text's size, width and spacing (kept in this
-// browser for every book); the bars on a tap or m; the contents on c; the
-// chapters on the arrow keys and on space at the end of one; and the
-// position, kept in this browser (accounts, M5, will carry it across
-// devices), where the book opens next time. Loaded in <head>, so the text
-// is drawn in its size from the start.
+// Koma-1 EPUB reader: the text's size, width and spacing (for every book);
+// the bars on a tap or m; the contents on c; the chapters on the arrow keys
+// and on space at the end of one; and the position, where the book opens
+// next time, on any device. Those are kept with the account: read from the
+// page, sent back as they change. Loaded in <head>, so the text is drawn in
+// its size from the start.
 (() => {
+  const kept = JSON.parse(document.documentElement.dataset.kept || '{}'), sent = {};
+  const flush = () => { if (Object.keys(sent).length) navigator.sendBeacon('/kept', new URLSearchParams(sent)); for (const k in sent) delete sent[k]; };
   const store = {
-    get: k => { try { return localStorage.getItem('koma:' + k); } catch (e) { return null; } },
-    set: (k, v) => { try { localStorage.setItem('koma:' + k, v); } catch (e) {} },
+    get: k => kept[k] ?? null,
+    set: (k, v) => { kept[k] = sent[k] = '' + v; clearTimeout(store.t); store.t = setTimeout(flush, 1e3); },
   };
+  addEventListener('pagehide', flush);
   const WIDTH = { narrow: '28em', medium: '34em', wide: '44em' };
   const SPACE = { tight: '1.4', normal: '1.65', loose: '1.9' };
   let size = Math.min(28, Math.max(14, +store.get('esize') || 19));
@@ -42,7 +45,7 @@
     }
     let t;
     addEventListener('scroll', () => { clearTimeout(t); t = setTimeout(keep, 250); }, { passive: true });
-    addEventListener('pagehide', keep);
+    addEventListener('pagehide', () => { keep(); flush(); });
     keep();
 
     // Size, width, spacing: the same block stays on screen.

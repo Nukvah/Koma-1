@@ -2,9 +2,9 @@
 // book's direction: one page, two, or a vertical strip; fitted to the
 // window, its width or height; zoomed. The next pages are decoded ahead as
 // far as the reading speed needs. Bars with a scrubber and thumbnails; the
-// next book at the end. Position and the series' settings stay in this
-// browser (accounts, M5, will carry them). Without it, the page's links do
-// the same a page load at a time.
+// next book at the end. Position and the series' settings are kept with the
+// account: read from the page, sent back as they change. Without it, the
+// page's links do the same a page load at a time.
 (() => {
   const $ = q => document.querySelector(q);
   const $$ = q => document.querySelectorAll(q);
@@ -15,10 +15,13 @@
   const stage = $('.stage');
   const zones = $$('.zones a');
   const count = $('#count');
+  const kept = JSON.parse(document.documentElement.dataset.kept || '{}'), sent = {};
+  const flush = () => { if (Object.keys(sent).length) navigator.sendBeacon('/kept', new URLSearchParams(sent)); for (const k in sent) delete sent[k]; };
   const store = {
-    get: k => { try { return localStorage.getItem('koma:' + k); } catch (e) { return null; } },
-    set: (k, v) => { try { localStorage.setItem('koma:' + k, v); } catch (e) {} },
+    get: k => kept[k] ?? null,
+    set: (k, v) => { kept[k] = sent[k] = '' + v; clearTimeout(store.t); store.t = setTimeout(flush, 2e3); },
   };
+  on(window, 'pagehide', flush);
   const mine = k => store.get(k + ':' + series);
   const keep = (k, v) => (store.set(k + ':' + series, v), v);
   let dir = mine('dir') || body.dataset.dir;
@@ -248,7 +251,7 @@
   };
 
   // The end of the book (made by the server): the next one in the series,
-  // from where it was left, or back to the series.
+  // from where the account left it, or back to the series.
   let card = null;
   const close = () => { card.remove(); card = null; };
   const ending = () => {
@@ -256,9 +259,6 @@
     card = document.createElement('div');
     card.className = 'next';
     card.innerHTML = pages.end;
-    const a = card.querySelector('[data-next]');
-    const at = a && store.get('pos:' + a.dataset.next);
-    if (at) { a.href = a.href.replace(/\d+$/, at); card.querySelector('.at').textContent = 'at page ' + at; }
     on(card, 'click', e => { if (e.target === card) close(); });
     body.append(card);
     card.querySelector('.btn').focus();

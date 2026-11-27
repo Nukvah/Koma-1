@@ -64,3 +64,10 @@ path = "fuzz_targets/epub.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "webauthn"
+path = "fuzz_targets/webauthn.rs"
+test = false
+doc = false
+bench = false
