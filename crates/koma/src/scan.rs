@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::archive::page::{PageError, PageLimits, copy_page};
+use crate::archive::size::read_size;
 use crate::archive::zip::{self, Limits, Method};
 use crate::archive::{self};
 use crate::blobs::BlobStore;
@@ -588,6 +589,7 @@ fn index_photos(library: &Path, images: &Found) -> Result<Vec<Page>, String> {
             if read != meta.len() {
                 return Err(format!("{}: changed while being read", last_part(rel)));
             }
+            let size = read_size(&file, 0, read);
             Ok(Page {
                 number: number as i64,
                 hash: hasher.finalize(),
@@ -595,6 +597,7 @@ fn index_photos(library: &Path, images: &Found) -> Result<Vec<Page>, String> {
                 length: read,
                 offset: Some(0),
                 file: Some(rel.clone()),
+                size,
             })
         })
         .collect()
@@ -633,24 +636,28 @@ fn index_book(path: &Path, blobs: &BlobStore) -> Result<Vec<Page>, String> {
         .enumerate()
         .map(|(number, entry)| {
             let format = format_of(&entry.name);
-            let located = match entry.method {
+            let length = entry.uncompressed_size;
+            let (hash, offset, size) = match entry.method {
                 Method::Stored => {
                     let mut hasher = blake3::Hasher::new();
                     copy_page(&file, entry, &limits, &mut hasher)?;
-                    (hasher.finalize(), Some(entry.data_offset))
+                    let size = read_size(&file, entry.data_offset, length);
+                    (hasher.finalize(), Some(entry.data_offset), size)
                 }
-                _ => (
-                    inflate_to_blob(&file, entry, &limits, blobs, &format)?,
-                    None,
-                ),
+                _ => {
+                    let hash = inflate_to_blob(&file, entry, &limits, blobs, &format)?;
+                    let blob = File::open(blobs.path(&hash, &format))?;
+                    (hash, None, read_size(&blob, 0, length))
+                }
             };
             Ok(Page {
                 number: number as i64,
-                hash: located.0,
+                hash,
                 format,
-                length: entry.uncompressed_size,
-                offset: located.1,
+                length,
+                offset,
                 file: None,
+                size,
             })
         })
         .collect::<Result<Vec<_>, PageError>>()

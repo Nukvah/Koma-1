@@ -10,9 +10,11 @@ use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
+pub use crate::archive::size::Size;
+
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// How long a book whose file vanished is remembered, so that a folder that
 /// comes back (a drive mounted late, a move noticed in two steps) keeps its
@@ -53,6 +55,8 @@ CREATE TABLE pages (
     length   INTEGER NOT NULL,
     offset   INTEGER,                -- byte offset in the book file; NULL: in the blob store
     file     TEXT,                   -- the file holding the page if not the book's (photo folders)
+    width    INTEGER,                -- as displayed (EXIF orientation applied); NULL: unreadable header
+    height   INTEGER,
     PRIMARY KEY (book_id, number)
 ) WITHOUT ROWID;
 CREATE INDEX pages_hash ON pages(hash);
@@ -130,6 +134,9 @@ pub struct Page {
     /// The file holding the page, relative to the library, when it is not
     /// the book file: each page of a photo folder is a file of its own.
     pub file: Option<String>,
+    /// Width and height as displayed, read from the header at ingest;
+    /// `None` if the header could not be read.
+    pub size: Option<Size>,
 }
 
 /// Where a page's bytes are, found by hash.
@@ -260,8 +267,8 @@ impl Catalog {
         tx.execute("DELETE FROM pages WHERE book_id = ?1", [book_id])?;
         {
             let mut insert = tx.prepare(
-                "INSERT INTO pages (book_id, number, hash, format, length, offset, file)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO pages (book_id, number, hash, format, length, offset, file, width, height)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             )?;
             for page in book.pages {
                 insert.execute(params![
@@ -272,6 +279,8 @@ impl Catalog {
                     page.length as i64,
                     page.offset.map(|o| o as i64),
                     page.file,
+                    page.size.map(|s| s.width),
+                    page.size.map(|s| s.height),
                 ])?;
             }
         }
@@ -667,7 +676,7 @@ impl Catalog {
     /// The pages of a book, in reading order.
     pub fn pages(&self, book_id: i64) -> Result<Vec<Page>, Error> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT number, hash, format, length, offset, file FROM pages
+            "SELECT number, hash, format, length, offset, file, width, height FROM pages
              WHERE book_id = ?1 ORDER BY number",
         )?;
         let rows = stmt.query_map([book_id], |r| {
@@ -678,6 +687,10 @@ impl Catalog {
                 length: r.get::<_, i64>(3)? as u64,
                 offset: r.get::<_, Option<i64>>(4)?.map(|o| o as u64),
                 file: r.get(5)?,
+                size: match (r.get::<_, Option<u32>>(6)?, r.get::<_, Option<u32>>(7)?) {
+                    (Some(width), Some(height)) => Some(Size { width, height }),
+                    _ => None,
+                },
             })
         })?;
         rows.collect()

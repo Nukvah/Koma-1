@@ -69,6 +69,18 @@ They are put in reading order with `koma::natsort`: numbers by value
 (`2 < 10`, full-width digits too), letters case-insensitively, folder by
 folder, with the extension only breaking ties.
 
+## Page sizes
+
+`koma::archive::size` reads every page's width and height from its header at
+ingest, without decoding it: JPEG (frame header, with the EXIF orientation:
+5 to 8 swap width and height), PNG, GIF, WebP (lossy, lossless, extended),
+BMP, AVIF (the largest `ispe`, turned by `irot`) and JPEG XL (codestream or
+container). Sizes are stored as displayed (`pages.width`, `pages.height`), so
+the reader can lay pages out before they load. A header that can't be read
+gives no size (NULL); the reader falls back to a default shape. A page wider
+than 1.2 times its height is a spread (`Size::is_spread`); one at least three
+times as tall as wide is a tall strip, as in webtoons (`Size::is_tall_strip`).
+
 ## Catalogue and scan
 
 `koma worker` (at start, then every `--rescan` minutes) and `koma scan` index the library into

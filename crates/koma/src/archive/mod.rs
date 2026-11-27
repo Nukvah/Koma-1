@@ -6,6 +6,7 @@
 
 pub mod crc32;
 pub mod page;
+pub mod size;
 pub mod zip;
 
 use std::io;
