@@ -102,7 +102,8 @@ Goal: page turns that feel instant, and the tools that make long reading comfort
 - Zoom with pan, a thumbnail strip, a scrubber with page preview, and a "read next" card at
   the end *(proven)*.
 - Reader settings per series (direction, mode, fit) stored per account, so they follow you
-  between devices *(proven)*.
+  between devices *(proven)*. Until accounts (M5) they and the reading position stay in the
+  browser.
 - Keys, tap, swipe; progress via `sendBeacon`.
 - EPUB book reader: reflowable text, adjustable size, width and spacing, table of contents,
   saved position *(proven)*.

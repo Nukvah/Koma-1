@@ -1,6 +1,6 @@
 # UI design proposal
 
-Static mockups of the chosen direction for every screen except the reader.
+Static mockups of the chosen direction for every screen, the reader included.
 Open any `.html` file here in a browser; they share `koma.css` and use no JavaScript.
 
 | File | Screen |
@@ -12,6 +12,15 @@ Open any `.html` file here in a browser; they share `koma.css` and use no JavaSc
 | `collections.html` | collections as stacked covers, then what one holds |
 | `settings.html` | the libraries and their settings, read-only until accounts (M5) |
 | `states.html` | empty and error states, one block per screen |
+| `reader.html` | reading: the page only, with the tap zones shown once on the first open |
+| `reader-bars.html` | the bars a tap shows: title and back; scrubber with page preview, thumbnails, mode, fit, direction |
+| `reader-double.html` | two pages side by side, right to left, with the one-page shift |
+| `reader-strip.html` | a webtoon chapter: one vertical scroll, chosen by itself for tall strips |
+| `reader-end.html` | the end of a book: the next one, or back to the series |
+| `reader-epub.html` | an EPUB: a column of text, its size, width and spacing, and the contents |
+
+The reader pages use `reader.css` (not `koma.css`); part of it only draws
+the made-up pages.
 They follow `prefers-color-scheme`, so switch your OS theme to see dark and light.
 
 All titles, authors and users in the mockups are made up.
@@ -134,3 +143,28 @@ SQLite FTS5 with the trigram tokenizer over series names, book titles, authors,
 genres and tags, so any part of a word matches and Japanese and Korean titles
 need no word splitter. `author:`, `tag:` and `genre:` narrow it. Results are
 server-rendered and grouped: series, books, then tags and people.
+
+## Reader (M4)
+
+Chosen with the owner:
+
+- **The page only.** No chrome while reading. A tap in the middle third (or
+  a key) shows the bars: on top the series, book and chapter, the page, and
+  the keys; at the bottom a scrubber with a preview of the page under it, the
+  thumbnail strip (`t`), and single / double / strip, fit page / width /
+  height and right to left / left to right. Another tap hides them.
+- **Tap thirds that follow the direction.** In right-to-left books the left
+  third goes forward and the right third back; left-to-right, the other way.
+  Swipes and keys (arrows, `h`/`l`, `j`/`k`, space) too. The zones are
+  shown once, faintly, the first time a reader opens.
+- **Double pages** sit side by side, both always on screen (scaled to fit a
+  narrow window), with a one-page shift (`s`) for books whose spreads start
+  on the left. A page wider than tall is shown alone.
+- **Tall strips** switch to one vertical scroll by themselves.
+- **At the end** of a book: the next one, with its cover, or back to the
+  series.
+- **EPUB:** a column of serif text on paper, with size, width and spacing,
+  and a table of contents.
+- **Progress and reader settings** stay in the browser (localStorage) until
+  accounts (M5), which move them to the account so they follow you between
+  devices.

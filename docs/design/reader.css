@@ -1,0 +1,49 @@
+/* Koma-1 reader: the page, nothing else, until a tap shows the bars. */
+.reader{margin:0;height:100vh;overflow:hidden;background:#000;color:#D6DCE1;font:13px/1.4 ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+.reader a{color:inherit}
+.stage{height:100vh;display:flex;justify-content:center;align-items:center;gap:0}
+.stage .pg{height:100vh;max-width:100vw}
+.fit-w .pg{height:auto;width:100vw;max-width:900px}
+/* Double: two pages side by side, both always on screen. */
+.two .pg{height:min(100vh,75vw)}
+/* Made-up pages: paper and panels. */
+.pg{aspect-ratio:2/3;background:#EFEBE2;display:grid;grid-template:1fr 1.4fr 1fr/1fr 1fr;gap:3%;padding:5%;box-sizing:border-box}
+.pg i{border:3px solid #1B1B1B;background:#fff radial-gradient(#9a9a9a 1px,transparent 1.3px) 0 0/5px 5px}
+.pg i:nth-child(2){grid-row:span 2}.pg i:nth-child(4){grid-column:span 2}
+.pg.wide{aspect-ratio:3/2;grid-template:1fr 1fr/1.5fr 1fr 1fr}
+/* Tap zones: shown once, faintly, on the first open. */
+.zones{position:fixed;inset:0;display:grid;grid-template-columns:1fr 1fr 1fr;pointer-events:none}
+.zones span{display:grid;place-items:center;color:#fff;background:#0008;border:1px dashed #fff6;font-size:12px;text-transform:uppercase;letter-spacing:.1em}
+.zones span:nth-child(2){background:#0004}
+.zones b{padding:4px 10px;background:#000;font-weight:normal}
+/* Bars, shown by a tap in the middle or a key. */
+.rbar{position:fixed;left:0;right:0;color:#D6DCE1;display:flex;align-items:center;gap:14px;padding:10px 16px;background:#0F1215F0;border:0 solid #3A424C}
+.rbar.top{top:0;border-bottom-width:2px}.rbar.bot{bottom:0;border-top-width:2px;flex-wrap:wrap}
+.rbar b{color:#fff}.rbar .dim{color:#8A949E}.rbar .end{margin-left:auto}
+.rbar kbd{font:inherit;font-size:11px;border:1px solid #3A424C;padding:0 4px}
+.seg{display:flex;border:1px solid #3A424C}.seg a{padding:2px 9px;color:#8A949E;text-decoration:none}
+.seg [aria-current]{background:#F2A33A;color:#0F1215}
+.scrub{flex:1 1 100%;position:relative;height:22px;display:flex;align-items:center}
+.scrub .rail{flex:1;height:4px;background:#3A424C}.scrub .rail i{display:block;height:100%;width:var(--p);background:#F2A33A}
+.scrub .knob{position:absolute;left:var(--p);width:12px;height:22px;margin-left:-6px;background:#F2A33A}
+.scrub .peek{position:absolute;left:var(--p);bottom:30px;transform:translateX(-50%);width:84px;padding:4px;background:#0F1215;border:2px solid #F2A33A;text-align:center}
+.scrub .peek .pg{width:100%;height:auto;padding:4%}
+.thumbs{flex:1 1 100%;display:flex;gap:6px;overflow:hidden}.thumbs .pg{height:72px;padding:3%;opacity:.55}
+.thumbs .on{opacity:1;outline:2px solid #F2A33A}
+/* Webtoon strip: one column, no gaps. */
+.strip{height:100vh;overflow:auto;display:flex;flex-direction:column;align-items:center}
+.strip .pg{width:min(100vw,720px);height:auto;aspect-ratio:1/3;grid-template:repeat(6,1fr)/1fr}
+.strip .pg i:nth-child(n){grid-row:auto;grid-column:auto}
+/* End of a book: what comes next. */
+.next{position:fixed;inset:0;display:grid;place-items:center;background:#000C}
+.next>div{display:flex;gap:20px;padding:22px;border:2px solid #3A424C;background:#0F1215;max-width:90vw}
+.next .pg{height:220px;width:147px;flex-shrink:0}.next p{margin:0 0 12px;color:#8A949E}.next strong{display:block;font-size:28px;color:#fff;margin-bottom:6px}
+.btn{display:inline-block;padding:10px 16px;margin:0 8px 8px 0;border:2px solid #3A424C;font-weight:bold;text-decoration:none}
+.btn.primary{background:#F2A33A;border-color:#F2A33A;color:#0F1215}
+/* EPUB: a column of text the reader sizes. */
+.book{height:100vh;overflow:auto;background:#F4F1EA;color:#222}
+.book main{max-width:var(--w,34em);margin:0 auto;padding:64px 24px 120px;font:var(--s,19px)/var(--l,1.65) Georgia,"Iowan Old Style",serif}
+.book h1{font-size:1.4em;margin:0 0 1em}.book p{margin:0 0 1em}
+.toc{position:fixed;top:48px;left:0;bottom:0;width:280px;overflow:auto;padding:16px;background:#0F1215;border-right:2px solid #3A424C}
+.toc a{display:block;padding:6px 0;text-decoration:none;color:#8A949E}.toc [aria-current]{color:#F2A33A}
+@media (max-width:760px){.rbar .dim:not(.end),.rbar .label{display:none}.toc{width:auto;right:0}.next>div{flex-direction:column;align-items:center;text-align:center}}
