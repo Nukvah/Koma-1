@@ -202,21 +202,81 @@ fn serve_container(image: &str, budgets: &Budgets, report: &mut Report) -> Resul
     stop_cleanly(&c, "koma serve stops on SIGTERM", report)
 }
 
+/// Runs `koma worker` on the made-up test library (read-only) with a tmpfs
+/// for its data, waits for the scan, then measures its idle memory.
 fn worker_container(image: &str, budgets: &Budgets, report: &mut Report) -> Result<(), String> {
-    let mut args = LIMITS.to_vec();
+    let library = std::env::temp_dir().join(format!("koma-budgets-library-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&library);
+    let books = koma_fixtures::library::write(&library).map_err(|e| e.to_string())?;
+    let volume = format!("{}:/library:ro", library.display());
+
+    let mut args = vec![
+        "--volume",
+        &volume,
+        "--tmpfs",
+        "/data:rw,uid=65532,gid=65532,mode=0700",
+    ];
+    args.extend(LIMITS);
     args.extend(HARDENING);
     args.extend([image, "worker"]);
     let c = Container::start(&args)?;
-    thread::sleep(Duration::from_secs(1));
+
+    let mut done = None;
+    let scanned = wait_for(Duration::from_secs(30), || {
+        done = docker_logs(&c.id)
+            .lines()
+            .find(|l| l.contains("\"scan: done\""))
+            .map(str::to_owned);
+        done.is_some()
+    });
+    let want = format!("\"indexed\":\"{}\"", books.len());
+    let ok = scanned
+        && done
+            .as_deref()
+            .is_some_and(|l| l.contains(&want) && l.contains("\"failed\":\"0\""));
+    report.check(
+        "koma worker scans the test library",
+        ok,
+        match &done {
+            Some(line) => format!(
+                "{} books in {} ms",
+                log_field(line, "indexed"),
+                log_field(line, "ms")
+            ),
+            None => "no \"scan: done\" within 30 s".into(),
+        },
+    );
+    let _ = fs::remove_dir_all(&library);
+
+    thread::sleep(Duration::from_millis(500));
     let rss = c.rss_bytes()?;
     report.budget(
         "Idle RAM (worker)",
         rss as f64 / MIB,
         budgets.memory.worker_idle_mib,
         "MiB",
-        "",
+        "after scanning",
     );
     stop_cleanly(&c, "koma worker stops on SIGTERM", report)
+}
+
+/// The value of `"key":"value"` in one of koma's JSON log lines.
+fn log_field<'a>(line: &'a str, key: &str) -> &'a str {
+    let pattern = format!("\"{key}\":\"");
+    line.split_once(&pattern)
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map_or("?", |(value, _)| value)
+}
+
+/// The container's stdout and stderr (koma logs to stderr).
+fn docker_logs(id: &str) -> String {
+    Command::new("docker")
+        .args(["logs", id])
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stderr).into_owned() + &String::from_utf8_lossy(&o.stdout)
+        })
+        .unwrap_or_default()
 }
 
 /// `docker stop` sends SIGTERM and kills after 10 s. A clean stop is quick and exits 0.

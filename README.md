@@ -5,7 +5,8 @@ library and reader, built to stay fast on small hardware.
 Why and how: [MANIFESTO.md](MANIFESTO.md). Contributing: [AGENTS.md](AGENTS.md).
 
 **Status: Milestone 1 in progress.** The binary, the image and the CI checks
-exist, and it can index CBZ archives; it does not serve a library yet.
+exist, and `koma worker` indexes a CBZ library into SQLite; it does not serve
+the library over HTTP yet.
 
 ## Run
 
@@ -13,6 +14,9 @@ exist, and it can index CBZ archives; it does not serve a library yet.
 docker build -t koma .
 docker run --read-only --cap-drop ALL -p 8080:8080 koma serve
 curl http://localhost:8080/healthz   # ok
+
+# Index a library: read-only books in /library, catalogue and blobs in /data
+docker run --read-only --cap-drop ALL -v /path/to/manga:/library:ro -v koma-data:/data koma scan
 ```
 
 One binary, three modes:
@@ -20,11 +24,14 @@ One binary, three modes:
 | Command | Does |
 |---|---|
 | `koma serve` | HTTP server. Today: `GET /healthz`. |
-| `koma worker` | Background jobs (ingest). Today: idles until stopped. |
+| `koma worker` | Scans the library into the catalogue, then waits for jobs (none yet). |
+| `koma scan` | Scans the library once and exits (3 if some books could not be read). |
 | `koma scrub` | Integrity checks. Today: nothing to check. |
 | `koma healthcheck` | Exits 0 if the local server is healthy; the image's `HEALTHCHECK`. |
 
-`--listen <ip:port>` or `KOMA_LISTEN` sets the address (default `0.0.0.0:8080`).
+`--listen <ip:port>` or `KOMA_LISTEN` sets the address (default `0.0.0.0:8080`);
+`--library` / `KOMA_LIBRARY` (default `/library`) and `--data` / `KOMA_DATA`
+(default `/data`) set the folders.
 Logs are JSON lines on stderr.
 
 ## Docs

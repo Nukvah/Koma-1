@@ -1,5 +1,5 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    koma::run(std::env::args_os().skip(1), std::env::var_os("KOMA_LISTEN"))
+    koma::run(std::env::args_os().skip(1), koma::cli::Env::from_process())
 }

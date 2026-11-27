@@ -4,7 +4,7 @@
 
 | Path | What |
 |---|---|
-| `crates/koma` | The `koma` binary and its library: CLI, server, archive reading |
+| `crates/koma` | The `koma` binary and its library: CLI, server, archives, catalogue, scan |
 | `crates/koma-fixtures` | Made-up test material: PNG pages, a zip writer, a test library |
 | `xtask` | Project tasks: `cargo xtask budgets`, `cargo xtask fixtures` |
 | `budgets.toml` | Every performance and size budget |
@@ -61,3 +61,27 @@ Pages are image members (`jpg`, `jpeg`, `png`, `webp`, `gif`, `avif`, `bmp`,
 They are put in reading order with `koma::natsort`: numbers by value
 (`2 < 10`, full-width digits too), letters case-insensitively, folder by
 folder, with the extension only breaking ties.
+
+## Catalogue and scan
+
+`koma worker` (at start) and `koma scan` index the library into
+`<data>/koma.db`, a SQLite database in WAL mode (`koma::catalog`); `koma serve`
+will only read it.
+
+- A series is a folder, and each CBZ in it is a book. A CBZ in the library
+  root is a series of its own. Hidden files and symbolic links are skipped.
+- Every page gets a BLAKE3 hash and has its CRC-32 and size checked against
+  the archive.
+- Stored pages are recorded in place as (book file, offset, length), so they
+  can be served straight from the archive.
+- Deflated pages are inflated once, at scan time, into the blob store
+  `<data>/blobs/ab/<hash>.<ext>`; identical pages share one blob. Inflating
+  stops at the declared size, at 256 MiB, or if the declared ratio is over
+  1000:1.
+- A book whose size and modification time haven't changed is skipped; books
+  whose files are gone are removed, and empty series with them.
+- A file that can't be read is logged, stored in `scan_errors` with the
+  reason, and skipped; it never stops the scan.
+
+Order is natural everywhere: SQL uses the `natsort` collation, which is
+`koma::natsort::compare_paths`.
