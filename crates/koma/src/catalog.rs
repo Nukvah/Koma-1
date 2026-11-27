@@ -14,7 +14,7 @@ pub use crate::archive::size::Size;
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// How long a book whose file vanished is remembered, so that a folder that
 /// comes back (a drive mounted late, a move noticed in two steps) keeps its
@@ -28,7 +28,8 @@ pub const MAX_ATTEMPTS: i64 = 3;
 const SCHEMA: &str = "
 CREATE TABLE series (
     id    INTEGER PRIMARY KEY AUTOINCREMENT,  -- never reused: ids are kept for good
-    path  TEXT NOT NULL UNIQUE,      -- folder relative to the library (or the file, for a one-shot)
+    path  TEXT NOT NULL UNIQUE,      -- folder relative to the library; for books loose in the
+                                     -- root, NUL + the lower-cased series name from the file name
     name  TEXT NOT NULL
 );
 CREATE TABLE books (
@@ -42,11 +43,29 @@ CREATE TABLE books (
     mtime      INTEGER NOT NULL,
     page_count INTEGER NOT NULL,
     added      INTEGER NOT NULL,     -- unix seconds: when first seen; kept through moves
-    gone       INTEGER               -- unix seconds: when its file vanished; NULL while present
+    gone       INTEGER,              -- unix seconds: when its file vanished; NULL while present
+    -- Details: its metadata files (metadata.json over ComicInfo.xml), gaps
+    -- filled from the file name. See docs/naming.md.
+    title      TEXT NOT NULL DEFAULT '',
+    number     REAL,                 -- chapter or volume number
+    kind       TEXT,                 -- 'chapter' or 'volume'
+    summary    TEXT NOT NULL DEFAULT '',
+    year       INTEGER,
+    language   TEXT NOT NULL DEFAULT '',
+    direction  TEXT,                 -- 'ltr' or 'rtl'; NULL: not stated
+    cover_page INTEGER               -- 0-based page to show as the cover; NULL: the first
 );
 CREATE INDEX books_series ON books(series_id);
 CREATE INDEX books_folder ON books(folder);
 CREATE INDEX books_gone_stamp ON books(size, mtime) WHERE gone IS NOT NULL;
+CREATE TABLE book_terms (
+    book_id  INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    kind     TEXT NOT NULL,          -- 'author', 'publisher', 'genre' or 'tag'
+    name     TEXT NOT NULL,
+    pos      INTEGER NOT NULL,       -- order as given
+    PRIMARY KEY (book_id, kind, pos)
+) WITHOUT ROWID;
+CREATE INDEX book_terms_name ON book_terms(kind, name);
 CREATE TABLE pages (
     book_id  INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
     number   INTEGER NOT NULL,       -- 0-based reading order
@@ -88,6 +107,7 @@ CREATE TABLE jobs (
 /// exist the catalogue holds nothing that the next scan cannot rebuild.
 const DROP_OLD: &str = "
 DROP TABLE IF EXISTS pages;
+DROP TABLE IF EXISTS book_terms;
 DROP TABLE IF EXISTS books;
 DROP TABLE IF EXISTS series;
 DROP TABLE IF EXISTS scan_errors;
@@ -168,7 +188,48 @@ pub struct NewBook<'a> {
     pub size: u64,
     pub mtime: i64,
     pub pages: &'a [Page],
+    pub details: &'a Details,
 }
+
+/// What a book says about itself: its metadata files, with gaps filled from
+/// its file name.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Details {
+    pub title: String,
+    pub number: Option<f64>,
+    /// `"chapter"` or `"volume"`.
+    pub kind: Option<&'static str>,
+    pub summary: String,
+    pub year: Option<i32>,
+    pub language: String,
+    /// `"ltr"` or `"rtl"`.
+    pub direction: Option<&'static str>,
+    /// 0-based page to show as the cover.
+    pub cover_page: Option<u32>,
+    pub authors: Vec<String>,
+    pub publishers: Vec<String>,
+    pub genres: Vec<String>,
+    pub tags: Vec<String>,
+}
+
+/// [`Details`] as stored, read back by [`Catalog::details`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StoredDetails {
+    pub title: String,
+    pub number: Option<f64>,
+    pub kind: Option<String>,
+    pub summary: String,
+    pub year: Option<i32>,
+    pub language: String,
+    pub direction: Option<String>,
+    pub cover_page: Option<u32>,
+    pub authors: Vec<String>,
+    pub publishers: Vec<String>,
+    pub genres: Vec<String>,
+    pub tags: Vec<String>,
+}
+
+const TERM_KINDS: [&str; 4] = ["author", "publisher", "genre", "tag"];
 
 impl Catalog {
     /// Opens (creating if needed) the catalogue for writing.
@@ -264,6 +325,38 @@ impl Catalog {
             ],
             |r| r.get(0),
         )?;
+        let d = book.details;
+        tx.execute(
+            "UPDATE books SET title = ?2, number = ?3, kind = ?4, summary = ?5, year = ?6,
+                 language = ?7, direction = ?8, cover_page = ?9
+             WHERE id = ?1",
+            params![
+                book_id,
+                d.title,
+                d.number,
+                d.kind,
+                d.summary,
+                d.year,
+                d.language,
+                d.direction,
+                d.cover_page
+            ],
+        )?;
+        tx.execute("DELETE FROM book_terms WHERE book_id = ?1", [book_id])?;
+        {
+            let mut insert = tx.prepare(
+                "INSERT INTO book_terms (book_id, kind, name, pos) VALUES (?1, ?2, ?3, ?4)",
+            )?;
+            for (kind, names) in
+                TERM_KINDS
+                    .iter()
+                    .zip([&d.authors, &d.publishers, &d.genres, &d.tags])
+            {
+                for (pos, name) in names.iter().enumerate() {
+                    insert.execute(params![book_id, kind, name, pos as i64])?;
+                }
+            }
+        }
         tx.execute("DELETE FROM pages WHERE book_id = ?1", [book_id])?;
         {
             let mut insert = tx.prepare(
@@ -289,6 +382,51 @@ impl Catalog {
         prune_series(&tx)?;
         tx.commit()?;
         Ok(book_id)
+    }
+
+    /// The details stored for the book at this path.
+    pub fn details(&self, path: &str) -> Result<Option<StoredDetails>, Error> {
+        let found = self
+            .conn
+            .query_row(
+                "SELECT id, title, number, kind, summary, year, language, direction, cover_page
+                 FROM books WHERE path = ?1",
+                [path],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        StoredDetails {
+                            title: r.get(1)?,
+                            number: r.get(2)?,
+                            kind: r.get(3)?,
+                            summary: r.get(4)?,
+                            year: r.get(5)?,
+                            language: r.get(6)?,
+                            direction: r.get(7)?,
+                            cover_page: r.get(8)?,
+                            ..StoredDetails::default()
+                        },
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((id, mut details)) = found else {
+            return Ok(None);
+        };
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT kind, name FROM book_terms WHERE book_id = ?1 ORDER BY kind, pos",
+        )?;
+        let rows = stmt.query_map([id], |r| Ok((r.get::<_, String>(0)?, r.get(1)?)))?;
+        for row in rows {
+            let (kind, name) = row?;
+            match kind.as_str() {
+                "author" => details.authors.push(name),
+                "publisher" => details.publishers.push(name),
+                "genre" => details.genres.push(name),
+                _ => details.tags.push(name),
+            }
+        }
+        Ok(Some(details))
     }
 
     /// The book known at this path: its id, stamp, and whether it is gone.
@@ -763,9 +901,11 @@ fn place_in_series(
         })
         .optional()?;
     if let Some(id) = existing {
+        let old: String =
+            tx.query_row("SELECT name FROM series WHERE id = ?1", [id], |r| r.get(0))?;
         tx.execute(
             "UPDATE series SET name = ?2 WHERE id = ?1",
-            params![id, name],
+            params![id, series_name(&old, name)],
         )?;
         return Ok(id);
     }
@@ -790,6 +930,18 @@ fn place_in_series(
     Ok(tx.last_insert_rowid())
 }
 
+/// The name a series shows when its books name it differently: books loose
+/// in the root group by their name without case (`starfall academy v03.cbz`
+/// joins `Starfall Academy - Ch. 01.cbz`). The best-capitalised spelling wins,
+/// then the first in order, so the name doesn't depend on scan order.
+fn series_name<'a>(a: &'a str, b: &'a str) -> &'a str {
+    let capitals = |s: &str| s.chars().filter(|c| c.is_uppercase()).count();
+    match capitals(a).cmp(&capitals(b)).then_with(|| b.cmp(a)) {
+        std::cmp::Ordering::Less => b,
+        _ => a,
+    }
+}
+
 fn last_part(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
@@ -805,4 +957,24 @@ fn prune_series(tx: &rusqlite::Transaction<'_>) -> Result<(), Error> {
 fn hash_from_row(r: &rusqlite::Row<'_>, i: usize) -> Result<blake3::Hash, Error> {
     let bytes: [u8; 32] = r.get(i)?;
     Ok(blake3::Hash::from_bytes(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::series_name;
+
+    #[test]
+    fn series_name_does_not_depend_on_order() {
+        for (a, b) in [
+            ("starfall academy", "Starfall Academy"),
+            ("Starfall academy", "starfall Academy"),
+            ("Starfall", "Starfall"),
+        ] {
+            assert_eq!(series_name(a, b), series_name(b, a), "{a} / {b}");
+        }
+        assert_eq!(
+            series_name("starfall academy", "Starfall Academy"),
+            "Starfall Academy"
+        );
+    }
 }
