@@ -38,6 +38,7 @@ Logs are JSON lines on stderr.
 
 ## Docs
 
+- [docs/running.md](docs/running.md): running Koma-1 with Docker or Compose: folders, scans, health
 - [docs/development.md](docs/development.md): building, testing, budgets, test libraries
 - [docs/ROADMAP.md](docs/ROADMAP.md): milestones
 - [docs/design/](docs/design/README.md): UI design
