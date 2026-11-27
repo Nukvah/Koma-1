@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Account · Koma-1</title>
+<link rel="stylesheet" href="koma.css">
+</head>
+<body>
+<input type="checkbox" id="menu" class="menu" aria-label="show the menu">
+<header class="top">
+<a class="brand" href="library.html">KOMA-1</a>
+<form class="search" role="search" action="search.html">
+<label for="q">/</label>
+<input id="q" name="q" type="search" value="" placeholder="search all libraries: title, author:, tag:">
+</form>
+<label for="menu" class="menu-btn" aria-hidden="true">menu</label>
+<details class="umenu">
+<summary><span class="avatar" aria-hidden="true">M</span><span>mirelle ▾</span></summary>
+<ul>
+<li><span><small>signed in as</small> mirelle <span class="role admin">admin</span></span></li>
+<li><hr></li>
+<li><a href="account.html">account</a></li>
+<li><a href="users.html">users</a></li>
+<li><a href="settings.html">libraries</a></li>
+<li><hr></li>
+<li><form method="post" action="signin.html"><button type="submit">sign out</button></form></li>
+</ul>
+</details>
+</header>
+
+<div class="layout">
+<aside class="side" aria-label="Navigation and libraries">
+<nav aria-label="Main">
+<h2>// go</h2>
+<ul>
+<li><a href="library.html">&nbsp; library<span class="n">g l</span></a></li>
+<li><a href="#">&nbsp; recent<span class="n">g r</span></a></li>
+<li><a href="collections.html">&nbsp; collections<span class="n">g c</span></a></li>
+<li><a href="#">&nbsp; ingest<span class="n">g i</span></a></li>
+<li><a href="settings.html" aria-current="page">&gt; settings<span class="n">g s</span></a></li>
+</ul>
+</nav>
+<hr>
+<section class="tree">
+<h2>// libraries</h2>
+<ul>
+<li><a href="library.html">▸ ~/manga<span class="n">214</span></a></li>
+<li><a href="#">▸ ~/webtoons<span class="n">38</span></a></li>
+<li><a href="#">▸ ~/comics<span class="n">61</span></a></li>
+<li><a href="#">▸ ~/cosplay<span class="n">12</span></a></li>
+</ul>
+</section>
+<hr>
+<section class="tree">
+<h2>// only yours</h2>
+<ul>
+<li><a href="#">▸ ~mirelle/sketchbooks<span class="n">9</span></a></li>
+</ul>
+</section>
+<hr>
+<p class="status"><span class="ok">●</span> ingest idle · 4m ago<br>2,260 vols · <a href="#">rescan</a></p>
+</aside>
+
+<main>
+<div class="toolbar"><h1>settings · <b>account</b></h1>
+<nav class="seg" aria-label="Settings">
+<a href="settings.html">libraries</a>
+<a href="users.html">users</a>
+<a href="account.html" aria-current="page">account</a>
+</nav>
+</div>
+
+<div class="pair">
+<section class="box">
+<h2>you</h2>
+<div class="status">
+<p><b>mirelle</b> <span class="role admin">admin</span></p>
+<p>Your folder: <code>/library/~mirelle</code>, 1 library, 9 series. Only you see it; nobody else, the admin included.</p>
+<p>Reading progress: 214 books. Reader settings: 31 series. They follow you to every device you sign in on.</p>
+</div>
+</section>
+
+<form class="box form" method="post">
+<h2>password</h2>
+<label>current password<input name="current" type="password" autocomplete="current-password" required></label>
+<label>new password<input name="password" type="password" autocomplete="new-password" minlength="10" required></label>
+<label>new password again<input name="again" type="password" autocomplete="new-password" required></label>
+<div class="row"><button class="btn" type="submit">change password</button><small>Signs out your other devices.</small></div>
+</form>
+</div>
+
+<p class="note">This browser had positions in 12 books from before you signed in. They were added to your account where it had none.</p>
+
+<section class="box">
+<h2>passkeys</h2>
+<table class="tbl">
+<thead><tr><th scope="col">name</th><th scope="col" class="opt">added</th><th scope="col">last used</th><th scope="col" class="r"><span class="hint">actions</span></th></tr></thead>
+<tbody>
+<tr><td>phone</td><td class="opt">2026-09-02</td><td>today</td><td><div class="acts"><button type="button">rename</button><button type="button">remove</button></div></td></tr>
+<tr><td>laptop</td><td class="opt">2026-10-14</td><td>3 days ago</td><td><div class="acts"><button type="button">rename</button><button type="button">remove</button></div></td></tr>
+</tbody>
+</table>
+<div class="row form"><button class="btn" type="button">add a passkey</button><small>Uses this device's screen lock or a security key. Needs the site on HTTPS.</small></div>
+</section>
+
+<section class="box">
+<h2>signed in</h2>
+<table class="tbl">
+<thead><tr><th scope="col">device</th><th scope="col" class="opt">from</th><th scope="col">last seen</th><th scope="col" class="r"><span class="hint">actions</span></th></tr></thead>
+<tbody>
+<tr><td>Firefox on Linux <span class="pending">· this one</span></td><td class="opt">192.168.1.20</td><td>now</td><td></td></tr>
+<tr><td>Safari on iPhone</td><td class="opt">192.168.1.31</td><td>2 hours ago</td><td><div class="acts"><button type="button">sign out</button></div></td></tr>
+<tr><td>Chrome on Android</td><td class="opt">10.8.0.6</td><td>12 days ago</td><td><div class="acts"><button type="button">sign out</button></div></td></tr>
+</tbody>
+</table>
+<form method="post"><button class="btn" type="submit">sign out everywhere else</button></form>
+<small class="hint">A device not seen for 90 days is signed out by itself; without “keep me signed in”, when the browser closes.</small>
+</section>
+</main>
+</div>
+</body>
+</html>

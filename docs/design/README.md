@@ -10,7 +10,12 @@ Open any `.html` file here in a browser; they share `koma.css` and use no JavaSc
 | `table.html` | the library as a real `<table>`, sorted by a heading link |
 | `search.html` | search results across libraries, grouped by kind |
 | `collections.html` | collections as stacked covers, then what one holds |
-| `settings.html` | the libraries and their settings, read-only until accounts (M5) |
+| `settings.html` | the libraries and their settings, editable by the admin (M5), with a change queued for the worker |
+| `signin.html` | sign in: name and password, or a passkey |
+| `setup.html` | first start: the admin account, claimed with a code from the server's log |
+| `join.html` | a one-time sign-in link: the new account chooses its password |
+| `account.html` | your account: password, passkeys, devices signed in, where your progress is |
+| `users.html` | user management (admin): roles, sign-in links, removing, handing over the admin role |
 | `states.html` | empty and error states, one block per screen |
 | `reader.html` | reading: the page only, with the tap zones shown once on the first open |
 | `reader-bars.html` | the bars a tap shows: title and back; scrubber with page preview, thumbnails, mode, fit, direction |
@@ -121,7 +126,7 @@ Font: `ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace`.
 - `koma.css` is about 7.7 KB raw (2.4 KB gzipped), over the 5 KB CSS budget.
   It carries both pages plus the dotted fill and light theme; it needs trimming
   when it becomes the real stylesheet.
-- Not designed yet: the reader, the table view, search results, ingest, settings, sign-in.
+- Not designed yet: ingest.
 - Phone layout is only the stacked fallback; a dedicated phone design is still to do.
 
 ## Libraries and collections (M3)
@@ -171,3 +176,56 @@ Chosen with the owner:
 - **Progress and reader settings** stay in the browser (localStorage) until
   accounts (M5), which move them to the account so they follow you between
   devices.
+
+## Accounts (M5)
+
+Chosen with the owner:
+
+- **Password and passkeys.** Every account has a password (argon2id); passkeys
+  can be added and used wherever the site is on HTTPS or localhost. Over plain
+  HTTP on a home network only the password works and the passkey button is
+  not shown.
+- **Your own folder is `/library/~name`.** A top-level folder named after an
+  account with a `~` in front holds that account's private libraries
+  (`/library/~mirelle/sketchbooks`). Nobody else sees them, the admin
+  included, and a private book, series or library answers 404 to anyone
+  else, the same as one that does not exist. Every other top-level folder is
+  shared. In the side panel the private libraries are under `// only yours`.
+- **`koma serve` writes only its own database**, `<data>/accounts.db`:
+  accounts, sessions, passkeys, progress, reader settings, and a queue of
+  library-setting changes. The catalogue stays the worker's alone; the
+  worker applies queued changes on its next pass (within a minute).
+
+Proposed, for review with these mockups:
+
+- **First start.** With no account, every page leads to `/setup`. Creating
+  the admin there needs a code that `koma serve` prints to its log at start,
+  so whoever reaches the page first on the network cannot claim the server.
+- **No passwords set by the admin.** Adding an account (or "new sign-in link")
+  makes a link that works once, for 24 hours, where the person chooses their
+  own password. A lost admin password: `koma account link <name>` prints a
+  link from the server's shell.
+- **Roles.** Reader: read, download, own progress and settings. Curator: also
+  organises (M6 on). Admin: also accounts, roles, shared library settings.
+  One admin; handing the role over (confirmed with the password) makes the
+  old admin a curator.
+- **Sessions.** A random token in an `HttpOnly`, `SameSite=Lax` cookie
+  (`Secure` on HTTPS), signed with a key in the data folder and stored only
+  as a hash; the account page lists each device and signs one out. "Keep me
+  signed in" lasts 90 days from the last visit; without it, until the
+  browser closes. Changing the password signs out the other devices. Every
+  form that changes something also checks the request's `Origin`.
+- **Sign-in through a proxy.** `--trust-header Remote-User` with
+  `--trust-proxy <address>`: the header is believed only from that address.
+  A name with no account gets one, as a reader.
+- **Progress and reader settings** move from the browser to the account. On
+  the first sign-in in a browser, what it kept is sent once and added where
+  the account has nothing for that book or series.
+- **Removing an account** keeps its folder on disk, unseen, until an account
+  of that name exists again; its progress and sessions are deleted.
+- **Failed sign-ins**: after 5 wrong passwords in a row a name waits a
+  minute before the next try.
+- **Page images stay public.** `/p/<hash>` URLs name a page's content and are
+  cached for a year by any cache; only someone who already has the page can
+  know its hash. Every HTML page, `/b/`, `/e/` and `/d/` need a signed-in
+  account that may see the book.

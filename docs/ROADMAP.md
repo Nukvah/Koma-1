@@ -120,10 +120,12 @@ opens to the last position on another device.
 Goal: know who is asking before anything can change the library.
 
 - Design step: sign-in, account settings, user management.
-- Signed session cookies, passkeys, per-user progress; trusted forwarded-user header for SSO.
+- Signed session cookies, passwords and passkeys, per-user progress; trusted forwarded-user header for SSO.
 - The first account is the admin; the admin adds and removes accounts and can hand the role
   over *(proven)*.
-- Each account owns a folder and its libraries are private to it *(proven)*.
+- Each account owns a folder, `/library/~name`, and its libraries are private to it *(proven)*.
+- `koma serve` writes only its own `accounts.db` (accounts, sessions, progress, settings
+  queue); the catalogue stays the worker's.
 - Roles: reader (read, download) and curator (organise, upload, convert).
 - Library settings editable by the admin (name, type, reading direction, colour): `koma serve`
   queues the change and the worker applies it, so the worker stays the catalogue's only writer.

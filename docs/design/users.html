@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Users · Koma-1</title>
+<link rel="stylesheet" href="koma.css">
+</head>
+<body>
+<input type="checkbox" id="menu" class="menu" aria-label="show the menu">
+<header class="top">
+<a class="brand" href="library.html">KOMA-1</a>
+<form class="search" role="search" action="search.html">
+<label for="q">/</label>
+<input id="q" name="q" type="search" value="" placeholder="search all libraries: title, author:, tag:">
+</form>
+<label for="menu" class="menu-btn" aria-hidden="true">menu</label>
+<details class="umenu">
+<summary><span class="avatar" aria-hidden="true">M</span><span>mirelle ▾</span></summary>
+<ul>
+<li><span><small>signed in as</small> mirelle <span class="role admin">admin</span></span></li>
+<li><hr></li>
+<li><a href="account.html">account</a></li>
+<li><a href="users.html">users</a></li>
+<li><a href="settings.html">libraries</a></li>
+<li><hr></li>
+<li><form method="post" action="signin.html"><button type="submit">sign out</button></form></li>
+</ul>
+</details>
+</header>
+
+<div class="layout">
+<aside class="side" aria-label="Navigation and libraries">
+<nav aria-label="Main">
+<h2>// go</h2>
+<ul>
+<li><a href="library.html">&nbsp; library<span class="n">g l</span></a></li>
+<li><a href="#">&nbsp; recent<span class="n">g r</span></a></li>
+<li><a href="collections.html">&nbsp; collections<span class="n">g c</span></a></li>
+<li><a href="#">&nbsp; ingest<span class="n">g i</span></a></li>
+<li><a href="settings.html" aria-current="page">&gt; settings<span class="n">g s</span></a></li>
+</ul>
+</nav>
+<hr>
+<section class="tree">
+<h2>// libraries</h2>
+<ul>
+<li><a href="library.html">▸ ~/manga<span class="n">214</span></a></li>
+<li><a href="#">▸ ~/webtoons<span class="n">38</span></a></li>
+<li><a href="#">▸ ~/comics<span class="n">61</span></a></li>
+<li><a href="#">▸ ~/cosplay<span class="n">12</span></a></li>
+</ul>
+</section>
+<hr>
+<section class="tree">
+<h2>// only yours</h2>
+<ul>
+<li><a href="#">▸ ~mirelle/sketchbooks<span class="n">9</span></a></li>
+</ul>
+</section>
+<hr>
+<p class="status"><span class="ok">●</span> ingest idle · 4m ago<br>2,260 vols · <a href="#">rescan</a></p>
+</aside>
+
+<main>
+<div class="toolbar"><h1>settings · <b>users</b></h1>
+<nav class="seg" aria-label="Settings">
+<a href="settings.html">libraries</a>
+<a href="users.html" aria-current="page">users</a>
+<a href="account.html">account</a>
+</nav>
+</div>
+
+<p class="note">Made an account for <b>orrin</b>. Give them this link; it works once, for 24 hours, and lets them choose a password:<br><code>http://koma.local:8080/join/7Q4M-XR2K-9DLA-P0WE</code></p>
+
+<table class="tbl">
+<thead><tr><th scope="col">name</th><th scope="col">role</th><th scope="col" class="opt">own folder</th><th scope="col" class="opt">signs in with</th><th scope="col" class="opt">last seen</th><th scope="col" class="r"><span class="hint">actions</span></th></tr></thead>
+<tbody>
+<tr><td>mirelle</td><td><span class="role admin">admin</span></td><td class="opt">~mirelle · 9 series</td><td class="opt">password, 2 passkeys</td><td class="opt">now</td><td></td></tr>
+<tr><td>tamsin</td><td><select aria-label="role of tamsin"><option>reader</option><option selected>curator</option></select></td><td class="opt">~tamsin · 0 series</td><td class="opt">password</td><td class="opt">yesterday</td><td><div class="acts"><button type="button">new sign-in link</button><button type="button">remove</button></div></td></tr>
+<tr><td>bram</td><td><select aria-label="role of bram"><option selected>reader</option><option>curator</option></select></td><td class="opt">~bram · 4 series</td><td class="opt">proxy (Remote-User)</td><td class="opt">5 days ago</td><td><div class="acts"><button type="button">remove</button></div></td></tr>
+<tr><td>orrin</td><td><select aria-label="role of orrin"><option selected>reader</option><option>curator</option></select></td><td class="opt">~orrin · none yet</td><td class="opt"><span class="pending">link not used yet</span></td><td class="opt">never</td><td><div class="acts"><button type="button">new sign-in link</button><button type="button">remove</button></div></td></tr>
+</tbody>
+</table>
+
+<div class="pair">
+<form class="box form" method="post">
+<h2>add an account</h2>
+<label>name<input name="name" pattern="[a-z0-9][a-z0-9._-]{0,31}" required><small>Lower-case letters, digits, <code>.</code> <code>_</code> <code>-</code>; also the name of its folder, <code>/library/~name</code>.</small></label>
+<label>role<select name="role"><option>reader</option><option>curator</option></select></label>
+<button class="btn primary" type="submit">add and make a sign-in link</button>
+</form>
+
+<form class="box form" method="post">
+<h2>hand over the admin role</h2>
+<p class="hint">There is one admin. The account you choose becomes it, and you become a curator.</p>
+<label>new admin<select name="to"><option>tamsin</option><option>bram</option></select></label>
+<label>your password<input name="password" type="password" autocomplete="current-password" required></label>
+<button class="btn danger" type="submit">hand over</button>
+</form>
+</div>
+
+<section class="box">
+<h2>roles</h2>
+<div class="status">
+<p><span class="role">reader</span> reads and downloads, keeps its own progress and reader settings.</p>
+<p><span class="role">curator</span> also organises the library: moves, trash, details, renames, uploads, conversions (from M6 on).</p>
+<p><span class="role admin">admin</span> also adds and removes accounts, sets roles and edits library settings.</p>
+<p>Everyone has a private folder, <code>/library/~name</code>: the libraries in it are seen by that account alone. Removing an account leaves its folder on disk, unseen, until an account of that name exists again.</p>
+<p>Sign-in through a proxy: <b>on</b>, header <code>Remote-User</code>, trusted from <code>10.0.0.2</code> only (set with <code>--trust-header</code> and <code>--trust-proxy</code>). A name the proxy sends that has no account gets one, as a reader.</p>
+</div>
+</section>
+</main>
+</div>
+</body>
+</html>
