@@ -69,3 +69,42 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
       - name: Check budgets in a 2 CPU / 1 GB container
         run: cargo xtask budgets --image koma:ci
+
+  fuzz:
+    # Each parser of hostile input runs for a minute on every pull request,
+    # seeded with the made-up library. A crash fails the job and uploads the
+    # input that caused it.
+    name: fuzz
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - name: Seed corpora from the made-up library
+        run: |
+          cargo run --quiet -p xtask -- fixtures "$RUNNER_TEMP/library"
+          mkdir -p fuzz/corpus/zip_index fuzz/corpus/sevenz
+          find "$RUNNER_TEMP/library" -name '*.cbz' -exec cp {} fuzz/corpus/zip_index/ \;
+          find "$RUNNER_TEMP/library" -name '*.cb7' -exec cp {} fuzz/corpus/sevenz/ \;
+      - name: Build the fuzz targets
+        working-directory: fuzz
+        run: cargo fuzz build
+      - name: Run each target for 60 s
+        working-directory: fuzz
+        run: |
+          for target in $(cargo fuzz list); do
+            echo "::group::$target"
+            cargo fuzz run "$target" -- -max_total_time=60
+            echo "::endgroup::"
+          done
+      - name: Keep crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts

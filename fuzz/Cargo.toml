@@ -1,0 +1,52 @@
+[package]
+name = "koma-fuzz"
+version = "0.0.0"
+description = "Fuzz targets for Koma-1's parsers of hostile input (cargo fuzz, nightly)"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+koma = { path = "../crates/koma" }
+libfuzzer-sys = "0.4"
+
+# Not part of the main workspace: it needs nightly, and its dependencies
+# stay out of the shipped binary's lock file and licence checks.
+[workspace]
+
+[[bin]]
+name = "zip_index"
+path = "fuzz_targets/zip_index.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sevenz"
+path = "fuzz_targets/sevenz.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "page_size"
+path = "fuzz_targets/page_size.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "names"
+path = "fuzz_targets/names.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "metadata"
+path = "fuzz_targets/metadata.rs"
+test = false
+doc = false
+bench = false

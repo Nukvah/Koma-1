@@ -1,6 +1,6 @@
 //! Project tasks for Koma-1. Run with `cargo xtask <task>`.
 //!
-//! `fixtures` writes a made-up test library of CBZ files.
+//! `fixtures` writes a made-up test library of CBZ and CB7 files.
 //!
 //! `budgets` checks the numbers in `budgets.toml`: static asset sizes always,
 //! and with `--image` the container image size, cold start, idle memory and
@@ -27,7 +27,7 @@ Usage: cargo xtask budgets (--image <tag> | --assets-only)
                   (needs Docker; build it with: docker build -t koma:dev .)
   --assets-only   Check only static asset sizes (no Docker needed)
 
-fixtures writes a made-up library of CBZ files for testing and trying koma.
+fixtures writes a made-up library of CBZ and CB7 files for testing and trying koma.
 ";
 
 fn main() -> ExitCode {

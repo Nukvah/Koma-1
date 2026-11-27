@@ -6,6 +6,7 @@
 
 pub mod crc32;
 pub mod page;
+pub mod sevenz;
 pub mod size;
 pub mod zip;
 

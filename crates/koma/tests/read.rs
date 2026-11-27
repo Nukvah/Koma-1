@@ -141,12 +141,14 @@ async fn made_up_library_reads_front_to_back() {
         "Mirelle's Garden/Mirelle's Garden 第1巻.cbz",
         "Moonforge Chronicles/Moonforge Chronicles - Ch. 001.cbz",
         "Moonforge Chronicles/Moonforge Chronicles - Ch. 001.5.cbz",
+        "Moonforge Chronicles/Moonforge Chronicles - Ch. 002.cb7",
         "Starfall/Starfall v01.cbz",
         "Starfall/Starfall v02.cbz",
         "Starfall/Starfall v10.cbz",
     ] {
         let book = books.iter().find(|b| b.path == path).unwrap();
-        let name = path.rsplit('/').next().unwrap().trim_end_matches(".cbz");
+        let file = path.rsplit('/').next().unwrap();
+        let name = file.rsplit_once('.').unwrap().0;
         let title = koma::html::escape(name);
         want.push((title, book.pages.iter().map(|(_, b)| b.clone()).collect()));
     }

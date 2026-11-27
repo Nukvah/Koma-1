@@ -2,11 +2,11 @@
 //! jobs that index each one and record every page's hash and location in the
 //! catalogue.
 //!
-//! - A series is a folder; each CBZ in it is a book. A CBZ in the library
-//!   root is a series of its own.
+//! - A series is a folder; each CBZ, ZIP or CB7 in it is a book, and so is
+//!   each photo folder.
 //! - Stored pages are located in place (file, offset, length) and never copied.
-//! - Compressed pages are inflated once, here, into the blob store, so
-//!   serving never decompresses anything.
+//! - Compressed pages (deflated ZIP members, every 7z page) are decompressed
+//!   once, here, into the blob store, so serving never decompresses anything.
 //!
 //! The scan is incremental. A folder whose modification time is unchanged
 //! since it was last read is not read again: only its known subfolders are
@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::archive::page::{PageError, PageLimits, copy_page};
+use crate::archive::sevenz;
 use crate::archive::size::read_size;
 use crate::archive::zip::{self, Limits, Method};
 use crate::archive::{self};
@@ -491,6 +492,7 @@ fn index_job(
         return Ok(());
     }
     let read = match &source {
+        Source::Archive if is_7z(rel) => index_7z(&path, blobs),
         Source::Archive => index_book(&path, blobs),
         Source::Photos(listing) => index_photos(library, listing),
     };
@@ -534,11 +536,20 @@ fn folder_of(rel: &str) -> &str {
     rel.rsplit_once('/').map_or("", |(dir, _)| dir)
 }
 
-/// Book archives: `.cbz`, and `.zip` (photo sets are often kept as plain zips).
+/// Book archives: `.cbz`, `.zip` (photo sets are often kept as plain zips),
+/// and 7z: `.cb7`, `.7z`.
 fn is_archive(name: &str) -> bool {
     name.rsplit_once('.').is_some_and(|(stem, ext)| {
-        !stem.is_empty() && (ext.eq_ignore_ascii_case("cbz") || ext.eq_ignore_ascii_case("zip"))
+        !stem.is_empty()
+            && ["cbz", "zip", "cb7", "7z"]
+                .iter()
+                .any(|e| ext.eq_ignore_ascii_case(e))
     })
+}
+
+fn is_7z(name: &str) -> bool {
+    name.rsplit_once('.')
+        .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("cb7") || ext.eq_ignore_ascii_case("7z"))
 }
 
 /// Books in a series named "Unsorted": loose files in the library root whose
@@ -701,6 +712,90 @@ fn index_book(path: &Path, blobs: &BlobStore) -> Result<(Vec<Page>, MetaFiles), 
     Ok((pages, meta_files))
 }
 
+/// Indexes one 7z book (CB7): read once, front to back, every page
+/// decompressed into the blob store as it comes.
+fn index_7z(path: &Path, blobs: &BlobStore) -> Result<(Vec<Page>, MetaFiles), String> {
+    let limits = PageLimits::default();
+    let wanted = |m: &sevenz::Member| -> Option<u64> {
+        if m.is_dir || archive::is_hidden(&m.name) {
+            None
+        } else if archive::is_page_name(&m.name) {
+            Some(limits.max_bytes)
+        } else if crate::meta::layer_of(&m.name).is_some() {
+            Some(crate::meta::MAX_META_BYTES)
+        } else {
+            None
+        }
+    };
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let mut found: Vec<(String, blake3::Hash, u64)> = Vec::new();
+    let mut meta_files = Vec::new();
+    let mut temps = Vec::new();
+    let read = sevenz::read(
+        io::BufReader::new(file),
+        &sevenz::Limits::default(),
+        wanted,
+        |member, data| {
+            if let Some(layer) = crate::meta::layer_of(&member.name)
+                && !archive::is_page_name(&member.name)
+            {
+                let mut bytes = Vec::new();
+                data.read_to_end(&mut bytes)?;
+                meta_files.push((layer, bytes));
+                return Ok(());
+            }
+            let (temp, out) = blobs.temp()?;
+            temps.push(temp.clone());
+            let mut tee = Tee {
+                hasher: blake3::Hasher::new(),
+                out: BufWriter::new(out),
+            };
+            let length = io::copy(data, &mut tee)?;
+            tee.out.flush()?;
+            if length != member.size {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "size differs from the archive's",
+                ));
+            }
+            let format = format_of(&member.name);
+            let hash = tee.hasher.finalize();
+            blobs.commit(&temp, &hash, &format)?;
+            temps.pop();
+            found.push((member.name.clone(), hash, length));
+            Ok(())
+        },
+    );
+    for temp in temps {
+        let _ = fs::remove_file(temp);
+    }
+    read.map_err(|e| e.to_string())?;
+    if found.is_empty() {
+        return Err("no pages".into());
+    }
+    found.sort_by(|a, b| crate::natsort::compare_paths(&a.0, &b.0));
+    let pages = found
+        .into_iter()
+        .enumerate()
+        .map(|(number, (name, hash, length))| {
+            let format = format_of(&name);
+            let size = File::open(blobs.path(&hash, &format))
+                .ok()
+                .and_then(|blob| read_size(&blob, 0, length));
+            Page {
+                number: number as i64,
+                hash,
+                format,
+                length,
+                offset: None,
+                file: None,
+                size,
+            }
+        })
+        .collect();
+    Ok((pages, meta_files))
+}
+
 /// Metadata files found in a book, as `(layer, bytes)` for [`crate::meta::read`].
 type MetaFiles = Vec<(usize, Vec<u8>)>;
 
@@ -727,15 +822,13 @@ fn archive_meta_files(file: &File, entries: &[zip::Entry]) -> MetaFiles {
 fn details(stem: &str, meta: &crate::meta::Meta) -> Details {
     let from_name = names::book_name(stem);
     let from_meta = |s: &str| s.trim().parse::<f64>().ok().filter(|n| n.is_finite());
-    let (kind, number) = match (
-        from_name.number,
-        from_meta(&meta.number),
-        from_meta(&meta.volume),
-    ) {
-        (Some(n), _, _) => (from_name.kind, Some(n)),
-        (None, Some(n), _) => (Some(names::Kind::Chapter), Some(n)),
-        (None, None, Some(n)) => (Some(names::Kind::Volume), Some(n)),
-        (None, None, None) => (None, None),
+    // Metadata wins; the file name fills the gap.
+    let (kind, number) = match (from_meta(&meta.number), from_meta(&meta.volume)) {
+        // A number the name also gives keeps the name's chapter or volume.
+        (Some(n), _) if from_name.number == Some(n) => (from_name.kind, Some(n)),
+        (Some(n), _) => (Some(names::Kind::Chapter), Some(n)),
+        (None, Some(n)) => (Some(names::Kind::Volume), Some(n)),
+        (None, None) => (from_name.kind, from_name.number),
     };
     let or_name = |list: &Vec<String>, name: Option<String>| {
         if list.is_empty() {

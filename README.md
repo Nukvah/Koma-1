@@ -4,8 +4,8 @@ A self-hosted manga and comics server: one small Rust binary, a plain web
 library and reader, built to stay fast on small hardware.
 Why and how: [MANIFESTO.md](MANIFESTO.md). Contributing: [AGENTS.md](AGENTS.md).
 
-**Status: Milestone 2 in progress.** `koma worker` indexes a library of CBZ
-and ZIP files and photo folders into SQLite and keeps it up to date, and
+**Status: Milestone 2 in progress.** `koma worker` indexes a library of CBZ,
+ZIP and CB7 files and photo folders into SQLite and keeps it up to date, and
 `koma serve` shows it in a browser: library, series and a bare reader.
 
 ## Run

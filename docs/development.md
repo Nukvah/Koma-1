@@ -5,7 +5,8 @@
 | Path | What |
 |---|---|
 | `crates/koma` | The `koma` binary and its library: CLI, server, archives, catalogue, scan |
-| `crates/koma-fixtures` | Made-up test material: PNG pages, a zip writer, a test library |
+| `crates/koma-fixtures` | Made-up test material: PNG pages, zip and 7z writers, a test library |
+| `fuzz` | Fuzz targets for every parser of hostile input (nightly, own lock file) |
 | `xtask` | Project tasks: `cargo xtask budgets`, `cargo xtask fixtures` |
 | `budgets.toml` | Every performance and size budget |
 
@@ -19,6 +20,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo deny check                        # licences, advisories, sources
 cargo xtask budgets --assets-only       # asset sizes, no Docker needed
+(cd fuzz && cargo +nightly fuzz run zip_index -- -max_total_time=60)   # and each target
 docker build -t koma:dev . && cargo xtask budgets --image koma:dev
 ```
 
@@ -63,11 +65,35 @@ the archive or after its end record, that span several disks, or that exceed
 the entry, name and directory size limits. Zip64 archives, code page 437 names
 and the Info-ZIP Unicode path field are supported.
 
+`koma::archive::sevenz` reads CB7 (and `.7z`) books with `sevenz-rust2`, pure
+Rust, LZMA and LZMA2 only. 7z is usually solid, so a book is read once, front
+to back, at ingest, and every page goes to the blob store. Before anything is
+decoded it checks the member count (50,000), the decoder memory an archive asks
+for (128 MiB; LZMA dictionaries can ask for gigabytes), the total declared size
+(8 GiB) and its ratio to the file's size (1000:1). Each member is cut at its
+own limit while decoding (256 MiB a page, 1 MiB a metadata file), and the
+decoder checks every member's size and CRC. Encrypted archives are rejected.
+
 Pages are image members (`jpg`, `jpeg`, `png`, `webp`, `gif`, `avif`, `bmp`,
 `jxl`), skipping directories, encrypted members, hidden files and `__MACOSX`.
 They are put in reading order with `koma::natsort`: numbers by value
 (`2 < 10`, full-width digits too), letters case-insensitively, folder by
 folder, with the extension only breaking ties.
+
+## Fuzzing
+
+Every parser of hostile input has a fuzz target in `fuzz/` (cargo-fuzz,
+nightly): `zip_index`, `sevenz`, `page_size`, `metadata` and `names`. CI runs
+each for 60 seconds on every pull request, seeded with the made-up library,
+and keeps any crashing input as a build artifact. To run one locally:
+
+```sh
+cargo install cargo-fuzz
+cd fuzz && cargo +nightly fuzz run sevenz -- -max_total_time=60
+```
+
+A crash is saved under `fuzz/artifacts/<target>/`; `cargo +nightly fuzz run
+<target> <file>` replays it. Fix the bug and add the case as a regular test.
 
 ## Page sizes
 
@@ -87,7 +113,7 @@ times as tall as wide is a tall strip, as in webtoons (`Size::is_tall_strip`).
 `<data>/koma.db`, a SQLite database in WAL mode (`koma::catalog`); `koma serve`
 only reads it.
 
-- A series is a folder, and each CBZ or ZIP in it is a book. Books loose in
+- A series is a folder, and each CBZ, ZIP or CB7 in it is a book. Books loose in
   the library root group by the series their file name names (see
   [naming.md](naming.md)). Hidden files and symbolic links are skipped.
 - Each book's details (title, number, chapter or volume, authors, genres,

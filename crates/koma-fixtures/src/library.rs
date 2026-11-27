@@ -6,6 +6,7 @@
 //! Starfall/Starfall v10.cbz            3 pages (v2 must sort before v10)
 //! Moonforge Chronicles/... Ch. 001.cbz Zip64, pages in a sub-folder, a double-page spread
 //! Moonforge Chronicles/... Ch. 001.5.cbz
+//! Moonforge Chronicles/... Ch. 002.cb7  solid 7z, pages p9 and p10 (p9 first)
 //! Mirelle's Garden/Mirelle's Garden 第1巻.cbz   full-width digits in page names
 //! Lone Comet.cbz                       one-shot in the library root, code page 437 names
 //! ```
@@ -151,6 +152,18 @@ pub fn write(root: &Path) -> io::Result<Vec<Book>> {
             ],
             &[],
         ),
+        build_7z(
+            "Moonforge Chronicles/Moonforge Chronicles - Ch. 002.cb7",
+            vec![
+                ("Ch 2/p10.png".into(), page(PAGE_WIDTH, PAGE_HEIGHT)),
+                ("Ch 2/p9.png".into(), page(PAGE_WIDTH, PAGE_HEIGHT)),
+                ("Ch 2/p11.png".into(), page(PAGE_WIDTH * 2, PAGE_HEIGHT)),
+            ],
+            &[(
+                "ComicInfo.xml",
+                b"<ComicInfo><Number>2</Number></ComicInfo>",
+            )],
+        ),
     ];
 
     for (book, bytes) in &books {
@@ -206,6 +219,35 @@ fn build(
     (book, zip.finish())
 }
 
+/// Writes one solid 7z book; see [`build`].
+fn build_7z(
+    path: &str,
+    pages: Vec<(String, Vec<u8>)>,
+    extras: &[(&str, &[u8])],
+) -> (Book, Vec<u8>) {
+    let files: Vec<(&str, &[u8])> = pages
+        .iter()
+        .map(|(n, d)| (n.as_str(), d.as_slice()))
+        .chain(extras.iter().copied())
+        .collect();
+    let bytes = crate::sevenz::write(&files, true);
+    let pages = reading_order(path)
+        .iter()
+        .map(|want| {
+            pages
+                .iter()
+                .find(|(name, _)| name == want)
+                .cloned()
+                .unwrap_or_else(|| panic!("{path}: no page {want}"))
+        })
+        .collect();
+    let book = Book {
+        path: path.to_owned(),
+        pages,
+    };
+    (book, bytes)
+}
+
 fn reading_order(path: &str) -> Vec<String> {
     let names: Vec<String> = match path {
         "Starfall/Starfall v01.cbz" => (1..=12).map(|n| format!("{n}.png")).collect(),
@@ -220,6 +262,13 @@ fn reading_order(path: &str) -> Vec<String> {
         }
         "Moonforge Chronicles/Moonforge Chronicles - Ch. 001.5.cbz" => {
             vec!["extra 1.png".into(), "extra 2.png".into()]
+        }
+        "Moonforge Chronicles/Moonforge Chronicles - Ch. 002.cb7" => {
+            vec![
+                "Ch 2/p9.png".into(),
+                "Ch 2/p10.png".into(),
+                "Ch 2/p11.png".into(),
+            ]
         }
         "Mirelle's Garden/Mirelle's Garden 第1巻.cbz" => {
             vec![
@@ -240,7 +289,7 @@ mod tests {
     fn writes_every_book() {
         let root = std::env::temp_dir().join(format!("koma-fixtures-{}", std::process::id()));
         let books = super::write(&root).unwrap();
-        assert_eq!(books.len(), 7);
+        assert_eq!(books.len(), 8);
         for book in &books {
             assert!(root.join(&book.path).is_file(), "{}", book.path);
             assert!(!book.pages.is_empty());
