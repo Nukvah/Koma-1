@@ -31,13 +31,24 @@ A self-hosted manga server with a web library and reader, shipped as Docker on L
 
 ## Budgets (CI-enforced)
 
+The numbers live in [budgets.toml](budgets.toml); `cargo xtask budgets` checks them on every pull request,
+on ARM64 in a container capped at 2 CPUs and 1 GB. At the time of writing:
+
 | | Limit |
 |---|---|
-| Idle RAM (serve) | < 25 MB |
-| Image size | < 20 MB |
+| Image size | 40 MiB |
+| Idle RAM | serve 40 MiB, worker 64 MiB |
 | Cached page TTFB | p99 < 10 ms |
-| Library HTML page | < 15 KB |
 | Cold start | < 200 ms |
+| Library HTML page | < 15 KiB |
+| CSS / reader JS / curator JS | 10 / 16 / 24 KiB |
+
+A budget protects speed; it does not block a feature. Raise one only with a `Budget change:` line in the pull
+request saying why. The reader-facing targets (TTFB, cold start, page size) never move.
+
+## Commands
+
+See [README.md](README.md#develop) for build, test and budget commands.
 
 ## Before you start
 

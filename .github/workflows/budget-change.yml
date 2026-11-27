@@ -1,0 +1,35 @@
+name: budget change
+
+# A budget may be raised, but only with a reason: a pull request that changes
+# budgets.toml must have a line starting with "Budget change:" in its description.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  reason:
+    name: budget change has a reason
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Look for a reason when budgets.toml changes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if git diff --quiet "$BASE" HEAD -- budgets.toml; then
+            echo "budgets.toml is unchanged."
+            exit 0
+          fi
+          git diff "$BASE" HEAD -- budgets.toml
+          if printf '%s\n' "$BODY" | grep -qiE '^[[:space:]>*_-]*budget change:[[:space:]]*[^[:space:]]'; then
+            echo "budgets.toml changed and the description says why."
+          else
+            echo "::error file=budgets.toml::budgets.toml changed. Add a line starting with 'Budget change:' to the pull request description that says why."
+            exit 1
+          fi

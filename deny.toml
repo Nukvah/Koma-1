@@ -1,0 +1,31 @@
+# cargo-deny: licences, security advisories, banned crates and sources.
+# Run locally with `cargo deny check`.
+
+[graph]
+all-features = false
+
+[advisories]
+# Every advisory fails, unmaintained crates included. Ignore one only with a reason.
+ignore = []
+
+[licenses]
+# Permissive licences only; add one here when a new dependency needs it.
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "MIT",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+# The workspace's own crates are not published.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

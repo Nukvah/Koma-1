@@ -1,0 +1,14 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+description = "Project tasks for Koma-1: budget checks run by CI (cargo xtask budgets)"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+toml = "1.2"
+
+[lints]
+workspace = true
