@@ -225,6 +225,11 @@ async fn each_library_has_its_page() {
         assert_eq!(get(addr, "/l/manga?page=0").0, 404);
         assert_eq!(get(addr, "/?page=x").0, 404);
 
+        // The default library never has collections: no such column.
+        let (status, flat) = get(addr, "/?view=table");
+        assert_eq!(status, 200);
+        assert!(flat.contains(">Lone Comet</a>") && !flat.contains(">collection"));
+
         // Names that need encoding.
         let (status, comics) = get(addr, "/l/My%20Comics");
         assert_eq!(status, 200);
@@ -320,6 +325,128 @@ async fn a_long_library_comes_a_page_at_a_time() {
         assert!(two.contains("<a href=\"/l/manga?page=1\" rel=prev>"));
         assert!(two.contains("25–30 of 30 · page 2/2</span>"));
         assert_eq!(get(addr, "/l/manga?page=3").0, 404);
+    })
+    .await
+    .unwrap();
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// A book with `pages` pages and ComicInfo.xml fields `info`.
+fn book_with(path: &Path, seed: u32, pages: u32, info: &str) {
+    let mut z = ZipWriter::new();
+    for p in 0..pages {
+        z.add(
+            &format!("{p:02}.png"),
+            &koma_fixtures::png::page(30, 45, seed * 10 + p),
+            Compression::Stored,
+        );
+    }
+    let xml = format!("<ComicInfo>{info}</ComicInfo>");
+    z.add("ComicInfo.xml", xml.as_bytes(), Compression::Stored);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, z.finish()).unwrap();
+}
+
+/// The titles of a table page's rows, in order.
+fn row_titles(html: &str) -> Vec<String> {
+    html.split("<tr><td><a href=\"/s/")
+        .skip(1)
+        .map(|row| row[row.find('>').unwrap() + 1..row.find("</a>").unwrap()].to_owned())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_table_view_sorts_by_any_column() {
+    let root = temp_root("table");
+    let lib = root.join("library");
+    let writer = |w: &str| format!("<Writer>{w}</Writer><Genre>Drama, Sea</Genre>");
+    book_with(
+        &lib.join("manga/Glass Harbor/v01.cbz"),
+        1,
+        2,
+        &writer("Sela Marr"),
+    );
+    book_with(
+        &lib.join("manga/Glass Harbor/v02.cbz"),
+        2,
+        2,
+        &writer("Sela Marr"),
+    );
+    book_with(
+        &lib.join("manga/Ironbloom/v01.cbz"),
+        3,
+        1,
+        &writer("Kade Imura"),
+    );
+    book_with(&lib.join("manga/Saga/Starfall Zero/v01.cbz"), 4, 1, "");
+    book_with(&lib.join("manga/Saga/Starfall Tales/v01.cbz"), 5, 6, "");
+    let paths = koma::cli::Paths {
+        library: lib,
+        data: root.join("data"),
+    };
+    let mut catalog = Catalog::open(&paths.data.join("koma.db")).unwrap();
+    koma::scan::scan(&paths.library, &paths.data, &mut catalog).unwrap();
+    drop(catalog);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(koma::serve::serve(
+        listener,
+        koma::serve::AppState::new(&paths),
+        async {
+            let _ = stopped.await;
+        },
+    ));
+    tokio::task::spawn_blocking(move || {
+        // The grid links to the table and back.
+        let (_, grid) = get(addr, "/l/manga");
+        assert!(grid.contains("<a href=\"/l/manga\" aria-current=page>grid</a><a href=\"/l/manga?view=table\">table</a>"));
+
+        let (status, table) = get(addr, "/l/manga?view=table");
+        assert_eq!(status, 200);
+        assert!(table.contains("<a href=\"/l/manga?view=table\" aria-current=page>table</a>"));
+        assert_eq!(
+            row_titles(&table),
+            ["Glass Harbor", "Ironbloom", "Starfall Tales", "Starfall Zero"]
+        );
+        // Title is the sort: its link turns it round.
+        assert!(table.contains("<a href=\"/l/manga?view=table&amp;sort=-title\" aria-sort=ascending>title ▴</a>"));
+        // Every column of a row.
+        assert!(table.contains(">Glass Harbor</a><td class=opt><td class=opt>Sela Marr<td class=r>2<td class=\"r opt\">4<td class=opt>Drama, Sea<td class=opt>20"));
+        assert!(table.contains(">Starfall Zero</a><td class=opt>Saga<td class=opt><td class=r>1"));
+
+        let (_, by_books) = get(addr, "/l/manga?view=table&sort=-books");
+        assert_eq!(row_titles(&by_books)[0], "Glass Harbor");
+        assert!(by_books.contains("aria-sort=descending>books ▾</a>"));
+        assert!(by_books.contains("href=\"/l/manga?view=table&amp;sort=books\" aria-sort=descending"));
+        let (_, by_pages) = get(addr, "/l/manga?view=table&sort=pages");
+        assert_eq!(
+            row_titles(&by_pages),
+            ["Ironbloom", "Starfall Zero", "Glass Harbor", "Starfall Tales"]
+        );
+        // By author: series with none last.
+        let (_, by_author) = get(addr, "/l/manga?view=table&sort=author");
+        assert_eq!(
+            row_titles(&by_author),
+            ["Ironbloom", "Glass Harbor", "Starfall Tales", "Starfall Zero"]
+        );
+
+        // A collection's table: its series only, no collection column.
+        let (status, saga) = get(addr, "/l/manga?c=Saga&view=table&sort=-title");
+        assert_eq!(status, 200);
+        assert_eq!(row_titles(&saga), ["Starfall Zero", "Starfall Tales"]);
+        assert!(!saga.contains(">collection"));
+        // A whole library that has collections shows the column.
+        let (_, whole) = get(addr, "/l/manga?view=table");
+        assert!(whole.contains(">collection"));
+
+        assert_eq!(get(addr, "/l/manga?view=list").0, 404);
+        assert_eq!(get(addr, "/l/manga?view=table&sort=colour").0, 404);
+        assert_eq!(get(addr, "/l/manga?view=table&page=2").0, 404);
+        assert_eq!(get(addr, "/l/manga?c=Nothing&view=table").0, 404);
     })
     .await
     .unwrap();

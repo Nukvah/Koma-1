@@ -192,6 +192,12 @@ fn shelf(
             .filter(|&p| p > 0)
             .ok_or(Failure::NotFound)?,
     };
+    if let Some(view) = query_value(query, "view") {
+        if view != "table" {
+            return Err(Failure::NotFound);
+        }
+        return table(c, libraries, library, collection.as_deref(), page, query);
+    }
     let all = c.series_in_library(&library.folder)?;
     // Collections in natural order, each with its series.
     let mut groups: Vec<(String, Vec<&(catalog::Series, i64)>)> = Vec::new();
@@ -257,6 +263,70 @@ fn shelf(
         items: &items,
         page,
         total: cards.len(),
+    })))
+}
+
+/// A library (or one collection) as a sortable table: `?view=table`,
+/// `&sort=<column>` (`-<column>` reversed), `&page=<n>`.
+fn table(
+    c: &Catalog,
+    libraries: &[Library],
+    library: &Library,
+    collection: Option<&str>,
+    page: usize,
+    query: Option<&str>,
+) -> Result<Html<String>, Failure> {
+    let sort = match query_value(query, "sort") {
+        None => (html::SortKey::Title, false),
+        Some(s) => html::SortKey::parse(&s).ok_or(Failure::NotFound)?,
+    };
+    let collections = collections_of(c, &library.folder)?;
+    if let Some(name) = collection
+        && !collections.iter().any(|x| x == name)
+    {
+        return Err(Failure::NotFound);
+    }
+    let mut rows = c.series_rows(&library.folder)?;
+    if let Some(name) = collection {
+        rows.retain(|r| libraries::collection_of(&r.series.path) == Some(name));
+    }
+    // Rows come in natural order of names: a stable sort keeps it for ties.
+    use crate::natsort::compare_paths;
+    match sort.0 {
+        html::SortKey::Title => {}
+        // Series with no author last.
+        html::SortKey::Author => rows.sort_by(|a, b| {
+            a.authors
+                .is_empty()
+                .cmp(&b.authors.is_empty())
+                .then_with(|| compare_paths(&a.authors, &b.authors))
+        }),
+        html::SortKey::Books => rows.sort_by_key(|r| r.books),
+        html::SortKey::Pages => rows.sort_by_key(|r| r.pages),
+        html::SortKey::Added => rows.sort_by_key(|r| r.added),
+    }
+    if sort.1 {
+        rows.reverse();
+    }
+    let start = (page - 1) * html::TABLE_PER_PAGE;
+    if start >= rows.len() && page > 1 {
+        return Err(Failure::NotFound);
+    }
+    let shown: Vec<_> = rows
+        .iter()
+        .skip(start)
+        .take(html::TABLE_PER_PAGE)
+        .cloned()
+        .collect();
+    Ok(Html(html::table(&html::Table {
+        libraries,
+        library,
+        collections: &collections,
+        collection,
+        rows: &shown,
+        sort,
+        page,
+        total: rows.len(),
     })))
 }
 

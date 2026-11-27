@@ -285,10 +285,16 @@ page of the series' first book (or the page its metadata names), shown as its
 itself if it has no variants. Covers are looked up only for the cards on the
 page.
 
+`?view=table` shows the same series as a real `<table>`: title, collection
+(for a whole library that has collections), first authors, books, pages,
+first genres and the date its first book was added, 50 rows a page. Each
+heading links to `&sort=<column>`; on the current one it turns the order
+round (`-<column>`, `aria-sort` says which).
+
 | Route | |
 |---|---|
 | `GET /` | the default library, or the first one: its collections, then its series, natural order |
-| `GET /l/{folder}` | a library (folder name percent-encoded); both take `?c={collection}` (one collection's series) and `?page={n}` |
+| `GET /l/{folder}` | a library (folder name percent-encoded); both take `?c={collection}` (one collection's series), `?page={n}`, and `?view=table` with `&sort={column}` |
 | `GET /settings` | the libraries and their settings, read-only |
 | `GET /search?q={query}&l={folder}` | search, in every library or one (see Search) |
 | `GET /s/{id}` | a series: its cover, facts and books, each with its cover |
