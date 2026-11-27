@@ -7,6 +7,7 @@
 //! | `GET /` | the default library (or the first): its series and collections |
 //! | `GET /l/{folder}` | a library: its series and collections |
 //! | `GET /settings` | the libraries and their settings, read-only |
+//! | `GET /search?q=…&l=…` | search, in every library or one |
 //! | `GET /a/koma.{hash}.css` | the stylesheet, cached for a year |
 //! | `GET /s/{id}` | a series: its books |
 //! | `GET /r/{book}/{n}` | the reader, page `n` (1-based) |
@@ -123,6 +124,7 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(library))
         .route("/l/{folder}", get(named_library))
         .route("/settings", get(settings))
+        .route("/search", get(search))
         .route("/a/{file}", get(stylesheet))
         .route("/s/{id}", get(series))
         .route("/r/{book}/{page}", get(reader))
@@ -230,12 +232,7 @@ fn shelf(
     if start >= cards.len() && page > 1 {
         return Err(Failure::NotFound);
     }
-    let series_cover = |id: i64| -> Result<Option<catalog::Cover>, Failure> {
-        Ok(match c.first_book(id)? {
-            Some(book) => c.book_cover(book, html::COVER_WIDTH, variants::VERSION)?,
-            None => None,
-        })
-    };
+    let series_cover = |id| series_cover(c, id);
     let mut items = Vec::new();
     for card in cards.iter().skip(start).take(html::PER_PAGE) {
         items.push(match card {
@@ -261,6 +258,97 @@ fn shelf(
         page,
         total: cards.len(),
     })))
+}
+
+/// A series' cover: its first book's.
+fn series_cover(c: &Catalog, series_id: i64) -> Result<Option<catalog::Cover>, Failure> {
+    Ok(match c.first_book(series_id)? {
+        Some(book) => c.book_cover(book, html::COVER_WIDTH, variants::VERSION)?,
+        None => None,
+    })
+}
+
+/// Most series, books and people/genres/tags shown for one search.
+const SEARCH_SERIES: usize = 48;
+const SEARCH_BOOKS: usize = 50;
+const SEARCH_TERMS: usize = 20;
+
+/// `GET /search?q=<query>&l=<library folder>`: series, books, then people,
+/// genres and tags that match. See [`crate::search`].
+async fn search(
+    State(state): State<AppState>,
+    RawQuery(query): RawQuery,
+) -> Result<Html<String>, Failure> {
+    let q = query_value(query.as_deref(), "q").unwrap_or_default();
+    let library = query_value(query.as_deref(), "l");
+    state
+        .query(move |c| {
+            let libraries = Library::all(c.library_keys()?);
+            let library = match &library {
+                Some(folder) => Some(
+                    libraries
+                        .iter()
+                        .find(|l| &l.folder == folder)
+                        .ok_or(Failure::NotFound)?,
+                ),
+                None => None,
+            };
+            let terms = crate::search::parse(&q);
+            let needles: Vec<&str> = terms.iter().map(|t| t.text.as_str()).collect();
+            let mut series = Vec::new();
+            let mut books = Vec::new();
+            let mut people = Vec::new();
+            if !terms.is_empty() {
+                let plan = crate::search::plan(&terms);
+                let likes: Vec<(&str, String)> = plan.likes.clone();
+                let hits = c.search(
+                    plan.fts.as_deref(),
+                    &likes,
+                    library.map(|l| l.folder.as_str()),
+                    SEARCH_SERIES + SEARCH_BOOKS,
+                )?;
+                let name_of = |folder: &str| {
+                    libraries
+                        .iter()
+                        .find(|l| l.folder == folder)
+                        .map_or_else(String::new, |l| l.name.clone())
+                };
+                for (kind, id) in hits {
+                    if kind == "s" && series.len() < SEARCH_SERIES {
+                        let Some(s) = c.series_by_id(id)? else {
+                            continue;
+                        };
+                        let count = c.books(id)?.len() as i64;
+                        let lib = name_of(libraries::library_of(&s.path));
+                        series.push((s, count, series_cover(c, id)?, lib));
+                    } else if kind == "b" && books.len() < SEARCH_BOOKS {
+                        let Some(b) = c.book(id)? else { continue };
+                        let Some(s) = c.series_by_id(b.series_id)? else {
+                            continue;
+                        };
+                        let lib = name_of(libraries::library_of(&s.path));
+                        books.push((b, s.name, lib));
+                    }
+                }
+                // People, genres and tags named like the first plain term.
+                if library.is_none()
+                    && let Some(t) = terms.iter().find(|t| t.field == crate::search::Field::Any)
+                {
+                    people =
+                        c.matching_terms(&crate::search::like_pattern(&t.text), SEARCH_TERMS)?;
+                }
+            }
+            Ok(Html(html::search(&html::Found {
+                libraries: &libraries,
+                query: &q,
+                needles: &needles,
+                library,
+                series: &series,
+                books: &books,
+                terms: &people,
+            })))
+        })
+        .await
 }
 
 /// The value of `key` in a URL query string, percent-decoded (`+` as a

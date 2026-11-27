@@ -16,6 +16,7 @@ pub mod meta;
 pub mod names;
 pub mod natsort;
 pub mod scan;
+pub mod search;
 pub mod serve;
 mod signal;
 pub mod variants;

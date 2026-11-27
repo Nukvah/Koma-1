@@ -216,8 +216,8 @@ only reads it.
   with the reason (and the file's size and time), and skipped; it never stops
   the scan, and is retried only once it changes.
 - The catalogue's schema version is in `PRAGMA user_version`. From 7 on, an
-  older version is upgraded in place, since remaking page variants is costly;
-  before 7 it is dropped and rebuilt by the next scan.
+  older version is upgraded in place, one step at a time, since remaking page
+  variants is costly; before 7 it is dropped and rebuilt by the next scan.
 
 Order is natural everywhere: SQL uses the `natsort` collation, which is
 `koma::natsort::compare_paths`.
@@ -247,6 +247,26 @@ Schema 7 is upgraded in place to 8 (one generated column and its index), so
 the catalogue and its page variants are kept; older versions are rebuilt by
 the next scan, as before.
 
+## Search
+
+`koma::search` and the `search` table: SQLite FTS5 with the trigram
+tokenizer, so any part of a word matches, in any case, and Japanese and
+Korean titles need no word splitter. One row per present series (its name,
+and its books' people, genres and tags, so a tag finds the series) and per
+present book (its title, else its file name). The worker rebuilds it in one
+transaction once indexing is done and before variants start, when the scan
+indexed, removed or moved a book, or when the index is empty (just upgraded).
+
+A query is words and `"quoted phrases"`, each maybe after `author:`, `tag:`
+or `genre:`; every term must match. A term is passed to FTS5 as a quoted
+string, so nothing typed is read as query syntax. Trigrams need three
+characters: a shorter term (`港`) is matched with LIKE on the same rows
+instead. `GET /search?q=…&l=…` shows series (cards with covers), books,
+then people, genres and tags named like the first plain term, with the
+matches in `<mark>`, in every library or one.
+
+Schema 8 is upgraded in place to 9 (the empty index, filled by the next scan).
+
 ## Serving
 
 `koma serve` (`koma::serve`) opens the catalogue read-only and renders HTML
@@ -270,6 +290,7 @@ page.
 | `GET /` | the default library, or the first one: its collections, then its series, natural order |
 | `GET /l/{folder}` | a library (folder name percent-encoded); both take `?c={collection}` (one collection's series) and `?page={n}` |
 | `GET /settings` | the libraries and their settings, read-only |
+| `GET /search?q={query}&l={folder}` | search, in every library or one (see Search) |
 | `GET /s/{id}` | a series: its cover, facts and books, each with its cover |
 | `GET /a/koma.{hash}.css` | the stylesheet, cached for a year |
 | `GET /r/{book}/{n}` | the reader, page `n` (1-based); the image links to the next page, and the last page back to the series |

@@ -14,7 +14,7 @@ pub use crate::archive::size::Size;
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
 /// How long a book whose file vanished is remembered, so that a folder that
 /// comes back (a drive mounted late, a move noticed in two steps) keeps its
@@ -113,6 +113,16 @@ CREATE TABLE variants (
     length  INTEGER NOT NULL,
     PRIMARY KEY (hash, width, format)
 ) WITHOUT ROWID;
+-- Search (crate::search): one row per present series (its name and its
+-- books' people, genres and tags) and per present book (its title), rebuilt
+-- by the worker after a scan that changed something. Trigram: any part of a
+-- word matches, so Japanese and Korean need no word splitter.
+CREATE VIRTUAL TABLE search USING fts5(
+    name, people, genres, tags,
+    kind UNINDEXED,                  -- 's' series, 'b' book
+    ref UNINDEXED,                   -- its id
+    tokenize = 'trigram'
+);
 CREATE TABLE variant_pages (
     hash     BLOB PRIMARY KEY,       -- a page whose variants are made (maybe none)
     version  INTEGER NOT NULL,       -- variants::VERSION they were made with
@@ -134,6 +144,10 @@ fn migrate_7_to_8() -> String {
     )
 }
 
+/// Schema 8 to 9: the search index, filled by the next scan.
+const MIGRATE_8_TO_9: &str = "CREATE VIRTUAL TABLE search USING fts5(
+    name, people, genres, tags, kind UNINDEXED, ref UNINDEXED, tokenize = 'trigram');";
+
 /// Tables of earlier schema versions, dropped when upgrading: until accounts
 /// exist the catalogue holds nothing that the next scan cannot rebuild.
 const DROP_OLD: &str = "
@@ -146,6 +160,7 @@ DROP TABLE IF EXISTS folders;
 DROP TABLE IF EXISTS jobs;
 DROP TABLE IF EXISTS variants;
 DROP TABLE IF EXISTS variant_pages;
+DROP TABLE IF EXISTS search;
 DROP TABLE IF EXISTS sqlite_sequence;
 ";
 
@@ -313,10 +328,16 @@ impl Catalog {
             .conn
             .pragma_query_value(None, "user_version", |r| r.get(0))?;
         match version {
-            7 => {
+            // From 7 on the catalogue is upgraded in place, one step at a
+            // time: remaking page variants is too costly to start over.
+            7 | 8 => {
+                let mut steps = String::new();
+                if version == 7 {
+                    steps.push_str(&migrate_7_to_8());
+                }
+                steps.push_str(MIGRATE_8_TO_9);
                 self.conn.execute_batch(&format!(
-                    "BEGIN; {} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;",
-                    migrate_7_to_8()
+                    "BEGIN; {steps} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
                 ))?;
                 Ok(())
             }
@@ -901,6 +922,116 @@ impl Catalog {
             )?
             .query_row([series_id], |r| r.get(0))
             .optional()
+    }
+
+    /// Refills the search index from the catalogue.
+    pub fn rebuild_search(&mut self) -> Result<(), Error> {
+        let tx = self.conn.transaction()?;
+        tx.execute_batch(
+            "DELETE FROM search;
+             INSERT INTO search (name, people, genres, tags, kind, ref)
+             SELECT series.name,
+                    coalesce(group_concat(DISTINCT CASE WHEN t.kind IN ('author', 'publisher')
+                                                   THEN t.name END), ''),
+                    coalesce(group_concat(DISTINCT CASE WHEN t.kind = 'genre' THEN t.name END), ''),
+                    coalesce(group_concat(DISTINCT CASE WHEN t.kind = 'tag' THEN t.name END), ''),
+                    's', series.id
+             FROM series JOIN books ON books.series_id = series.id AND books.gone IS NULL
+             LEFT JOIN book_terms t ON t.book_id = books.id
+             GROUP BY series.id;
+             INSERT INTO search (name, people, genres, tags, kind, ref)
+             SELECT CASE WHEN title <> '' THEN title ELSE name END, '', '', '', 'b', id
+             FROM books WHERE gone IS NULL;",
+        )?;
+        tx.commit()
+    }
+
+    /// Whether the search index is empty while there are books: a catalogue
+    /// just upgraded to the index, which the next scan fills.
+    pub fn search_needs_filling(&self) -> Result<bool, Error> {
+        self.conn.query_row(
+            "SELECT NOT EXISTS (SELECT 1 FROM search)
+                AND EXISTS (SELECT 1 FROM books WHERE gone IS NULL)",
+            [],
+            |r| r.get(0),
+        )
+    }
+
+    /// Runs a search built by [`crate::search`]: `fts` is an FTS5 query (or
+    /// none), each of `likes` a `(column, LIKE pattern)` every hit must also
+    /// match (for terms too short for trigrams), all in `library` if given.
+    /// Returns `(kind, id)`, best first: `'s'` for series, `'b'` for books.
+    pub fn search(
+        &self,
+        fts: Option<&str>,
+        likes: &[(&str, String)],
+        library: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(String, i64)>, Error> {
+        let mut sql = String::from(
+            "SELECT search.kind, search.ref FROM search
+             LEFT JOIN series ON search.kind = 's' AND series.id = search.ref
+             LEFT JOIN books ON search.kind = 'b' AND books.id = search.ref
+             LEFT JOIN series bs ON bs.id = books.series_id
+             WHERE 1",
+        );
+        let mut args: Vec<rusqlite::types::Value> = Vec::new();
+        if let Some(q) = fts {
+            args.push(q.to_owned().into());
+            sql.push_str(&format!(" AND search MATCH ?{}", args.len()));
+        }
+        for (column, pattern) in likes {
+            args.push(pattern.clone().into());
+            let n = args.len();
+            // Only the four text columns, never the kind or id.
+            let cols: &[&str] = match *column {
+                "people" | "genres" | "tags" | "name" => std::slice::from_ref(column),
+                _ => &["name", "people", "genres", "tags"],
+            };
+            let any: Vec<String> = cols
+                .iter()
+                .map(|c| format!("search.{c} LIKE ?{n} ESCAPE '\\'"))
+                .collect();
+            sql.push_str(&format!(" AND ({})", any.join(" OR ")));
+        }
+        if let Some(l) = library {
+            args.push(l.to_owned().into());
+            sql.push_str(&format!(
+                " AND coalesce(series.library, bs.library) = ?{}",
+                args.len()
+            ));
+        }
+        sql.push_str(if fts.is_some() {
+            " ORDER BY search.kind DESC, rank"
+        } else {
+            " ORDER BY search.kind DESC, search.name COLLATE natsort"
+        });
+        args.push((limit as i64).into());
+        sql.push_str(&format!(" LIMIT ?{}", args.len()));
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(args), |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?;
+        rows.collect()
+    }
+
+    /// People, genres and tags whose name contains `pattern` (a LIKE
+    /// pattern), as `(kind, name, books)`, most books first.
+    pub fn matching_terms(
+        &self,
+        pattern: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String, i64)>, Error> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT kind, name, COUNT(DISTINCT book_id) AS n FROM book_terms
+             WHERE name LIKE ?1 ESCAPE '\\'
+               AND EXISTS (SELECT 1 FROM books WHERE id = book_id AND gone IS NULL)
+             GROUP BY kind, name ORDER BY n DESC, name COLLATE natsort LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![pattern, limit as i64], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?;
+        rows.collect()
     }
 
     pub fn series_by_id(&self, id: i64) -> Result<Option<Series>, Error> {
