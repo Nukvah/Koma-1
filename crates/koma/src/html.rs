@@ -1019,7 +1019,11 @@ pub fn reader(r: &Reader<'_>) -> String {
         "<div id=bars class=bars><header class=\"rbar top\"><a href=\"{up}\">‹ {}</a><b>{}</b>\
          <span class=\"end dim\"><span id=count>{number} / {total}</span> · <kbd>←</kbd><kbd>→</kbd> \
          <kbd>space</kbd> turn · <kbd>m</kbd> bars</span><a href=\"#\">close</a></header>\
-         <footer class=\"rbar bot\"><span class=\"dim label\">direction</span><div class=seg>\
+         <footer class=\"rbar bot\"><span class=\"dim label\">mode</span><div class=seg>\
+         <a href=\"#bars\" data-mode=auto aria-current=true>auto</a><a href=\"#bars\" data-mode=single>single</a>\
+         <a href=\"#bars\" data-mode=double>double</a><a href=\"#bars\" data-mode=strip>strip</a></div>\
+         <a href=\"#bars\" data-shift>shift <kbd>s</kbd></a>\
+         <span class=\"dim label\">direction</span><div class=seg>\
          <a href=\"#bars\" data-dir=rtl{}>← rtl</a><a href=\"#bars\" data-dir=ltr{}>ltr →</a></div>\
          </footer></div>",
         escape(&r.series.name),
