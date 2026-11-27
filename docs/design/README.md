@@ -164,7 +164,10 @@ Chosen with the owner:
 - **At the end** of a book: the next one, with its cover, or back to the
   series.
 - **EPUB:** a column of serif text on paper, with size, width and spacing,
-  and a table of contents.
+  and a table of contents. One chapter at a time, scrolled (not cut into
+  screens). The book's own CSS and fonts are dropped: every book reads in the
+  reader's typography. Horizontal for every book for now; vertical writing
+  (Japanese books) comes later.
 - **Progress and reader settings** stay in the browser (localStorage) until
   accounts (M5), which move them to the account so they follow you between
   devices.

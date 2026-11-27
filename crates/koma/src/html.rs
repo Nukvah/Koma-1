@@ -9,7 +9,7 @@ use std::fmt::Write;
 
 use std::sync::LazyLock;
 
-use crate::catalog::{Book, Cover, Page, Series};
+use crate::catalog::{Book, Cover, Page, Series, TocRow};
 use crate::libraries::Library;
 use crate::variants::{self, Format};
 
@@ -234,6 +234,25 @@ fn shade(id: i64) -> &'static str {
 
 fn plural(n: i64, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// Where a book is read from: an EPUB in the EPUB reader (which goes on
+/// where it was left), any other book from its first page.
+pub fn read_url(book: &Book) -> String {
+    if crate::scan::is_epub(&book.path) {
+        format!("/e/{}/1", book.id)
+    } else {
+        format!("/r/{}/1", book.id)
+    }
+}
+
+/// A book's length: chapters for an EPUB, else pages.
+fn length(book: &Book) -> String {
+    if crate::scan::is_epub(&book.path) {
+        plural(book.page_count, "chapter", "chapters")
+    } else {
+        plural(book.page_count, "page", "pages")
+    }
 }
 
 /// One card on a library page.
@@ -611,22 +630,40 @@ pub fn series(
         shade(series.id),
         &series.name,
     );
-    let pages: i64 = books.iter().map(|(b, _)| b.page_count).sum();
+    let (epubs, others): (Vec<&Book>, Vec<&Book>) = books
+        .iter()
+        .map(|(b, _)| b)
+        .partition(|b| crate::scan::is_epub(&b.path));
+    let sum = |v: &[&Book]| v.iter().map(|b| b.page_count).sum::<i64>();
+    let mut length_chips = String::new();
+    if !others.is_empty() {
+        let _ = write!(
+            length_chips,
+            "<span>{}</span>",
+            plural(sum(&others), "page", "pages")
+        );
+    }
+    if !epubs.is_empty() {
+        let _ = write!(
+            length_chips,
+            "<span>{}</span>",
+            plural(sum(&epubs), "chapter", "chapters")
+        );
+    }
     let _ = write!(
         m,
-        "</div><div class=meta><h1>{}</h1><div class=chips><span>{}</span><span>{}</span>\
+        "</div><div class=meta><h1>{}</h1><div class=chips><span>{}</span>{length_chips}\
          <span>{}</span><span class=solid>{}</span></div><div class=actions>",
         escape(&series.name),
         plural(books.len() as i64, "book", "books"),
-        plural(pages, "page", "pages"),
         library.kind.as_str(),
         library.direction.as_str()
     );
     if let Some((first, _)) = books.first() {
         let _ = write!(
             m,
-            "<a class=\"btn primary\" href=\"/r/{}/1\">read from the start</a>",
-            first.id
+            "<a class=\"btn primary\" href=\"{}\">read from the start</a>",
+            read_url(first)
         );
     }
     let _ = write!(
@@ -636,13 +673,17 @@ pub fn series(
         books.len()
     );
     for (book, c) in books {
-        let _ = write!(m, "<div class=vol><a class=card href=\"/r/{}/1\">", book.id);
+        let _ = write!(
+            m,
+            "<div class=vol><a class=card href=\"{}\">",
+            read_url(book)
+        );
         cover(&mut m, c.as_ref(), shade(series.id), &book.name);
         let _ = write!(
             m,
             "<b>{}</b><span>{}</span></a><a class=dl href=\"/d/{}\" download>download · {}{}</a></div>",
             escape(&book.name),
-            plural(book.page_count, "page", "pages"),
+            length(book),
             book.id,
             human_size(book.size),
             if book.photos { " zip" } else { "" }
@@ -773,8 +814,8 @@ pub fn search(f: &Found<'_>) -> String {
         for (b, series, library) in f.books {
             let _ = write!(
                 m,
-                "<a href=\"/r/{}/1\"><span>{} · <b>{}</b></span><small>{}</small></a>",
-                b.id,
+                "<a href=\"{}\"><span>{} · <b>{}</b></span><small>{}</small></a>",
+                read_url(b),
                 escape(series),
                 mark(&b.name),
                 escape(library)
@@ -866,6 +907,27 @@ pub fn settings(libraries: &[Library]) -> String {
 
 /// The reader's stylesheet and script, served like [`CSS`].
 pub const READER_CSS: &str = include_str!("../assets/reader/reader.css");
+pub const EPUB_CSS: &str = include_str!("../assets/epub/epub.css");
+pub const EPUB_JS: &str = include_str!("../assets/epub/epub.js");
+
+static EPUB_CSS_URL: LazyLock<String> = LazyLock::new(|| {
+    let hex = blake3::hash(EPUB_CSS.as_bytes()).to_hex();
+    format!("/a/epub.{}.css", &hex[..16])
+});
+static EPUB_JS_URL: LazyLock<String> = LazyLock::new(|| {
+    let hex = blake3::hash(EPUB_JS.as_bytes()).to_hex();
+    format!("/a/epub.{}.js", &hex[..16])
+});
+
+/// The EPUB reader's stylesheet's URL, named by its content.
+pub fn epub_css_url() -> &'static str {
+    &EPUB_CSS_URL
+}
+
+/// The EPUB reader's script's URL, named by its content.
+pub fn epub_js_url() -> &'static str {
+    &EPUB_JS_URL
+}
 pub const READER_JS: &str = include_str!("../assets/reader/reader.js");
 
 static READER_CSS_URL: LazyLock<String> = LazyLock::new(|| {
@@ -964,13 +1026,13 @@ pub fn reader_json(
             let _ = write!(
                 end,
                 "<section><p>end of {} · {} pages</p><strong>{name}</strong>\
-                 <p>{} pages · <span class=at>not started</span></p>\
-                 <a class=\"btn primary\" href=\"/r/{}/1\" data-next={}>read {name} <kbd>space</kbd></a>\
+                 <p>{} · <span class=at>not started</span></p>\
+                 <a class=\"btn primary\" href=\"{}\" data-next={}>read {name} <kbd>space</kbd></a>\
                  <a class=btn href=\"/s/{}\">back to {back}</a></section>",
                 escape(&book.name),
                 book.page_count,
-                b.page_count,
-                b.id,
+                length(b),
+                read_url(b),
                 b.id,
                 series.id
             );
@@ -1087,6 +1149,159 @@ pub fn reader(r: &Reader<'_>) -> String {
         book.id,
         r.series.id,
         if r.rtl { "rtl" } else { "ltr" }
+    )
+}
+
+/// One chapter of an EPUB, 1-based `number`, as [`epub_chapter`] shows it.
+pub struct EpubPage<'a> {
+    pub series: &'a Series,
+    pub book: &'a Book,
+    pub number: usize,
+    pub total: usize,
+    /// The chapter, cleaned at ingest (see [`crate::epub::clean`]): written
+    /// into the page as it is.
+    pub html: &'a str,
+    pub toc: &'a [TocRow],
+    /// The book's language, `''` if unknown.
+    pub language: &'a str,
+    /// On the last chapter: the next book in the series, if there is one.
+    pub next_book: Option<&'a Book>,
+}
+
+/// An EPUB chapter: a column of text on paper. Without JavaScript it reads,
+/// with the series, contents (`#toc`) and the chapters around it as links;
+/// the script adds size, width and spacing, the bars on a tap, and the
+/// position kept in this browser.
+pub fn epub_chapter(e: &EpubPage<'_>) -> String {
+    let (book, n, total) = (e.book, e.number, e.total);
+    let up = format!("/s/{}", e.series.id);
+    let chapter_title = |i: usize| -> Option<&str> {
+        e.toc
+            .iter()
+            .find(|t| t.chapter == i as i64 - 1)
+            .map(|t| t.title.as_str())
+    };
+    let mut head = format!(
+        "<link rel=stylesheet href=\"{}\"><link rel=stylesheet href=\"{}\"><script src=\"{}\"></script>",
+        reader_css_url(),
+        epub_css_url(),
+        epub_js_url()
+    );
+    if n > 1 {
+        let _ = write!(head, "<link rel=prev href=\"{}\">", n - 1);
+    }
+    if n < total {
+        let _ = write!(
+            head,
+            "<link rel=next href=\"{}\"><link rel=prefetch href=\"{}\">",
+            n + 1,
+            n + 1
+        );
+    }
+    let name = escape(&book.name);
+    let series_name = escape(&e.series.name);
+    let here = chapter_title(n).map(escape).unwrap_or_default();
+    let mut b = String::new();
+    // The bars, shown by the script on a tap.
+    let _ = write!(
+        b,
+        "<header class=\"rbar top ebar\"><a href=\"{up}\">‹ {series_name}</a><b>{name}</b>\
+         <span class=dim>chapter {n} of {total}</span><a href=\"#toc\">contents <kbd>c</kbd></a>\
+         <span class=\"end dim label\" hidden>size</span><div class=seg hidden><a href=\"#\" data-size=-1>A−</a>\
+         <span id=size>19</span><a href=\"#\" data-size=1>A+</a></div>\
+         <span class=\"dim label\" hidden>width</span><div class=seg hidden><a href=\"#\" data-width=narrow>narrow</a>\
+         <a href=\"#\" data-width=medium>medium</a><a href=\"#\" data-width=wide>wide</a></div>\
+         <span class=\"dim label\" hidden>spacing</span><div class=seg hidden><a href=\"#\" data-space=tight>tight</a>\
+         <a href=\"#\" data-space=normal>normal</a><a href=\"#\" data-space=loose>loose</a></div></header>"
+    );
+    // The contents.
+    let _ = write!(
+        b,
+        "<nav id=toc class=toc aria-label=Contents><a class=shut href=\"#\">close</a>"
+    );
+    for t in e.toc {
+        let at = usize::try_from(t.chapter + 1).unwrap_or(0);
+        let anchor = t
+            .anchor
+            .as_deref()
+            .map(|a| format!("#e-{}", escape(a)))
+            .unwrap_or_default();
+        let current = if at == n && t.anchor.is_none() {
+            " aria-current=true"
+        } else {
+            ""
+        };
+        let _ = write!(
+            b,
+            "<a class=l{} href=\"{at}{anchor}\"{current}>{}</a>",
+            t.level.clamp(1, 3),
+            escape(&t.title)
+        );
+    }
+    b.push_str("</nav>");
+    // Where this is, for reading without the script.
+    let _ = write!(
+        b,
+        "<nav class=head><a href=\"{up}\">‹ {series_name}</a><span>{name}</span>\
+         <a href=\"#toc\">contents</a><span>chapter {n} of {total}</span></nav>"
+    );
+    let lang: String = e
+        .language
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .take(35)
+        .collect();
+    if lang.is_empty() {
+        b.push_str("<main>");
+    } else {
+        let _ = write!(b, "<main lang=\"{lang}\">");
+    }
+    b.push_str(e.html);
+    b.push_str("</main><nav class=chap aria-label=Chapters>");
+    if n > 1 {
+        let t = chapter_title(n - 1)
+            .map(escape)
+            .unwrap_or_else(|| format!("chapter {}", n - 1));
+        let _ = write!(b, "<a rel=prev href=\"{}\">‹ {t}</a>", n - 1);
+    } else {
+        let _ = write!(b, "<a href=\"{up}\">‹ {series_name}</a>");
+    }
+    if n < total {
+        let t = chapter_title(n + 1)
+            .map(escape)
+            .unwrap_or_else(|| format!("chapter {}", n + 1));
+        let _ = write!(b, "<a rel=next href=\"{}\">{t} ›</a>", n + 1);
+    } else {
+        // The end of the book: on to the next one, or back to the series.
+        match e.next_book {
+            Some(next) => {
+                let _ = write!(
+                    b,
+                    "<span class=end>end of {name}</span><a rel=next href=\"{}\">read {} ›</a>",
+                    read_url(next),
+                    escape(&next.name)
+                );
+            }
+            None => {
+                let _ = write!(
+                    b,
+                    "<span class=end>end of {name}</span><a rel=next href=\"{up}\">back to {series_name} ›</a>"
+                );
+            }
+        }
+    }
+    b.push_str("</nav>");
+    let title = if here.is_empty() {
+        format!("{name} · {n}/{total} · Koma-1")
+    } else {
+        format!("{here} · {name} · Koma-1")
+    };
+    format!(
+        "<!doctype html>\n<html lang=en><head><meta charset=utf-8>\
+         <meta name=viewport content=\"width=device-width,initial-scale=1\">\
+         <title>{title}</title>{head}</head><body class=\"reader book\" data-book={} data-n={n} \
+         data-total={total}>{b}</body></html>\n",
+        book.id
     )
 }
 

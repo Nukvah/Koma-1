@@ -20,6 +20,9 @@ image = { version = "0.25.10", default-features = false, features = ["jpeg", "pn
 jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
 koma-webp = { path = "../koma-webp" }
 rusqlite = { version = "0.43", features = ["bundled", "collation"] }
+# EPUB: container, package, contents and chapters are XML (tokenized only;
+# what the reader shows is written by Koma-1 from an allowlist).
+quick-xml = { version = "0.42", default-features = false, features = ["escape-html"] }
 serde_json = "1"
 # 7z (CB7) in pure Rust; LZMA and LZMA2 only (no encryption, no extra codecs).
 sevenz-rust2 = { version = "0.27", default-features = false }

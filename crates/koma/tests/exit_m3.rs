@@ -78,6 +78,8 @@ async fn ten_thousand_series_in_small_chunks() {
                 size: 2000,
                 mtime: 0,
                 pages: &[page],
+                chapters: &[],
+                toc: &[],
                 details: &details,
             },
             1_795_737_600,

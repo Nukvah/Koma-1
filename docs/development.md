@@ -84,8 +84,10 @@ folder, with the extension only breaking ties.
 ## Fuzzing
 
 Every parser of hostile input has a fuzz target in `fuzz/` (cargo-fuzz,
-nightly): `zip_index`, `sevenz`, `page_size`, `metadata`, `names` and
-`variants` (decoding, resizing and encoding a page). CI runs
+nightly): `zip_index`, `sevenz`, `page_size`, `metadata`, `names`,
+`variants` (decoding, resizing and encoding a page) and `epub` (the
+package, the contents, and the chapter cleaner, whose output must keep to
+its allowlist of tags and attributes). CI runs
 each for 60 seconds on every pull request, seeded with the made-up library,
 and keeps any crashing input as a build artifact. To run one locally:
 
@@ -163,7 +165,7 @@ serving never resizes or transcodes (`koma::variants`):
 `<data>/koma.db`, a SQLite database in WAL mode (`koma::catalog`); `koma serve`
 only reads it.
 
-- A series is a folder, and each CBZ, ZIP or CB7 in it is a book. Books loose in
+- A series is a folder, and each CBZ, ZIP, CB7 or EPUB in it is a book. Books loose in
   the library root group by the series their file name names (see
   [naming.md](naming.md)). Hidden files and symbolic links are skipped.
 - Each book's details (title, number, chapter or volume, authors, genres,
@@ -336,6 +338,61 @@ one back to the series; for the last book, only the way back. Back,
 Escape or a tap outside closes it. The card's HTML comes with
 `GET /b/{book}` (`end`), built by the server so names are escaped there.
 
+## EPUB
+
+`koma::epub`, at ingest (`scan::index_epub`). `META-INF/container.xml` names
+the package (OPF): its metadata (title, creators, subjects as tags,
+language, date, description, series and position from EPUB 3
+`belongs-to-collection` or Calibre's tags, `page-progression-direction`),
+its files and their order. That metadata is the weakest layer, under
+`ComicInfo.xml` and `metadata.json`. The contents come from the EPUB 3
+navigation document (its `epub:type="toc"` list), else the EPUB 2 NCX.
+Fixed-layout books (`rendition:layout` `pre-paginated`) are refused with a
+scan error until M11.
+
+The book's pictures (JPEG, PNG, GIF, WebP) are its **pages**, the cover
+first, so covers, page variants, `/p/` and downloads work as for any book.
+Its **chapters** (the spine) are rewritten by `epub::clean` and stored in
+the blob store as `<hash>.html` (`chapters` table); `toc` holds the
+contents. A book's `page_count` is its number of chapters.
+
+`clean` tokenizes the XHTML (quick-xml, forgiving: end tags need not
+match, HTML's named entities are known) and writes the body back from an
+allowlist: headings, paragraphs, emphasis, lists, tables, figures, ruby,
+links and pictures; `section`, `article` and the like become `div`; unknown
+elements are unwrapped (their text kept); `script`, `style`, forms, frames,
+objects, media, MathML and `hidden` content are dropped with what is in
+them; of SVG only `<image>` is kept, as a picture. Attributes kept: `id`
+(as `e-<id>`, so it cannot clash with the reader's own), `lang`, `dir`,
+`colspan`/`rowspan`, `ol` `start`/`type`, and `href`/`src` rewritten: a
+link to another chapter becomes its number (relative to `/e/<book>/`), to a
+picture its `/p/` URL; links out keep `http(s):` and `mailto:` only and
+open in a new tab without a referrer. Everything is written by `clean`
+itself, every text and value escaped, and output stays well-formed
+whatever the input. The book's CSS and fonts are not kept: every book reads
+in the reader's typography.
+
+**Reading** (`GET /e/{book}/{n}`, `html::epub_chapter`, design
+docs/design/reader-epub.html): a column of text on paper, one chapter a
+page, scrolled. The page is complete without JavaScript: where it is (the
+series, the contents at `#toc`, chapter n of N), the chapter, and the
+chapters before and after; the last one leads to the next book in the
+series, or back to the series. The next chapter is prefetched. It is sent
+with a Content-Security-Policy that allows only Koma-1's own stylesheets,
+script and pictures: the cleaner is the first wall, this the second.
+`/r/` sends an EPUB to `/e/`.
+
+`assets/epub/epub.js` (budget "EPUB reader JS", loaded only here, in
+`<head>` so the text is drawn in its size from the start) adds the text's
+size (14 to 28 px), width (narrow, medium, wide) and spacing (tight,
+normal, loose), kept in the browser for every book; the bars on a tap or
+`m`; the contents on `c`; the next and previous chapters on the arrow keys,
+and the next on space at the end of one. The position is the chapter and
+the first block of text on screen (`koma:epos:<book>`), kept in the
+browser until accounts (M5); a book opened from outside it (the series, a
+search) goes back there. Vertical writing (Japanese books) comes later;
+every book reads horizontally for now.
+
 ## Search
 
 `koma::search` and the `search` table: SQLite FTS5 with the trigram
@@ -418,6 +475,7 @@ round (`-<column>`, `aria-sort` says which).
 | `GET /a/koma.{hash}.css`, `/a/scroll.{hash}.js` | the stylesheet and the library script, cached for a year |
 | `GET /d/{book}` | the book's original: the file as it is, or a photo folder as a stored ZIP of its images in reading order |
 | `GET /r/{book}/{n}` | the reader, page `n` (1-based): see Reader |
+| `GET /e/{book}/{n}` | an EPUB's chapter `n` (1-based): see EPUB |
 | `GET /b/{book}` | the reader's JSON: the book's pages with their sizes and variants, and the card for its end |
 | `GET /p/{hash}.{ext}` | a page's bytes, `Cache-Control: public, max-age=31536000, immutable`, `ETag` = hash |
 | `GET /p/{hash}.{width}.v{version}.{format}` | a page variant (`jpg` or `webp`; `variants::url`), cached the same way; 404 if that variant was not made, or not with this version |

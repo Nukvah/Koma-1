@@ -27,7 +27,10 @@ use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use axum::extract::{Path as UrlPath, RawQuery, State};
-use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
+use axum::http::header::{
+    CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_SECURITY_POLICY, CONTENT_TYPE, ETAG, IF_NONE_MATCH,
+    LOCATION,
+};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
@@ -130,6 +133,7 @@ pub fn router(state: AppState) -> Router {
         .route("/a/{file}", get(stylesheet))
         .route("/s/{id}", get(series))
         .route("/r/{book}/{page}", get(reader))
+        .route("/e/{book}/{chapter}", get(epub_chapter))
         .route("/d/{book}", get(download))
         .route("/b/{book}", get(book_json))
         .route("/p/{file}", get(page_bytes))
@@ -473,6 +477,10 @@ async fn stylesheet(UrlPath(file): UrlPath<String>) -> Result<Response, Failure>
         ("text/css; charset=utf-8", html::READER_CSS)
     } else if url == html::reader_js_url() {
         ("text/javascript; charset=utf-8", html::READER_JS)
+    } else if url == html::epub_css_url() {
+        ("text/css; charset=utf-8", html::EPUB_CSS)
+    } else if url == html::epub_js_url() {
+        ("text/javascript; charset=utf-8", html::EPUB_JS)
     } else {
         return Err(Failure::NotFound);
     };
@@ -531,12 +539,17 @@ fn collections_of(c: &Catalog, library: &str) -> Result<Vec<String>, Failure> {
 async fn reader(
     State(state): State<AppState>,
     UrlPath((book_id, number)): UrlPath<(i64, usize)>,
-) -> Result<Html<String>, Failure> {
+) -> Result<Response, Failure> {
     state
         .query(move |c| {
             // Only what the page shows: this page and its variants (the
             // script gets them all once, from /b/<book>).
             let book = c.book(book_id)?.ok_or(Failure::NotFound)?;
+            if crate::scan::is_epub(&book.path) {
+                // An EPUB is read as text.
+                let to = format!("/e/{book_id}/1");
+                return Ok((StatusCode::SEE_OTHER, [(LOCATION, to)]).into_response());
+            }
             let total = usize::try_from(book.page_count).unwrap_or(0);
             if number == 0 || number > total {
                 return Err(Failure::NotFound);
@@ -570,9 +583,67 @@ async fn reader(
                 number,
                 total,
                 rtl,
-            })))
+            }))
+            .into_response())
         })
         .await
+}
+
+/// What an EPUB chapter page may load: its own stylesheets, script and
+/// pictures, nothing else. The chapter is cleaned at ingest; this is the
+/// second wall.
+const EPUB_CSP: &str = "default-src 'none'; img-src 'self'; style-src 'self'; \
+     script-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; \
+     frame-ancestors 'none'";
+
+/// `GET /e/<book>/<n>`: chapter `n` (1-based) of an EPUB.
+async fn epub_chapter(
+    State(state): State<AppState>,
+    UrlPath((book_id, number)): UrlPath<(i64, usize)>,
+) -> Result<Response, Failure> {
+    let blobs = state.inner.blobs.clone();
+    let page = state
+        .query(move |c| {
+            let book = c.book(book_id)?.ok_or(Failure::NotFound)?;
+            let total = usize::try_from(book.page_count).unwrap_or(0);
+            if !crate::scan::is_epub(&book.path) || number == 0 || number > total {
+                return Err(Failure::NotFound);
+            }
+            let chapter = c
+                .chapter(book_id, number as i64 - 1)?
+                .ok_or(Failure::NotFound)?;
+            let html = std::fs::read_to_string(blobs.path(&chapter.hash, "html"))
+                .map_err(|e| Failure::Internal(format!("chapter: {e}")))?;
+            let series = c.series_by_id(book.series_id)?.ok_or(Failure::NotFound)?;
+            let toc = c.toc(book_id)?;
+            let language = c.book_language(book_id)?;
+            // Only on the last chapter: the book after it.
+            let next_book = if number == total {
+                let books = c.books(book.series_id)?;
+                books.iter().skip_while(|b| b.id != book_id).nth(1).cloned()
+            } else {
+                None
+            };
+            Ok(html::epub_chapter(&html::EpubPage {
+                series: &series,
+                book: &book,
+                number,
+                total,
+                html: &html,
+                toc: &toc,
+                language: &language,
+                next_book: next_book.as_ref(),
+            }))
+        })
+        .await?;
+    Ok((
+        [
+            (CONTENT_TYPE, "text/html; charset=utf-8"),
+            (CONTENT_SECURITY_POLICY, EPUB_CSP),
+        ],
+        page,
+    )
+        .into_response())
 }
 
 /// A book's pages with their variants, for the reader.

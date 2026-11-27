@@ -10,6 +10,7 @@ use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[derive(Clone)]
 pub struct BlobStore {
     root: PathBuf,
 }
@@ -65,6 +66,22 @@ impl BlobStore {
             fs::rename(temp, &path)?;
         }
         Ok(path)
+    }
+
+    /// Stores `bytes` under their hash (and `format`), unless already
+    /// there; returns the hash.
+    pub fn put(&self, bytes: &[u8], format: &str) -> io::Result<blake3::Hash> {
+        let hash = blake3::hash(bytes);
+        if !self.path(&hash, format).exists() {
+            let (temp, mut file) = self.temp()?;
+            let written = io::Write::write_all(&mut file, bytes).and_then(|_| file.sync_all());
+            if let Err(e) = written {
+                let _ = fs::remove_file(&temp);
+                return Err(e);
+            }
+            self.commit(&temp, &hash, format)?;
+        }
+        Ok(hash)
     }
 
     /// Moves a finished temp file to a variant's place (same name, same

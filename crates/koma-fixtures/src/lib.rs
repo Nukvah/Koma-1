@@ -13,6 +13,7 @@
 //! Every title and name here is invented.
 
 pub mod checksum;
+pub mod epub;
 pub mod library;
 pub mod png;
 pub mod sevenz;
