@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use koma::blobs::BlobStore;
 use koma::catalog::Catalog;
-use koma::scan::{ScanReport, scan};
+use koma::catalog::JobKind;
+use koma::scan::{Check, ScanReport, discover, run_jobs, scan};
 use koma_fixtures::zip::{Compression, ZipWriter};
 
 struct Setup {
@@ -32,6 +33,7 @@ impl Setup {
         let data = root.join("data");
         fs::create_dir_all(&data).unwrap();
         let books = koma_fixtures::library::write(&library).unwrap();
+        backdate(&library);
         let catalog = Catalog::open(&data.join("koma.db")).unwrap();
         Self {
             root,
@@ -44,6 +46,20 @@ impl Setup {
 
     fn scan(&mut self) -> ScanReport {
         scan(&self.library, &self.data, &mut self.catalog).unwrap()
+    }
+
+    /// A periodic rescan: folder times only.
+    fn quick_scan(&mut self) -> ScanReport {
+        let mut report = discover(&self.library, &mut self.catalog, Check::Folders).unwrap();
+        run_jobs(
+            &self.library,
+            &self.data,
+            &mut self.catalog,
+            &mut report,
+            &|| false,
+        )
+        .unwrap();
+        report
     }
 
     /// Reads a page back from wherever the catalogue says it is.
@@ -72,6 +88,20 @@ impl Setup {
     }
 }
 
+/// Sets every folder's modification time to the same moment long ago, as if
+/// the library had been written then. (A folder changed in the last seconds is
+/// always read again, since coarse file system times could hide a change.)
+fn backdate(dir: &Path) {
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+    for entry in fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_dir() {
+            backdate(&entry.path());
+        }
+    }
+    fs::File::open(dir).unwrap().set_modified(old).unwrap();
+}
+
 impl Drop for Setup {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
@@ -86,6 +116,7 @@ fn every_page_is_found_again_byte_for_byte() {
         report,
         ScanReport {
             indexed: 7,
+            folders_read: 4,
             ..ScanReport::default()
         }
     );
@@ -154,15 +185,18 @@ fn every_page_is_found_again_byte_for_byte() {
 fn rescans_skip_unchanged_books_and_follow_changes() {
     let mut s = Setup::new();
     s.scan();
+    // Nothing changed: no folder is read again, each book is only checked.
     assert_eq!(
         s.scan(),
         ScanReport {
             unchanged: 7,
+            folders_skipped: 4,
             ..ScanReport::default()
         }
     );
 
-    // A one-shot is deleted, and a book is replaced by a different file.
+    // A one-shot is deleted, and a book is overwritten in place by a
+    // different file (which leaves its folder's time as it was).
     fs::remove_file(s.library.join("Lone Comet.cbz")).unwrap();
     let mut w = ZipWriter::new();
     w.add(
@@ -178,6 +212,8 @@ fn rescans_skip_unchanged_books_and_follow_changes() {
             indexed: 1,
             unchanged: 5,
             removed: 1,
+            folders_read: 1,
+            folders_skipped: 3,
             ..ScanReport::default()
         }
     );
@@ -201,6 +237,144 @@ fn rescans_skip_unchanged_books_and_follow_changes() {
 }
 
 #[test]
+fn a_restart_reads_nothing_again() {
+    let mut s = Setup::new();
+    s.scan();
+    drop(std::mem::replace(
+        &mut s.catalog,
+        Catalog::open(&s.data.join("koma.db")).unwrap(),
+    ));
+    assert_eq!(
+        s.quick_scan(),
+        ScanReport {
+            folders_skipped: 4,
+            ..ScanReport::default()
+        }
+    );
+}
+
+#[test]
+fn quick_rescans_read_only_changed_folders() {
+    let mut s = Setup::new();
+    s.scan();
+    let starfall = s.library.join("Starfall");
+    let one_page = |seed| {
+        let mut w = ZipWriter::new();
+        w.add(
+            "1.png",
+            &koma_fixtures::png::page(20, 30, seed),
+            Compression::Stored,
+        );
+        w.finish()
+    };
+
+    // A new book: only its folder is read, and only the new book indexed.
+    fs::write(starfall.join("Starfall v11.cbz"), one_page(1)).unwrap();
+    let report = s.quick_scan();
+    assert_eq!((report.indexed, report.folders_read), (1, 1));
+    assert_eq!(
+        report.unchanged, 3,
+        "the folder's other books are only stat'ed"
+    );
+
+    // Folders changed seconds ago are read once more (see `backdate`); let
+    // them settle so each step below only sees its own change.
+    let settle = |s: &mut Setup| {
+        backdate(&s.library);
+        s.quick_scan();
+    };
+
+    // A new series folder, deep down: the folders above it are read too,
+    // since adding it changed their times.
+    settle(&mut s);
+    let deep = s.library.join("Shelf/Moonforge");
+    fs::create_dir_all(&deep).unwrap();
+    fs::write(deep.join("Moonforge 01.cbz"), one_page(2)).unwrap();
+    let report = s.quick_scan();
+    assert_eq!((report.indexed, report.folders_read), (1, 3));
+    assert!(
+        s.book_paths()
+            .contains(&"Shelf/Moonforge/Moonforge 01.cbz".to_string())
+    );
+
+    // A whole folder deleted: its books are forgotten, and its series.
+    settle(&mut s);
+    fs::remove_dir_all(s.library.join("Shelf")).unwrap();
+    let report = s.quick_scan();
+    assert_eq!((report.removed, report.folders_read), (1, 1));
+    assert!(!s.book_paths().iter().any(|p| p.starts_with("Shelf/")));
+    assert!(
+        s.catalog
+            .series()
+            .unwrap()
+            .iter()
+            .all(|x| x.name != "Moonforge")
+    );
+
+    // A folder renamed: the old path is forgotten, the new one indexed.
+    settle(&mut s);
+    fs::rename(&starfall, s.library.join("Starfall (old)")).unwrap();
+    let report = s.quick_scan();
+    assert_eq!((report.indexed, report.removed), (4, 4));
+    assert!(s.book_paths().iter().all(|p| !p.starts_with("Starfall/")));
+
+    settle(&mut s);
+    assert_eq!(s.quick_scan().folders_read, 0);
+}
+
+#[test]
+fn jobs_cut_short_run_again_and_are_given_up_after_three_tries() {
+    let mut s = Setup::new();
+    let mut report = discover(&s.library, &mut s.catalog, Check::Files).unwrap();
+    assert_eq!(s.catalog.job_count().unwrap(), 7);
+
+    // The worker dies in the middle of a job: it stays claimed.
+    let job = s.catalog.claim_job().unwrap().unwrap();
+    assert_eq!((job.kind, job.attempts), (JobKind::Index, 1));
+    drop(std::mem::replace(
+        &mut s.catalog,
+        Catalog::open(&s.data.join("koma.db")).unwrap(),
+    ));
+    assert_eq!(s.catalog.requeue_running().unwrap(), 1);
+    run_jobs(&s.library, &s.data, &mut s.catalog, &mut report, &|| false).unwrap();
+    assert_eq!(report.indexed, 7);
+    assert_eq!(s.catalog.job_count().unwrap(), 0);
+    assert!(s.catalog.errors().unwrap().is_empty());
+
+    // A book the worker dies on every time is given up after three tries.
+    assert!(s.catalog.enqueue(JobKind::Index, &job.path).unwrap());
+    assert!(
+        !s.catalog.enqueue(JobKind::Index, &job.path).unwrap(),
+        "no duplicates"
+    );
+    for _ in 0..3 {
+        s.catalog.claim_job().unwrap().unwrap();
+        s.catalog.requeue_running().unwrap();
+    }
+    let mut report = ScanReport::default();
+    run_jobs(&s.library, &s.data, &mut s.catalog, &mut report, &|| false).unwrap();
+    assert_eq!(report.failed, 1);
+    let errors = s.catalog.errors().unwrap();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].0, job.path);
+    assert!(errors[0].1.starts_with("gave up after 3 attempts"));
+}
+
+#[test]
+fn a_stop_is_honoured_between_jobs() {
+    let mut s = Setup::new();
+    let mut report = discover(&s.library, &mut s.catalog, Check::Files).unwrap();
+    let done = std::cell::Cell::new(0);
+    run_jobs(&s.library, &s.data, &mut s.catalog, &mut report, &|| {
+        done.set(done.get() + 1);
+        done.get() > 2
+    })
+    .unwrap();
+    assert_eq!(report.indexed, 2);
+    assert_eq!(s.catalog.job_count().unwrap(), 5);
+}
+
+#[test]
 fn broken_files_are_recorded_and_skipped() {
     let mut s = Setup::new();
     fs::write(
@@ -214,6 +388,10 @@ fn broken_files_are_recorded_and_skipped() {
 
     let report = s.scan();
     assert_eq!((report.indexed, report.failed), (7, 2));
+    // Unchanged broken files are not read again.
+    let report = s.scan();
+    assert_eq!((report.indexed, report.failed), (0, 0));
+    assert_eq!(s.catalog.errors().unwrap().len(), 2);
     let errors = s.catalog.errors().unwrap();
     assert_eq!(
         errors,

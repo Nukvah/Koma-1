@@ -5,17 +5,19 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 pub const DEFAULT_LISTEN: &str = "0.0.0.0:8080";
 pub const DEFAULT_LIBRARY: &str = "/library";
 pub const DEFAULT_DATA: &str = "/data";
+pub const DEFAULT_RESCAN_MINUTES: &str = "15";
 
 pub const USAGE: &str = "\
 Usage: koma <command> [options]
 
 Commands:
   serve        Serve the library over HTTP
-  worker       Scan the library, then wait for jobs (none yet)
+  worker       Scan the library and index what changed, then rescan regularly
   scan         Scan the library once and exit
   scrub        Check stored data for corruption (nothing to check yet)
   healthcheck  Exit 0 if the local server answers GET /healthz
@@ -27,17 +29,28 @@ Options:
                     Default: $KOMA_LIBRARY, else /library
   --data <dir>      Catalogue and blobs (serve reads, worker and scan write).
                     Default: $KOMA_DATA, else /data
+  --rescan <min>    Minutes between the worker's rescans; 0: only at start.
+                    Default: $KOMA_RESCAN, else 15
   -h, --help        Show this help
   -V, --version     Show the version
 ";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
-    Serve { listen: SocketAddr, paths: Paths },
-    Worker(Paths),
+    Serve {
+        listen: SocketAddr,
+        paths: Paths,
+    },
+    Worker {
+        paths: Paths,
+        /// Time between rescans; `None`: only when the worker starts.
+        rescan: Option<Duration>,
+    },
     Scan(Paths),
     Scrub,
-    Healthcheck { listen: SocketAddr },
+    Healthcheck {
+        listen: SocketAddr,
+    },
     Help,
     Version,
 }
@@ -55,6 +68,7 @@ pub struct Env {
     pub listen: Option<OsString>,
     pub library: Option<OsString>,
     pub data: Option<OsString>,
+    pub rescan: Option<OsString>,
 }
 
 impl Env {
@@ -63,6 +77,7 @@ impl Env {
             listen: std::env::var_os("KOMA_LISTEN"),
             library: std::env::var_os("KOMA_LIBRARY"),
             data: std::env::var_os("KOMA_DATA"),
+            rescan: std::env::var_os("KOMA_RESCAN"),
         }
     }
 }
@@ -102,7 +117,14 @@ where
                 listen: listen(opts.get("--listen"), env.listen)?,
             })
         }
-        "worker" => paths(rest, env).map(Command::Worker),
+        "worker" => {
+            let opts = options(rest, &["--library", "--data", "--rescan"])?;
+            let rescan = rescan(opts.get("--rescan"), env.rescan.clone())?;
+            Ok(Command::Worker {
+                paths: paths_from(&opts, env)?,
+                rescan,
+            })
+        }
         "scan" => paths(rest, env).map(Command::Scan),
         "scrub" => options(rest, &[]).map(|_| Command::Scrub),
         other => Err(format!("unknown command: {other}")),
@@ -138,6 +160,15 @@ fn listen(flag: Option<&String>, env: Option<OsString>) -> Result<SocketAddr, St
     let raw = pick(flag, env, "KOMA_LISTEN", DEFAULT_LISTEN)?;
     raw.parse()
         .map_err(|_| format!("not a socket address (expected ip:port): {raw}"))
+}
+
+/// `--rescan` wins over `KOMA_RESCAN`, which wins over the default.
+fn rescan(flag: Option<&String>, env: Option<OsString>) -> Result<Option<Duration>, String> {
+    let raw = pick(flag, env, "KOMA_RESCAN", DEFAULT_RESCAN_MINUTES)?;
+    let minutes: u32 = raw
+        .parse()
+        .map_err(|_| format!("not a number of minutes: {raw}"))?;
+    Ok((minutes > 0).then(|| Duration::from_secs(u64::from(minutes) * 60)))
 }
 
 fn paths(rest: &[String], env: Env) -> Result<Paths, String> {
@@ -200,10 +231,13 @@ mod tests {
     fn subcommands() {
         assert_eq!(
             p(&["worker"], None),
-            Ok(Command::Worker(Paths {
-                library: DEFAULT_LIBRARY.into(),
-                data: DEFAULT_DATA.into()
-            }))
+            Ok(Command::Worker {
+                paths: Paths {
+                    library: DEFAULT_LIBRARY.into(),
+                    data: DEFAULT_DATA.into()
+                },
+                rescan: Some(Duration::from_secs(15 * 60)),
+            })
         );
         assert_eq!(p(&["scrub"], None), Ok(Command::Scrub));
         assert_eq!(p(&["--version"], None), Ok(Command::Version));
@@ -246,6 +280,27 @@ mod tests {
             }))
         );
         assert!(p(&["healthcheck", "--library", "/x"], None).is_err());
+    }
+
+    #[test]
+    fn rescan_interval() {
+        let worker = |args: &[&str], env: Option<&str>| match parse(
+            args.iter().map(OsString::from),
+            Env {
+                rescan: env.map(OsString::from),
+                ..Env::default()
+            },
+        ) {
+            Ok(Command::Worker { rescan, .. }) => Ok(rescan),
+            other => Err(format!("{other:?}")),
+        };
+        let minutes = |m: u64| Ok(Some(Duration::from_secs(m * 60)));
+        assert_eq!(worker(&["worker"], Some("5")), minutes(5));
+        assert_eq!(worker(&["worker", "--rescan=60"], Some("5")), minutes(60));
+        assert_eq!(worker(&["worker", "--rescan", "0"], None), Ok(None));
+        assert!(worker(&["worker", "--rescan", "soon"], None).is_err());
+        assert!(worker(&["worker", "--rescan", "-1"], None).is_err());
+        assert!(p(&["scan", "--rescan", "5"], None).is_err());
     }
 
     #[test]
