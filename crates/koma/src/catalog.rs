@@ -14,7 +14,7 @@ pub use crate::archive::size::Size;
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 /// How long a book whose file vanished is remembered, so that a folder that
 /// comes back (a drive mounted late, a move noticed in two steps) keeps its
@@ -30,8 +30,10 @@ CREATE TABLE series (
     id    INTEGER PRIMARY KEY AUTOINCREMENT,  -- never reused: ids are kept for good
     path  TEXT NOT NULL UNIQUE,      -- folder relative to the library; for books loose in the
                                      -- root, NUL + the lower-cased series name from the file name
-    name  TEXT NOT NULL
+    name  TEXT NOT NULL,
+    library TEXT GENERATED ALWAYS AS ({LIBRARY_OF_PATH}) VIRTUAL
 );
+CREATE INDEX series_library ON series(library);
 CREATE TABLE books (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,  -- never reused: ids are kept for good
     series_id  INTEGER NOT NULL REFERENCES series(id),
@@ -117,6 +119,20 @@ CREATE TABLE variant_pages (
     error    TEXT                    -- why it has none, if it could not be decoded
 ) WITHOUT ROWID;
 ";
+
+/// The library a series is in, from its path (see `crate::libraries`): the
+/// first folder of a path with more than one, else `''`, the default library.
+const LIBRARY_OF_PATH: &str = "CASE WHEN substr(path, 1, 1) <> char(0) AND instr(path, '/') > 0 \
+     THEN substr(path, 1, instr(path, '/') - 1) ELSE '' END";
+
+/// Schema 7 to 8: series get their library. Nothing else changes, so the
+/// catalogue (and the page variants, which are costly to remake) is kept.
+fn migrate_7_to_8() -> String {
+    format!(
+        "ALTER TABLE series ADD COLUMN library TEXT GENERATED ALWAYS AS ({LIBRARY_OF_PATH}) VIRTUAL;
+         CREATE INDEX series_library ON series(library);"
+    )
+}
 
 /// Tables of earlier schema versions, dropped when upgrading: until accounts
 /// exist the catalogue holds nothing that the next scan cannot rebuild.
@@ -287,10 +303,19 @@ impl Catalog {
             .conn
             .pragma_query_value(None, "user_version", |r| r.get(0))?;
         match version {
-            0..SCHEMA_VERSION => {
-                let drop = if version > 0 { DROP_OLD } else { "" };
+            7 => {
                 self.conn.execute_batch(&format!(
-                    "BEGIN; {drop} {SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                    "BEGIN; {} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;",
+                    migrate_7_to_8()
+                ))?;
+                Ok(())
+            }
+            0..SCHEMA_VERSION => {
+                // Before 7, nothing was kept that a scan cannot rebuild.
+                let drop = if version > 0 { DROP_OLD } else { "" };
+                let schema = SCHEMA.replace("{LIBRARY_OF_PATH}", LIBRARY_OF_PATH);
+                self.conn.execute_batch(&format!(
+                    "BEGIN; {drop} {schema} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
                 ))?;
                 Ok(())
             }
@@ -777,6 +802,41 @@ impl Catalog {
              ORDER BY series.name COLLATE natsort, series.path COLLATE natsort",
         )?;
         let rows = stmt.query_map([], |r| {
+            Ok((
+                Series {
+                    id: r.get(0)?,
+                    path: r.get(1)?,
+                    name: r.get(2)?,
+                },
+                r.get(3)?,
+            ))
+        })?;
+        rows.collect()
+    }
+
+    /// Every library with a present book, as `(folder, series count)`:
+    /// `''` (the default library) first, then folders in natural order.
+    pub fn library_keys(&self) -> Result<Vec<(String, i64)>, Error> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT library, COUNT(*) FROM series
+             WHERE EXISTS (SELECT 1 FROM books WHERE series_id = series.id AND gone IS NULL)
+             GROUP BY library ORDER BY library <> '', library COLLATE natsort",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
+    }
+
+    /// The series of one library (`''`: the default one) with how many
+    /// books each has, in natural order of their names.
+    pub fn series_in_library(&self, library: &str) -> Result<Vec<(Series, i64)>, Error> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT series.id, series.path, series.name, COUNT(books.id)
+             FROM series JOIN books ON books.series_id = series.id AND books.gone IS NULL
+             WHERE series.library = ?1
+             GROUP BY series.id
+             ORDER BY series.name COLLATE natsort, series.path COLLATE natsort",
+        )?;
+        let rows = stmt.query_map([library], |r| {
             Ok((
                 Series {
                     id: r.get(0)?,

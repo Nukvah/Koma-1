@@ -11,6 +11,28 @@ Koma-1 is one image with two long-running modes that share two folders:
 answers HTTP on port 8080. Run them as two containers on the same volumes,
 or run `koma scan` once and then only `serve`.
 
+## Laying out /library
+
+Each top-level folder that holds series folders is a **library**; a folder of
+series folders inside a library is a **collection**. Series folders, loose
+books and photo folders straight in `/library` go in the default library,
+"Library", so a flat layout works as it is.
+
+```text
+/library/
+  Starfall/Starfall v01.cbz               series Starfall, in "Library"
+  Lone Comet.cbz                          a loose book, in "Library"
+  manga/Moonforge/Moonforge v01.cbz       series Moonforge, in library "Manga"
+  manga/Starfall Saga/Starfall Zero/…     collection "Starfall Saga", in "Manga"
+  comics/Harbor Lights/…                  library "Comics"
+```
+
+A library's settings come from its folder's name: the name, capitalised; the
+type: comics if the name says "comic", cosplay if it says "cosplay", manga
+otherwise; the reading direction: right to left for manga, left to right for
+the others (a book's own metadata wins); and a colour. `/settings` shows them.
+They can be changed once accounts exist.
+
 ## Docker Compose
 
 ```yaml

@@ -215,12 +215,37 @@ only reads it.
 - A file or folder that can't be read is logged, stored in `scan_errors`
   with the reason (and the file's size and time), and skipped; it never stops
   the scan, and is retried only once it changes.
-- The catalogue's schema version is in `PRAGMA user_version`. An older
-  version is dropped and rebuilt by the next scan: until accounts exist it
-  holds nothing a scan can't recreate.
+- The catalogue's schema version is in `PRAGMA user_version`. From 7 on, an
+  older version is upgraded in place, since remaking page variants is costly;
+  before 7 it is dropped and rebuilt by the next scan.
 
 Order is natural everywhere: SQL uses the `natsort` collation, which is
 `koma::natsort::compare_paths`.
+
+## Libraries
+
+`koma::libraries`. A library is not stored: it is the first folder of a
+series' path, kept as a generated column (`series.library`, indexed). A
+series whose path has one part (a folder in the root, a root photo folder, or
+books loose in the root grouped by name) is in the default library, `''`,
+"Library". So a top-level folder holding books directly is a series, one
+holding series folders is a library, and no series changes group or id when a
+folder gains a subfolder. A collection is the folder between the library and
+the series (`manga/Starfall Saga/Starfall`), found from the path
+(`libraries::collection_of`).
+
+Settings come from the folder name (`Library::from_folder`): name
+capitalised; type comics if it contains "comic", cosplay if "cosplay", else
+manga; direction right to left for manga, else left to right; colour from a
+fixed list in library order (the default first, then natural order). They are
+read-only until accounts (M5).
+
+Books loose directly in a library folder (`manga/Ch. 12.cbz`) are a series
+named after that folder, in the default library: put them in a series folder.
+
+Schema 7 is upgraded in place to 8 (one generated column and its index), so
+the catalogue and its page variants are kept; older versions are rebuilt by
+the next scan, as before.
 
 ## Serving
 
@@ -230,7 +255,9 @@ HTML (`koma::html`): no JavaScript, a few lines of CSS. The real design
 
 | Route | |
 |---|---|
-| `GET /` | the library: every series, natural order |
+| `GET /` | the default library, or the first one: its series, then its collections, natural order |
+| `GET /l/{folder}` | a library (folder name percent-encoded) |
+| `GET /settings` | the libraries and their settings, read-only |
 | `GET /s/{id}` | a series: its books |
 | `GET /r/{book}/{n}` | the reader, page `n` (1-based); the image links to the next page, and the last page back to the series |
 | `GET /p/{hash}.{ext}` | a page's bytes, `Cache-Control: public, max-age=31536000, immutable`, `ETag` = hash |

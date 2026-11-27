@@ -10,6 +10,7 @@ pub mod catalog;
 pub mod cli;
 pub mod health;
 pub mod html;
+pub mod libraries;
 pub mod log;
 pub mod meta;
 pub mod names;
