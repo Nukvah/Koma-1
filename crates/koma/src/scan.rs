@@ -33,7 +33,9 @@ use crate::archive::page::{PageError, PageLimits, copy_page};
 use crate::archive::zip::{self, Limits, Method};
 use crate::archive::{self};
 use crate::blobs::BlobStore;
-use crate::catalog::{self, Catalog, JobKind, MAX_ATTEMPTS, NewBook, Page, Stamp};
+use crate::catalog::{
+    self, Catalog, GONE_GRACE_SECS, JobKind, MAX_ATTEMPTS, NewBook, Page, Place, Stamp,
+};
 use crate::log;
 
 /// A folder modified less than this long before it is read is read again
@@ -50,8 +52,12 @@ pub struct ScanReport {
     pub unchanged: usize,
     /// Books that could not be read this time.
     pub failed: usize,
-    /// Books forgotten because their file is gone.
+    /// Books gone from the library because their file vanished (remembered
+    /// for a while, in case they come back).
     pub removed: usize,
+    /// Books found again, moved, renamed or back after a while away, and
+    /// relinked to their id without being read again.
+    pub moved: usize,
     /// Folders read because they are new or changed.
     pub folders_read: usize,
     /// Folders not read because their modification time is unchanged.
@@ -109,6 +115,7 @@ pub fn log_report(report: &ScanReport, started: Instant) {
             ("unchanged", &report.unchanged.to_string()),
             ("failed", &report.failed.to_string()),
             ("removed", &report.removed.to_string()),
+            ("moved", &report.moved.to_string()),
             ("folders_read", &report.folders_read.to_string()),
             ("folders_skipped", &report.folders_skipped.to_string()),
             ("ms", &started.elapsed().as_millis().to_string()),
@@ -132,13 +139,16 @@ pub fn discover(
             io::Error::new(io::ErrorKind::NotADirectory, "not a folder"),
         ));
     }
+    let now = unix_now();
     let mut walker = Walker {
         library,
         catalog,
         check,
         report: ScanReport::default(),
+        now,
     };
     walker.visit("", None, &meta)?;
+    walker.catalog.purge_gone(now - GONE_GRACE_SECS)?;
     Ok(walker.report)
 }
 
@@ -147,6 +157,7 @@ struct Walker<'a> {
     catalog: &'a mut Catalog,
     check: Check,
     report: ScanReport,
+    now: i64,
 }
 
 impl Walker<'_> {
@@ -176,7 +187,7 @@ impl Walker<'_> {
             for child in self.catalog.subfolders(rel)? {
                 match fs::symlink_metadata(self.abs(&child)) {
                     Ok(m) if m.is_dir() => complete &= self.visit(&child, Some(rel), &m)?,
-                    _ => self.report.removed += self.catalog.remove_tree(&child)?,
+                    _ => self.report.removed += self.catalog.remove_tree(&child, self.now)?,
                 }
             }
             return Ok(complete);
@@ -219,7 +230,7 @@ impl Walker<'_> {
             }
         }
         for (path, _, _) in self.catalog.books_in(rel)? {
-            if !present.contains(path.as_str()) && self.catalog.remove_book(&path)? {
+            if !present.contains(path.as_str()) && self.catalog.vanish_book(&path, self.now)? {
                 self.report.removed += 1;
             }
         }
@@ -232,7 +243,7 @@ impl Walker<'_> {
         }
         for child in self.catalog.subfolders(rel)? {
             if !dir_names.contains(child.as_str()) {
-                self.report.removed += self.catalog.remove_tree(&child)?;
+                self.report.removed += self.catalog.remove_tree(&child, self.now)?;
             }
         }
 
@@ -258,7 +269,7 @@ impl Walker<'_> {
                     self.catalog.enqueue(JobKind::Index, &path)?;
                 }
                 None => {
-                    if self.catalog.remove_book(&path)? {
+                    if self.catalog.vanish_book(&path, self.now)? {
                         self.report.removed += 1;
                     }
                 }
@@ -403,7 +414,7 @@ pub fn run_jobs(
                 &[("path", &job.path), ("error", &e)],
             );
             catalog.record_error(&job.path, folder_of(&job.path), None, &e)?;
-            catalog.remove_book(&job.path)?;
+            catalog.vanish_book(&job.path, unix_now())?;
             catalog.finish_job(job.id)?;
             report.failed += 1;
             continue;
@@ -438,7 +449,7 @@ fn index_job(
     };
     let Some((stamp, source)) = found else {
         // Gone (or no longer a book) since it was queued.
-        if catalog.remove_book(rel)? {
+        if catalog.vanish_book(rel, unix_now())? {
             report.removed += 1;
         }
         catalog.remove_error(rel)?;
@@ -449,28 +460,54 @@ fn index_job(
         // A photo folder is its own folder, and is named as it is, dots and all.
         Source::Photos(_) => (rel, last_part(rel), series_of_folder(rel)),
     };
+    let place = Place {
+        path: rel,
+        folder,
+        name,
+        series_path,
+        series_name,
+    };
+    // A book already known by its stamp is placed without being read again:
+    // the same file back at its path, or one moved or renamed outside Koma-1.
+    let known = match catalog.book_at(rel)? {
+        Some((id, old, gone)) if old == stamp => Some((id, gone)),
+        Some(_) => None,
+        None => catalog.gone_match(rel, stamp)?.map(|id| (id, true)),
+    };
+    if let Some((id, gone)) = known {
+        catalog.relink(id, &place)?;
+        if gone {
+            report.moved += 1;
+        } else {
+            report.unchanged += 1;
+        }
+        return Ok(());
+    }
     let pages = match &source {
         Source::Archive => index_book(&path, blobs),
         Source::Photos(images) => index_photos(library, images),
     };
     match pages {
         Ok(pages) => {
-            catalog.replace_book(&NewBook {
-                series_path,
-                series_name,
-                path: rel,
-                folder,
-                name,
-                size: stamp.0,
-                mtime: stamp.1,
-                pages: &pages,
-            })?;
+            catalog.replace_book(
+                &NewBook {
+                    series_path,
+                    series_name,
+                    path: rel,
+                    folder,
+                    name,
+                    size: stamp.0,
+                    mtime: stamp.1,
+                    pages: &pages,
+                },
+                unix_now(),
+            )?;
             report.indexed += 1;
         }
         Err(e) => {
             log::error("scan: skipped a book", &[("path", rel), ("error", &e)]);
             catalog.record_error(rel, folder, Some(stamp), &e)?;
-            catalog.remove_book(rel)?;
+            catalog.vanish_book(rel, unix_now())?;
             report.failed += 1;
         }
     }
@@ -566,6 +603,12 @@ fn index_photos(library: &Path, images: &Found) -> Result<Vec<Page>, String> {
 /// `cover.jpg`, `Cover.PNG`… (any page extension).
 fn is_cover(rel: &str) -> bool {
     stem(rel).eq_ignore_ascii_case("cover")
+}
+
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
 }
 
 fn mtime_ns(meta: &Metadata) -> i64 {

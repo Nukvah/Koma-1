@@ -101,6 +101,16 @@ only reads it.
   also stats every known book, to catch files overwritten in place.
 - A book whose size and modification time haven't changed is skipped; books
   whose files are gone are removed, and empty series with them.
+- Stable ids. A book keeps its id and date added (`books.added`) when it is
+  rewritten in place, moved or renamed, even outside Koma-1. A book whose
+  file vanishes is marked gone (`books.gone`), hidden everywhere, and kept
+  for 30 days. A book found at a new path with the size and modification
+  time of a gone one is that book: it is relinked without being read again
+  (same file name first; otherwise only a single candidate counts), and so
+  is a book back at its own path. A series whose last present book moves
+  goes with it and keeps its id, so a series folder renamed outside Koma-1
+  keeps its id; a book split off into a new folder gets a new series. Ids
+  are never reused (`AUTOINCREMENT`).
 - The scan only queues an index job per changed book (`jobs` table);
   `scan::run_jobs` works through the queue. Each job is one transaction, so
   a killed worker leaves the catalogue as it was. On start, jobs left running

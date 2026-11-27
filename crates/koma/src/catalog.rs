@@ -12,7 +12,12 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
+
+/// How long a book whose file vanished is remembered, so that a folder that
+/// comes back (a drive mounted late, a move noticed in two steps) keeps its
+/// books' ids, progress and dates.
+pub const GONE_GRACE_SECS: i64 = 30 * 24 * 60 * 60;
 
 /// A job claimed this many times without finishing is given up: the worker
 /// died on it each time (crash, out of memory), so it would only die again.
@@ -20,12 +25,12 @@ pub const MAX_ATTEMPTS: i64 = 3;
 
 const SCHEMA: &str = "
 CREATE TABLE series (
-    id    INTEGER PRIMARY KEY,
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,  -- never reused: ids are kept for good
     path  TEXT NOT NULL UNIQUE,      -- folder relative to the library (or the file, for a one-shot)
     name  TEXT NOT NULL
 );
 CREATE TABLE books (
-    id         INTEGER PRIMARY KEY,
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,  -- never reused: ids are kept for good
     series_id  INTEGER NOT NULL REFERENCES series(id),
     path       TEXT NOT NULL UNIQUE, -- file (or photo folder) relative to the library
     folder     TEXT NOT NULL,        -- its folder relative to the library ('' is the root);
@@ -33,10 +38,13 @@ CREATE TABLE books (
     name       TEXT NOT NULL,
     size       INTEGER NOT NULL,     -- with mtime: skip unchanged files on rescan
     mtime      INTEGER NOT NULL,
-    page_count INTEGER NOT NULL
+    page_count INTEGER NOT NULL,
+    added      INTEGER NOT NULL,     -- unix seconds: when first seen; kept through moves
+    gone       INTEGER               -- unix seconds: when its file vanished; NULL while present
 );
 CREATE INDEX books_series ON books(series_id);
 CREATE INDEX books_folder ON books(folder);
+CREATE INDEX books_gone_stamp ON books(size, mtime) WHERE gone IS NOT NULL;
 CREATE TABLE pages (
     book_id  INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
     number   INTEGER NOT NULL,       -- 0-based reading order
@@ -81,6 +89,7 @@ DROP TABLE IF EXISTS series;
 DROP TABLE IF EXISTS scan_errors;
 DROP TABLE IF EXISTS folders;
 DROP TABLE IF EXISTS jobs;
+DROP TABLE IF EXISTS sqlite_sequence;
 ";
 
 /// A file's size and modification time (nanoseconds since the epoch): if
@@ -105,6 +114,8 @@ pub struct Book {
     pub path: String,
     pub name: String,
     pub page_count: i64,
+    /// Unix seconds when Koma-1 first saw it; kept through moves and renames.
+    pub added: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -129,6 +140,15 @@ pub struct PageLocation {
     pub format: String,
     pub length: u64,
     pub offset: Option<u64>,
+}
+
+/// Where a book is: its path and the series it belongs to.
+pub struct Place<'a> {
+    pub path: &'a str,
+    pub folder: &'a str,
+    pub name: &'a str,
+    pub series_path: &'a str,
+    pub series_name: &'a str,
 }
 
 /// A book as the scanner found it, ready to store.
@@ -194,34 +214,37 @@ impl Catalog {
         }
     }
 
-    /// Size and modification time recorded for a book, if it is known.
+    /// Size and modification time recorded for a present book, if it is known.
     pub fn book_stamp(&self, path: &str) -> Result<Option<Stamp>, Error> {
         self.conn
             .query_row(
-                "SELECT size, mtime FROM books WHERE path = ?1",
+                "SELECT size, mtime FROM books WHERE path = ?1 AND gone IS NULL",
                 [path],
                 |r| Ok((r.get::<_, i64>(0)? as u64, r.get(1)?)),
             )
             .optional()
     }
 
-    /// Stores a book and its pages, replacing what was known about that file.
-    pub fn replace_book(&mut self, book: &NewBook<'_>) -> Result<(), Error> {
+    /// Stores a book and its pages, replacing what was known about that
+    /// file. A book already known at this path (present or gone) keeps its
+    /// id and date added.
+    pub fn replace_book(&mut self, book: &NewBook<'_>, now: i64) -> Result<i64, Error> {
         let tx = self.conn.transaction()?;
-        tx.execute(
-            "INSERT INTO series (path, name) VALUES (?1, ?2)
-             ON CONFLICT (path) DO UPDATE SET name = excluded.name",
-            params![book.series_path, book.series_name],
-        )?;
-        let series_id: i64 = tx.query_row(
-            "SELECT id FROM series WHERE path = ?1",
-            [book.series_path],
-            |r| r.get(0),
-        )?;
-        tx.execute("DELETE FROM books WHERE path = ?1", [book.path])?;
-        tx.execute(
-            "INSERT INTO books (series_id, path, folder, name, size, mtime, page_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        let before: Option<(i64, i64)> = tx
+            .query_row(
+                "SELECT id, series_id FROM books WHERE path = ?1",
+                [book.path],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let series_id = place_in_series(&tx, book.series_path, book.series_name, before)?;
+        let book_id: i64 = tx.query_row(
+            "INSERT INTO books (series_id, path, folder, name, size, mtime, page_count, added)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT (path) DO UPDATE SET series_id = excluded.series_id,
+                 folder = excluded.folder, name = excluded.name, size = excluded.size,
+                 mtime = excluded.mtime, page_count = excluded.page_count, gone = NULL
+             RETURNING id",
             params![
                 series_id,
                 book.path,
@@ -229,10 +252,12 @@ impl Catalog {
                 book.name,
                 book.size as i64,
                 book.mtime,
-                book.pages.len() as i64
+                book.pages.len() as i64,
+                now
             ],
+            |r| r.get(0),
         )?;
-        let book_id = tx.last_insert_rowid();
+        tx.execute("DELETE FROM pages WHERE book_id = ?1", [book_id])?;
         {
             let mut insert = tx.prepare(
                 "INSERT INTO pages (book_id, number, hash, format, length, offset, file)
@@ -253,29 +278,115 @@ impl Catalog {
         tx.execute("DELETE FROM scan_errors WHERE path = ?1", [book.path])?;
         // The series may have been left empty by a book that changed series.
         prune_series(&tx)?;
+        tx.commit()?;
+        Ok(book_id)
+    }
+
+    /// The book known at this path: its id, stamp, and whether it is gone.
+    pub fn book_at(&self, path: &str) -> Result<Option<(i64, Stamp, bool)>, Error> {
+        self.conn
+            .query_row(
+                "SELECT id, size, mtime, gone IS NOT NULL FROM books WHERE path = ?1",
+                [path],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        (r.get::<_, i64>(1)? as u64, r.get(2)?),
+                        r.get(3)?,
+                    ))
+                },
+            )
+            .optional()
+    }
+
+    /// A gone book that a book found at `path` with this stamp is most
+    /// likely to be, moved or renamed outside Koma-1: a move or rename keeps
+    /// size and modification time. One with the same file name wins;
+    /// otherwise there must be exactly one candidate.
+    pub fn gone_match(&self, path: &str, stamp: Stamp) -> Result<Option<i64>, Error> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT id, path FROM books WHERE gone IS NOT NULL AND size = ?1 AND mtime = ?2
+             ORDER BY gone DESC, id",
+        )?;
+        let found: Vec<(i64, String)> = stmt
+            .query_map(params![stamp.0 as i64, stamp.1], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?
+            .collect::<Result<_, _>>()?;
+        let name = last_part(path);
+        Ok(found
+            .iter()
+            .find(|(_, p)| last_part(p) == name)
+            .or(if found.len() == 1 {
+                found.first()
+            } else {
+                None
+            })
+            .map(|(id, _)| *id))
+    }
+
+    /// Moves a known book (present or gone) to a new place without reading
+    /// it again: its id, pages, progress and date added stay. A book that
+    /// leaves a series where no other book is present takes the series (and
+    /// its id) along, so a renamed or moved series folder keeps its id too.
+    pub fn relink(&mut self, id: i64, to: &Place<'_>) -> Result<(), Error> {
+        let tx = self.conn.transaction()?;
+        let old_series: i64 =
+            tx.query_row("SELECT series_id FROM books WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })?;
+        let series_id =
+            place_in_series(&tx, to.series_path, to.series_name, Some((id, old_series)))?;
+        // Whatever was known at the new path is replaced by the moved book.
+        tx.execute(
+            "DELETE FROM books WHERE path = ?1 AND id != ?2",
+            params![to.path, id],
+        )?;
+        tx.execute(
+            "UPDATE books SET series_id = ?1, path = ?2, folder = ?3, name = ?4, gone = NULL
+             WHERE id = ?5",
+            params![series_id, to.path, to.folder, to.name, id],
+        )?;
+        tx.execute("DELETE FROM scan_errors WHERE path = ?1", [to.path])?;
+        prune_series(&tx)?;
         tx.commit()
     }
 
-    /// Forgets a book (its file is gone or no longer readable), and its series
-    /// if that is left empty. Returns whether the book was known.
-    pub fn remove_book(&mut self, path: &str) -> Result<bool, Error> {
-        let tx = self.conn.transaction()?;
-        let removed = tx.execute("DELETE FROM books WHERE path = ?1", [path])? > 0;
-        prune_series(&tx)?;
-        tx.commit()?;
-        Ok(removed)
+    /// Marks a book whose file vanished (or can no longer be read) as gone:
+    /// it disappears from the library but is remembered for
+    /// [`GONE_GRACE_SECS`]. Returns whether a present book was known there.
+    pub fn vanish_book(&mut self, path: &str, now: i64) -> Result<bool, Error> {
+        let n = self.conn.execute(
+            "UPDATE books SET gone = ?2 WHERE path = ?1 AND gone IS NULL",
+            params![path, now],
+        )?;
+        Ok(n > 0)
     }
 
-    /// Forgets a folder that is gone: everything known under it, and series
-    /// left empty. Returns how many books were removed.
-    pub fn remove_tree(&mut self, folder: &str) -> Result<usize, Error> {
+    /// Forgets books gone since before `before` for good, and series left
+    /// with no books. Returns how many books were forgotten.
+    pub fn purge_gone(&mut self, before: i64) -> Result<usize, Error> {
+        let tx = self.conn.transaction()?;
+        let n = tx.execute("DELETE FROM books WHERE gone < ?1", [before])?;
+        prune_series(&tx)?;
+        tx.commit()?;
+        Ok(n)
+    }
+
+    /// Forgets a folder that is gone: its books are marked gone (see
+    /// [`Catalog::vanish_book`]), what else is known under it is dropped.
+    /// Returns how many present books vanished.
+    pub fn remove_tree(&mut self, folder: &str, now: i64) -> Result<usize, Error> {
         let tx = self.conn.transaction()?;
         // Inside `folder`: the folder itself, or anything under `folder/`
         // (paths that sort from "folder/" up to, not including, "folder0").
         let under = "(?1 = col OR (col >= ?1 || '/' AND col < ?1 || '0'))";
         let removed = tx.execute(
-            &format!("DELETE FROM books WHERE {}", under.replace("col", "folder")),
-            [folder],
+            &format!(
+                "UPDATE books SET gone = ?2 WHERE gone IS NULL AND {}",
+                under.replace("col", "folder")
+            ),
+            params![folder, now],
         )?;
         tx.execute(
             &format!(
@@ -343,9 +454,9 @@ impl Catalog {
 
     /// Books directly in `folder`, with their size and modification time.
     pub fn books_in(&self, folder: &str) -> Result<Vec<(String, u64, i64)>, Error> {
-        let mut stmt = self
-            .conn
-            .prepare_cached("SELECT path, size, mtime FROM books WHERE folder = ?1")?;
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT path, size, mtime FROM books WHERE folder = ?1 AND gone IS NULL",
+        )?;
         let rows = stmt.query_map([folder], |r| {
             Ok((r.get(0)?, r.get::<_, i64>(1)? as u64, r.get(2)?))
         })?;
@@ -464,10 +575,12 @@ impl Catalog {
         rows.collect()
     }
 
-    /// All series, in natural order of their names.
+    /// All series with a book present, in natural order of their names.
     pub fn series(&self) -> Result<Vec<Series>, Error> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT id, path, name FROM series ORDER BY name COLLATE natsort, path COLLATE natsort",
+            "SELECT id, path, name FROM series
+             WHERE EXISTS (SELECT 1 FROM books WHERE series_id = series.id AND gone IS NULL)
+             ORDER BY name COLLATE natsort, path COLLATE natsort",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(Series {
@@ -483,7 +596,7 @@ impl Catalog {
     pub fn series_with_counts(&self) -> Result<Vec<(Series, i64)>, Error> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT series.id, series.path, series.name, COUNT(books.id)
-             FROM series JOIN books ON books.series_id = series.id
+             FROM series JOIN books ON books.series_id = series.id AND books.gone IS NULL
              GROUP BY series.id
              ORDER BY series.name COLLATE natsort, series.path COLLATE natsort",
         )?;
@@ -516,7 +629,8 @@ impl Catalog {
     pub fn book(&self, id: i64) -> Result<Option<Book>, Error> {
         self.conn
             .prepare_cached(
-                "SELECT id, series_id, path, name, page_count FROM books WHERE id = ?1",
+                "SELECT id, series_id, path, name, page_count, added FROM books
+                 WHERE id = ?1 AND gone IS NULL",
             )?
             .query_row([id], |r| {
                 Ok(Book {
@@ -525,6 +639,7 @@ impl Catalog {
                     path: r.get(2)?,
                     name: r.get(3)?,
                     page_count: r.get(4)?,
+                    added: r.get(5)?,
                 })
             })
             .optional()
@@ -533,8 +648,8 @@ impl Catalog {
     /// The books of a series, in natural order of their file names.
     pub fn books(&self, series_id: i64) -> Result<Vec<Book>, Error> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT id, series_id, path, name, page_count FROM books
-             WHERE series_id = ?1 ORDER BY path COLLATE natsort",
+            "SELECT id, series_id, path, name, page_count, added FROM books
+             WHERE series_id = ?1 AND gone IS NULL ORDER BY path COLLATE natsort",
         )?;
         let rows = stmt.query_map([series_id], |r| {
             Ok(Book {
@@ -543,6 +658,7 @@ impl Catalog {
                 path: r.get(2)?,
                 name: r.get(3)?,
                 page_count: r.get(4)?,
+                added: r.get(5)?,
             })
         })?;
         rows.collect()
@@ -572,7 +688,7 @@ impl Catalog {
         self.conn
             .prepare_cached(
                 "SELECT COALESCE(pages.file, books.path), pages.format, pages.length, pages.offset
-                 FROM pages JOIN books ON books.id = pages.book_id
+                 FROM pages JOIN books ON books.id = pages.book_id AND books.gone IS NULL
                  WHERE pages.hash = ?1 ORDER BY pages.offset IS NULL LIMIT 1",
             )?
             .query_row([hash.as_bytes()], |r| {
@@ -616,6 +732,53 @@ pub struct Job {
     pub path: String,
     /// How many times it has been claimed, this time included.
     pub attempts: i64,
+}
+
+/// The id of the series at `path`, made if needed. `moving` is the book
+/// being placed and the series it was in: if no other present book is left
+/// there, that series moves to `path` with its id (a series folder renamed or
+/// moved outside Koma-1), unless `path` already has a series.
+fn place_in_series(
+    tx: &rusqlite::Transaction<'_>,
+    path: &str,
+    name: &str,
+    moving: Option<(i64, i64)>,
+) -> Result<i64, Error> {
+    let existing: Option<i64> = tx
+        .query_row("SELECT id FROM series WHERE path = ?1", [path], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    if let Some(id) = existing {
+        tx.execute(
+            "UPDATE series SET name = ?2 WHERE id = ?1",
+            params![id, name],
+        )?;
+        return Ok(id);
+    }
+    if let Some((book, series)) = moving {
+        let others: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM books WHERE series_id = ?1 AND id != ?2 AND gone IS NULL",
+            params![series, book],
+            |r| r.get(0),
+        )?;
+        if others == 0 {
+            tx.execute(
+                "UPDATE series SET path = ?2, name = ?3 WHERE id = ?1",
+                params![series, path, name],
+            )?;
+            return Ok(series);
+        }
+    }
+    tx.execute(
+        "INSERT INTO series (path, name) VALUES (?1, ?2)",
+        params![path, name],
+    )?;
+    Ok(tx.last_insert_rowid())
+}
+
+fn last_part(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
 }
 
 fn prune_series(tx: &rusqlite::Transaction<'_>) -> Result<(), Error> {
