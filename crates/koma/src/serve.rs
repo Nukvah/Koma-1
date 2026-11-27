@@ -8,7 +8,7 @@
 //! | `GET /l/{folder}` | a library: its series and collections |
 //! | `GET /settings` | the libraries and their settings, read-only |
 //! | `GET /search?q=…&l=…` | search, in every library or one |
-//! | `GET /a/koma.{hash}.css` | the stylesheet, cached for a year |
+//! | `GET /a/koma.{hash}.css`, `/a/scroll.{hash}.js` | the stylesheet and the library script, cached for a year |
 //! | `GET /s/{id}` | a series: its books |
 //! | `GET /r/{book}/{n}` | the reader, page `n` (1-based) |
 //! | `GET /d/{book}` | the book's original file (a photo folder as a stored ZIP) |
@@ -200,71 +200,61 @@ fn shelf(
         }
         return table(c, libraries, library, collection.as_deref(), page, query);
     }
-    let all = c.series_in_library(&library.folder)?;
-    // Collections in natural order, each with its series.
-    let mut groups: Vec<(String, Vec<&(catalog::Series, i64)>)> = Vec::new();
-    for item in &all {
-        if let Some(name) = libraries::collection_of(&item.0.path) {
-            match groups.iter_mut().find(|(n, _)| n == name) {
-                Some((_, list)) => list.push(item),
-                None => groups.push((name.to_owned(), vec![item])),
-            }
-        }
-    }
-    groups.sort_by(|a, b| crate::natsort::compare_paths(&a.0, &b.0));
-    let collections: Vec<String> = groups.iter().map(|(n, _)| n.clone()).collect();
-
-    enum Card<'a> {
-        Series(&'a (catalog::Series, i64)),
-        Collection(&'a str, &'a [&'a (catalog::Series, i64)]),
-    }
-    let cards: Vec<Card<'_>> = match &collection {
-        Some(name) => {
-            let (_, list) = groups
-                .iter()
-                .find(|(n, _)| n == name)
-                .ok_or(Failure::NotFound)?;
-            list.iter().map(|s| Card::Series(s)).collect()
-        }
-        None => groups
-            .iter()
-            .map(|(n, list)| Card::Collection(n, list))
-            .chain(
-                all.iter()
-                    .filter(|s| libraries::collection_of(&s.0.path).is_none())
-                    .map(Card::Series),
-            )
-            .collect(),
-    };
-    let start = (page - 1) * html::PER_PAGE;
-    if start >= cards.len() && page > 1 {
-        return Err(Failure::NotFound);
-    }
-    let series_cover = |id| series_cover(c, id);
+    let collections = c.collections(&library.folder)?;
+    let names: Vec<String> = collections.iter().map(|(n, ..)| n.clone()).collect();
+    let per = html::PER_PAGE;
+    let start = (page - 1) * per;
     let mut items = Vec::new();
-    for card in cards.iter().skip(start).take(html::PER_PAGE) {
-        items.push(match card {
-            Card::Series((series, books)) => html::Item::Series {
-                cover: series_cover(series.id)?,
-                series: series.clone(),
-                books: *books,
-            },
-            Card::Collection(name, list) => html::Item::Collection {
-                name: (*name).to_owned(),
-                series: list.len() as i64,
-                books: list.iter().map(|(_, b)| b).sum(),
-                cover: series_cover(list[0].0.id)?,
-            },
-        });
+    let total = match collection.as_deref() {
+        // One collection: its series.
+        Some(name) => {
+            if !names.iter().any(|n| n == name) {
+                return Err(Failure::NotFound);
+            }
+            let (series, total) = c.shelf_series(&library.folder, name, start, per)?;
+            for (s, books) in series {
+                items.push(html::Item::Series {
+                    cover: series_cover(c, s.id)?,
+                    series: s,
+                    books,
+                });
+            }
+            total
+        }
+        // The library: its collections first, then the series in none.
+        None => {
+            for (name, series, books, first) in collections.iter().skip(start).take(per) {
+                items.push(html::Item::Collection {
+                    name: name.clone(),
+                    series: *series,
+                    books: *books,
+                    cover: series_cover(c, *first)?,
+                });
+            }
+            let skip = start.saturating_sub(collections.len());
+            let room = per - items.len();
+            let (series, lone) = c.shelf_series(&library.folder, "", skip, room)?;
+            for (s, books) in series {
+                items.push(html::Item::Series {
+                    cover: series_cover(c, s.id)?,
+                    series: s,
+                    books,
+                });
+            }
+            collections.len() + lone
+        }
+    };
+    if start >= total && page > 1 {
+        return Err(Failure::NotFound);
     }
     Ok(Html(html::library(&html::Shelf {
         libraries,
         library,
-        collections: &collections,
+        collections: &names,
         collection: collection.as_deref(),
         items: &items,
         page,
-        total: cards.len(),
+        total,
     })))
 }
 
@@ -288,9 +278,11 @@ fn table(
     {
         return Err(Failure::NotFound);
     }
-    let mut rows = c.series_rows(&library.folder)?;
-    if let Some(name) = collection {
-        rows.retain(|r| libraries::collection_of(&r.series.path) == Some(name));
+    let mut rows = c.series_rows(&library.folder, collection)?;
+    // People and genres only where they are needed: every row to sort by
+    // author, else the rows shown.
+    if sort.0 == html::SortKey::Author {
+        c.series_terms(&mut rows)?;
     }
     // Rows come in natural order of names: a stable sort keeps it for ties.
     use crate::natsort::compare_paths;
@@ -314,12 +306,15 @@ fn table(
     if start >= rows.len() && page > 1 {
         return Err(Failure::NotFound);
     }
-    let shown: Vec<_> = rows
+    let mut shown: Vec<_> = rows
         .iter()
         .skip(start)
         .take(html::TABLE_PER_PAGE)
         .cloned()
         .collect();
+    if sort.0 != html::SortKey::Author {
+        c.series_terms(&mut shown)?;
+    }
     Ok(Html(html::table(&html::Table {
         libraries,
         library,
@@ -463,18 +458,24 @@ async fn settings(State(state): State<AppState>) -> Result<Html<String>, Failure
         .await
 }
 
-/// `GET /a/koma.<hash>.css`: the stylesheet, cached for good (its URL
-/// changes with its content).
+/// `GET /a/koma.<hash>.css` and `/a/scroll.<hash>.js`: the stylesheet and
+/// the library pages' script, cached for good (their URLs change with their
+/// content).
 async fn stylesheet(UrlPath(file): UrlPath<String>) -> Result<Response, Failure> {
-    if format!("/a/{file}") != html::css_url() {
+    let url = format!("/a/{file}");
+    let (content_type, body) = if url == html::css_url() {
+        ("text/css; charset=utf-8", html::CSS)
+    } else if url == html::scroll_url() {
+        ("text/javascript; charset=utf-8", html::SCROLL_JS)
+    } else {
         return Err(Failure::NotFound);
-    }
+    };
     Ok((
         [
-            (CONTENT_TYPE, "text/css; charset=utf-8"),
+            (CONTENT_TYPE, content_type),
             (CACHE_CONTROL, "public, max-age=31536000, immutable"),
         ],
-        html::CSS,
+        body,
     )
         .into_response())
 }
@@ -515,16 +516,10 @@ async fn series(
 
 /// A library's collections, in natural order.
 fn collections_of(c: &Catalog, library: &str) -> Result<Vec<String>, Failure> {
-    let mut names: Vec<String> = Vec::new();
-    for (s, _) in c.series_in_library(library)? {
-        if let Some(n) = libraries::collection_of(&s.path)
-            && !names.iter().any(|x| x == n)
-        {
-            names.push(n.to_owned());
-        }
-    }
-    names.sort_by(|a, b| crate::natsort::compare_paths(a, b));
-    Ok(names)
+    Ok(c.collections(library)?
+        .into_iter()
+        .map(|(n, ..)| n)
+        .collect())
 }
 
 async fn reader(

@@ -48,6 +48,20 @@ pub fn css_url() -> &'static str {
     &CSS_URL
 }
 
+/// Infinite scroll for library grids: the only script outside the reader.
+/// Pages work without it.
+pub const SCROLL_JS: &str = include_str!("../assets/library/scroll.js");
+
+static SCROLL_URL: LazyLock<String> = LazyLock::new(|| {
+    let hex = blake3::hash(SCROLL_JS.as_bytes()).to_hex();
+    format!("/a/scroll.{}.js", &hex[..16])
+});
+
+/// The scroll script's URL, named by its content like [`css_url`].
+pub fn scroll_url() -> &'static str {
+    &SCROLL_URL
+}
+
 /// Series and collections on one library page; more are on `?page=` pages.
 pub const PER_PAGE: usize = 24;
 
@@ -80,6 +94,8 @@ pub struct Here<'a> {
     pub go: &'static str,
     /// The search box's text.
     pub query: &'a str,
+    /// Loads the infinite-scroll script (library grids).
+    pub scroll: bool,
 }
 
 /// A page in the shell: top bar, side panel (folded behind `menu` on
@@ -146,7 +162,15 @@ fn shell(title: &str, libraries: &[Library], here: &Here<'_>, main: &str) -> Str
     b.push_str("</main></div>");
     document(
         &format!("{title} · Koma-1"),
-        &format!("<link rel=stylesheet href=\"{}\">", css_url()),
+        &format!(
+            "<link rel=stylesheet href=\"{}\">{}",
+            css_url(),
+            if here.scroll {
+                format!("<script defer src=\"{}\"></script>", scroll_url())
+            } else {
+                String::new()
+            }
+        ),
         &b,
     )
 }
@@ -247,7 +271,7 @@ pub fn library(shelf: &Shelf<'_>) -> String {
     let l = shelf.library;
     let mut m = String::new();
     shelf_toolbar(&mut m, l, shelf.collection, shelf.total, false);
-    m.push_str("<div class=grid>");
+    m.push_str("<div class=grid data-scroll>");
     for item in shelf.items {
         match item {
             Item::Series {
@@ -300,6 +324,7 @@ pub fn library(shelf: &Shelf<'_>) -> String {
         collection: shelf.collection,
         go: "library",
         query: "",
+        scroll: true,
     };
     shell(&title, shelf.libraries, &here, &m)
 }
@@ -545,6 +570,7 @@ pub fn table(t: &Table<'_>) -> String {
         collection: t.collection,
         go: "library",
         query: "",
+        scroll: false,
     };
     let title = match t.collection {
         Some(c) => format!("{c} · {} · table", l.name),
@@ -632,6 +658,7 @@ pub fn series(
         collection,
         go: "library",
         query: "",
+        scroll: false,
     };
     shell(&series.name, libraries, &here, &m)
 }
@@ -648,6 +675,7 @@ pub fn empty() -> String {
         collection: None,
         go: "library",
         query: "",
+        scroll: false,
     };
     shell("Library", &[], &here, main)
 }
@@ -785,6 +813,7 @@ pub fn search(f: &Found<'_>) -> String {
         collection: None,
         go: "",
         query: q,
+        scroll: false,
     };
     shell(&format!("Search: {q}"), f.libraries, &here, &m)
 }
@@ -833,6 +862,7 @@ pub fn settings(libraries: &[Library]) -> String {
         collection: None,
         go: "settings",
         query: "",
+        scroll: false,
     };
     shell("Settings", libraries, &here, &m)
 }

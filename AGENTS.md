@@ -41,7 +41,7 @@ on ARM64 in a container capped at 2 CPUs and 1 GB. At the time of writing:
 | Cached page TTFB | p99 < 10 ms |
 | Cold start | < 200 ms |
 | Library HTML page | < 15 KiB |
-| CSS / reader JS / curator JS | 12 / 16 / 24 KiB |
+| CSS / reader JS / library JS / curator JS | 12 / 16 / 4 / 24 KiB |
 
 A budget protects speed; it does not block a feature. Raise one only with a `Budget change:` line in the pull
 request saying why. The reader-facing targets (TTFB, cold start, page size) never move.

@@ -14,7 +14,7 @@ pub use crate::archive::size::Size;
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 
 /// How long a book whose file vanished is remembered, so that a folder that
 /// comes back (a drive mounted late, a move noticed in two steps) keeps its
@@ -31,9 +31,12 @@ CREATE TABLE series (
     path  TEXT NOT NULL UNIQUE,      -- folder relative to the library; for books loose in the
                                      -- root, NUL + the lower-cased series name from the file name
     name  TEXT NOT NULL,
-    library TEXT GENERATED ALWAYS AS ({LIBRARY_OF_PATH}) VIRTUAL
+    library TEXT GENERATED ALWAYS AS ({LIBRARY_OF_PATH}) VIRTUAL,
+    collection TEXT GENERATED ALWAYS AS ({COLLECTION_OF_PATH}) VIRTUAL
 );
 CREATE INDEX series_library ON series(library);
+CREATE INDEX series_shelf ON series(library, collection, name COLLATE natsort, path COLLATE natsort);
+CREATE INDEX series_names ON series(library, name COLLATE natsort, path COLLATE natsort);
 CREATE TABLE books (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,  -- never reused: ids are kept for good
     series_id  INTEGER NOT NULL REFERENCES series(id),
@@ -141,6 +144,24 @@ fn migrate_7_to_8() -> String {
     format!(
         "ALTER TABLE series ADD COLUMN library TEXT GENERATED ALWAYS AS ({LIBRARY_OF_PATH}) VIRTUAL;
          CREATE INDEX series_library ON series(library);"
+    )
+}
+
+/// The collection a series is in, from its path (see `crate::libraries`):
+/// the folders between the library and the series, else `''`. The parent
+/// folder is the path with its last part cut (`rtrim` by every character
+/// but `/`).
+const COLLECTION_OF_PATH: &str = "CASE WHEN substr(path, 1, 1) = char(0) OR instr(path, '/') = 0 \
+     THEN '' ELSE substr(rtrim(path, replace(path, '/', '')), instr(path, '/') + 1, \
+     max(length(rtrim(path, replace(path, '/', ''))) - instr(path, '/') - 1, 0)) END";
+
+/// Schema 9 to 10: series get their collection, and an index that pages a
+/// library's shelf without reading all of it.
+fn migrate_9_to_10() -> String {
+    format!(
+        "ALTER TABLE series ADD COLUMN collection TEXT GENERATED ALWAYS AS ({COLLECTION_OF_PATH}) VIRTUAL;
+         CREATE INDEX series_shelf ON series(library, collection, name COLLATE natsort, path COLLATE natsort);
+         CREATE INDEX series_names ON series(library, name COLLATE natsort, path COLLATE natsort);"
     )
 }
 
@@ -347,12 +368,15 @@ impl Catalog {
         match version {
             // From 7 on the catalogue is upgraded in place, one step at a
             // time: remaking page variants is too costly to start over.
-            7 | 8 => {
+            7..=9 => {
                 let mut steps = String::new();
                 if version == 7 {
                     steps.push_str(&migrate_7_to_8());
                 }
-                steps.push_str(MIGRATE_8_TO_9);
+                if version <= 8 {
+                    steps.push_str(MIGRATE_8_TO_9);
+                }
+                steps.push_str(&migrate_9_to_10());
                 self.conn.execute_batch(&format!(
                     "BEGIN; {steps} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
                 ))?;
@@ -361,7 +385,9 @@ impl Catalog {
             0..SCHEMA_VERSION => {
                 // Before 7, nothing was kept that a scan cannot rebuild.
                 let drop = if version > 0 { DROP_OLD } else { "" };
-                let schema = SCHEMA.replace("{LIBRARY_OF_PATH}", LIBRARY_OF_PATH);
+                let schema = SCHEMA
+                    .replace("{LIBRARY_OF_PATH}", LIBRARY_OF_PATH)
+                    .replace("{COLLECTION_OF_PATH}", COLLECTION_OF_PATH);
                 self.conn.execute_batch(&format!(
                     "BEGIN; {drop} {schema} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
                 ))?;
@@ -1051,26 +1077,27 @@ impl Catalog {
         rows.collect()
     }
 
-    /// Every series of a library with what its table row shows, in natural
-    /// order of names.
-    pub fn series_rows(&self, library: &str) -> Result<Vec<SeriesRow>, Error> {
+    /// Every series of a library (or of one of its collections) with what its
+    /// table row shows but people and genres ([`Catalog::series_terms`]),
+    /// in natural order of names.
+    pub fn series_rows(
+        &self,
+        library: &str,
+        collection: Option<&str>,
+    ) -> Result<Vec<SeriesRow>, Error> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT series.id, series.path, series.name,
-                    COUNT(books.id), SUM(books.page_count), MIN(books.added),
-                    (SELECT group_concat(name, ', ') FROM (
-                        SELECT t.name FROM book_terms t JOIN books b ON b.id = t.book_id
-                        WHERE b.series_id = series.id AND b.gone IS NULL AND t.kind = 'author'
-                        GROUP BY t.name ORDER BY MIN(t.pos), t.name LIMIT 2)),
-                    (SELECT group_concat(name, ', ') FROM (
-                        SELECT t.name FROM book_terms t JOIN books b ON b.id = t.book_id
-                        WHERE b.series_id = series.id AND b.gone IS NULL AND t.kind = 'genre'
-                        GROUP BY t.name ORDER BY MIN(t.pos), t.name LIMIT 3))
-             FROM series JOIN books ON books.series_id = series.id AND books.gone IS NULL
-             WHERE series.library = ?1
-             GROUP BY series.id
-             ORDER BY series.name COLLATE natsort, series.path COLLATE natsort",
+            // Book counts in one pass over books, then the series in index
+            // order (series_names): no sort of every name through the
+            // natsort collation on each request.
+            "WITH b AS MATERIALIZED (
+                 SELECT series_id, COUNT(*) AS n, SUM(page_count) AS pages, MIN(added) AS added
+                 FROM books WHERE gone IS NULL GROUP BY series_id)
+             SELECT s.id, s.path, s.name, b.n, b.pages, b.added
+             FROM series s JOIN b ON b.series_id = s.id
+             WHERE s.library = ?1 AND (?2 IS NULL OR s.collection = ?2)
+             ORDER BY s.name COLLATE natsort, s.path COLLATE natsort",
         )?;
-        let rows = stmt.query_map([library], |r| {
+        let rows = stmt.query_map(params![library, collection], |r| {
             Ok(SeriesRow {
                 series: Series {
                     id: r.get(0)?,
@@ -1080,11 +1107,92 @@ impl Catalog {
                 books: r.get(3)?,
                 pages: r.get(4)?,
                 added: r.get(5)?,
-                authors: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
-                genres: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
+                authors: String::new(),
+                genres: String::new(),
             })
         })?;
         rows.collect()
+    }
+
+    /// Fills in each row's first two authors and first three genres.
+    pub fn series_terms(&self, rows: &mut [SeriesRow]) -> Result<(), Error> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT t.name FROM book_terms t JOIN books b ON b.id = t.book_id
+             WHERE b.series_id = ?1 AND b.gone IS NULL AND t.kind = ?2
+             GROUP BY t.name ORDER BY MIN(t.pos), t.name LIMIT ?3",
+        )?;
+        for row in rows {
+            let mut list = |kind: &str, limit: i64| -> Result<String, Error> {
+                let names = stmt
+                    .query_map(params![row.series.id, kind, limit], |r| {
+                        r.get::<_, String>(0)
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(names.join(", "))
+            };
+            row.authors = list("author", 2)?;
+            row.genres = list("genre", 3)?;
+        }
+        Ok(())
+    }
+
+    /// The collections of a library, as `(name, series, books, first
+    /// series' id)`, in natural order of names.
+    pub fn collections(&self, library: &str) -> Result<Vec<(String, i64, i64, i64)>, Error> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT collection, COUNT(*), SUM(n), MIN(CASE WHEN rn = 1 THEN id END) FROM (
+                 SELECT series.id, series.collection,
+                        (SELECT COUNT(*) FROM books WHERE series_id = series.id AND gone IS NULL) AS n,
+                        ROW_NUMBER() OVER (PARTITION BY series.collection
+                            ORDER BY series.name COLLATE natsort, series.path COLLATE natsort) AS rn
+                 FROM series
+                 WHERE series.library = ?1 AND series.collection <> ''
+                   AND EXISTS (SELECT 1 FROM books WHERE series_id = series.id AND gone IS NULL))
+             GROUP BY collection ORDER BY collection COLLATE natsort",
+        )?;
+        let rows = stmt.query_map([library], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?;
+        rows.collect()
+    }
+
+    /// One page of the series of a library shelf: those in `collection`
+    /// (`''`: those in no collection), natural order, with their book
+    /// counts; and how many there are in all.
+    pub fn shelf_series(
+        &self,
+        library: &str,
+        collection: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Vec<(Series, i64)>, usize), Error> {
+        let total: i64 = self
+            .conn
+            .prepare_cached(
+                "SELECT COUNT(*) FROM series WHERE library = ?1 AND collection = ?2
+               AND EXISTS (SELECT 1 FROM books WHERE series_id = series.id AND gone IS NULL)",
+            )?
+            .query_row(params![library, collection], |r| r.get(0))?;
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT id, path, name,
+                    (SELECT COUNT(*) FROM books WHERE series_id = series.id AND gone IS NULL) AS n
+             FROM series WHERE library = ?1 AND collection = ?2 AND n > 0
+             ORDER BY name COLLATE natsort, path COLLATE natsort LIMIT ?3 OFFSET ?4",
+        )?;
+        let rows = stmt.query_map(
+            params![library, collection, limit as i64, offset as i64],
+            |r| {
+                Ok((
+                    Series {
+                        id: r.get(0)?,
+                        path: r.get(1)?,
+                        name: r.get(2)?,
+                    },
+                    r.get(3)?,
+                ))
+            },
+        )?;
+        Ok((rows.collect::<Result<_, _>>()?, total as usize))
     }
 
     pub fn series_by_id(&self, id: i64) -> Result<Option<Series>, Error> {

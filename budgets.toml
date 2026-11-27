@@ -33,6 +33,12 @@ suffix = ".js"
 max_kib = 16
 
 [[assets]]
+name = "Library JS"   # infinite scroll on library pages; they work without it
+dir = "crates/koma/assets/library"
+suffix = ".js"
+max_kib = 4
+
+[[assets]]
 name = "Curator pages JS"
 dir = "crates/koma/assets/curator"
 suffix = ".js"
