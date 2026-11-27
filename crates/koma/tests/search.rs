@@ -171,8 +171,14 @@ fn schema_8_is_upgraded_and_filled() {
     koma::scan::scan(&lib, &data, &mut c).unwrap();
     drop(c);
     let conn = rusqlite::Connection::open(&db).unwrap();
-    conn.execute_batch("DROP TABLE search; PRAGMA user_version = 8;")
-        .unwrap();
+    conn.execute_batch(
+        "DROP INDEX series_shelf;
+         DROP INDEX series_names;
+         ALTER TABLE series DROP COLUMN collection;
+         DROP TABLE search;
+         PRAGMA user_version = 8;",
+    )
+    .unwrap();
     drop(conn);
 
     let mut c = Catalog::open(&db).unwrap();

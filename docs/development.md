@@ -215,6 +215,8 @@ only reads it.
 - A file or folder that can't be read is logged, stored in `scan_errors`
   with the reason (and the file's size and time), and skipped; it never stops
   the scan, and is retried only once it changes.
+- Schema 10 adds `series.collection` (generated) and the shelf indexes;
+  9 and older from 7 on are upgraded in place.
 - The catalogue's schema version is in `PRAGMA user_version`. From 7 on, an
   older version is upgraded in place, one step at a time, since remaking page
   variants is costly; before 7 it is dropped and rebuilt by the next scan.
@@ -298,6 +300,34 @@ page of the series' first book (or the page its metadata names), shown as its
 itself if it has no variants. Covers are looked up only for the cards on the
 page.
 
+**Infinite scroll** (`assets/library/scroll.js`, the only script outside
+the reader, served like the stylesheet at a content-named URL; budget
+"Library JS", 4 KiB). Near the end of the grid it fetches the next
+`?page=` and appends its cards; there is no other endpoint, and without
+JavaScript the `?page=` links do the same. A card far from view keeps only
+its box, at the height every card has (measured once, so no layout per
+card), and its contents wait in a map until it comes near: the DOM stays at
+about one node per far card and only covers near the view hold images.
+When scrolling stops, the URL is set to the chunk at the top of the view
+(`history.replaceState`), so reload and back return there.
+
+The shelf is paged in SQL: `series.collection` is a generated column
+(schema 10) and `series_shelf (library, collection, name)` and
+`series_names (library, name)` are indexes in natural order, so a chunk
+reads its 24 rows without sorting the library on each request; the table
+counts books in one pass and looks up people and genres only for the rows
+shown.
+
+M3's exit check: `tests/exit_m3.rs` serves 10,000 made-up series and walks
+every grid chunk (417) and every table page (200) by their plain links:
+each under 15 KiB (the largest grid chunk 9.6 KB), with no JavaScript. In
+a release build a grid chunk takes about 10 ms and a table page about 20 ms
+end to end. Scrolling through all 10,000 in Chromium (headless, 1400 x 900,
+a distinct cover each) with the script: no long tasks, 56 covers holding an
+image at any time, about one DOM node per far card, and renderer memory
+after garbage collection from 142 MiB at the start to 217 MiB at the end,
+about the 79 MB of cover files the browser keeps cached.
+
 `?view=table` shows the same series as a real `<table>`: title, collection
 (for a whole library that has collections), first authors, books, pages,
 first genres and the date its first book was added, 50 rows a page. Each
@@ -311,7 +341,7 @@ round (`-<column>`, `aria-sort` says which).
 | `GET /settings` | the libraries and their settings, read-only |
 | `GET /search?q={query}&l={folder}` | search, in every library or one (see Search) |
 | `GET /s/{id}` | a series: its cover, facts and books, each with its cover |
-| `GET /a/koma.{hash}.css` | the stylesheet, cached for a year |
+| `GET /a/koma.{hash}.css`, `/a/scroll.{hash}.js` | the stylesheet and the library script, cached for a year |
 | `GET /d/{book}` | the book's original: the file as it is, or a photo folder as a stored ZIP of its images in reading order |
 | `GET /r/{book}/{n}` | the reader, page `n` (1-based); the image links to the next page, and the last page back to the series |
 | `GET /p/{hash}.{ext}` | a page's bytes, `Cache-Control: public, max-age=31536000, immutable`, `ETag` = hash |
