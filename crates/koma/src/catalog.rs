@@ -207,6 +207,19 @@ pub struct Page {
     pub size: Option<Size>,
 }
 
+/// A series as a row of the library's table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SeriesRow {
+    pub series: Series,
+    pub books: i64,
+    pub pages: i64,
+    /// Unix seconds: when its first book was first seen.
+    pub added: i64,
+    /// Its first two authors, then its first three genres, comma-separated.
+    pub authors: String,
+    pub genres: String,
+}
+
 /// The page shown as a book's or series' cover.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cover {
@@ -1030,6 +1043,42 @@ impl Catalog {
         )?;
         let rows = stmt.query_map(params![pattern, limit as i64], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?;
+        rows.collect()
+    }
+
+    /// Every series of a library with what its table row shows, in natural
+    /// order of names.
+    pub fn series_rows(&self, library: &str) -> Result<Vec<SeriesRow>, Error> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT series.id, series.path, series.name,
+                    COUNT(books.id), SUM(books.page_count), MIN(books.added),
+                    (SELECT group_concat(name, ', ') FROM (
+                        SELECT t.name FROM book_terms t JOIN books b ON b.id = t.book_id
+                        WHERE b.series_id = series.id AND b.gone IS NULL AND t.kind = 'author'
+                        GROUP BY t.name ORDER BY MIN(t.pos), t.name LIMIT 2)),
+                    (SELECT group_concat(name, ', ') FROM (
+                        SELECT t.name FROM book_terms t JOIN books b ON b.id = t.book_id
+                        WHERE b.series_id = series.id AND b.gone IS NULL AND t.kind = 'genre'
+                        GROUP BY t.name ORDER BY MIN(t.pos), t.name LIMIT 3))
+             FROM series JOIN books ON books.series_id = series.id AND books.gone IS NULL
+             WHERE series.library = ?1
+             GROUP BY series.id
+             ORDER BY series.name COLLATE natsort, series.path COLLATE natsort",
+        )?;
+        let rows = stmt.query_map([library], |r| {
+            Ok(SeriesRow {
+                series: Series {
+                    id: r.get(0)?,
+                    path: r.get(1)?,
+                    name: r.get(2)?,
+                },
+                books: r.get(3)?,
+                pages: r.get(4)?,
+                added: r.get(5)?,
+                authors: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                genres: r.get::<_, Option<String>>(7)?.unwrap_or_default(),
+            })
         })?;
         rows.collect()
     }

@@ -228,33 +228,9 @@ pub struct Shelf<'a> {
 
 pub fn library(shelf: &Shelf<'_>) -> String {
     let l = shelf.library;
-    let mut m = String::from("<div class=toolbar><h1>");
-    let folder = if l.folder.is_empty() {
-        "library"
-    } else {
-        &l.folder
-    };
-    match shelf.collection {
-        None => {
-            let _ = write!(m, "~/<b>{}</b>", escape(folder));
-        }
-        Some(c) => {
-            let _ = write!(
-                m,
-                "~/<a href=\"{}\">{}</a>/<b>{}</b>",
-                l.url(),
-                escape(folder),
-                escape(c)
-            );
-        }
-    }
-    let _ = write!(
-        m,
-        " {} · {} · {}</h1></div><div class=grid>",
-        plural(shelf.total as i64, "item", "items"),
-        l.kind.as_str(),
-        l.direction.as_str()
-    );
+    let mut m = String::new();
+    shelf_toolbar(&mut m, l, shelf.collection, shelf.total, false);
+    m.push_str("<div class=grid>");
     for item in shelf.items {
         match item {
             Item::Series {
@@ -294,7 +270,9 @@ pub fn library(shelf: &Shelf<'_>) -> String {
         }
     }
     m.push_str("</div>");
-    pager(&mut m, shelf);
+    pager(&mut m, shelf.page, shelf.total, PER_PAGE, |n| {
+        shelf_url(l, shelf.collection, &format!("page={n}"))
+    });
     let title = match shelf.collection {
         Some(c) => format!("{c} · {}", l.name),
         None => l.name.clone(),
@@ -309,38 +287,253 @@ pub fn library(shelf: &Shelf<'_>) -> String {
     shell(&title, shelf.libraries, &here, &m)
 }
 
-fn pager(m: &mut String, shelf: &Shelf<'_>) {
-    let pages = shelf.total.div_ceil(PER_PAGE).max(1);
+/// A library page's URL with the open collection kept: `extra` is more of
+/// the query (`view=table`, `page=2`…), or empty.
+fn shelf_url(library: &Library, collection: Option<&str>, extra: &str) -> String {
+    let mut url = match collection {
+        Some(c) => collection_url(library, c),
+        None => library.url(),
+    };
+    if !extra.is_empty() {
+        url.push(if collection.is_some() { '&' } else { '?' });
+        url.push_str(extra);
+    }
+    url
+}
+
+/// Previous and next links for page `page` of `total` items, `per_page` a
+/// page; `link(n)` is page `n`'s URL. Nothing if it all fits on one.
+fn pager(
+    m: &mut String,
+    page: usize,
+    total: usize,
+    per_page: usize,
+    link: impl Fn(usize) -> String,
+) {
+    let pages = total.div_ceil(per_page).max(1);
     if pages == 1 {
         return;
     }
-    let base = match shelf.collection {
-        Some(c) => format!("{}&page=", collection_url(shelf.library, c)),
-        None => format!("{}?page=", shelf.library.url()),
-    };
-    let first = (shelf.page - 1) * PER_PAGE + 1;
-    let last = (shelf.page * PER_PAGE).min(shelf.total);
-    let _ = write!(m, "<nav class=pager aria-label=Pages>");
-    if shelf.page > 1 {
+    let first = (page - 1) * per_page + 1;
+    let last = (page * per_page).min(total);
+    m.push_str("<nav class=pager aria-label=Pages>");
+    if page > 1 {
         let _ = write!(
             m,
-            "<a href=\"{base}{}\" rel=prev>‹ previous</a>",
-            shelf.page - 1
+            "<a href=\"{}\" rel=prev>‹ previous</a>",
+            escape(&link(page - 1))
         );
     }
     let _ = write!(
         m,
-        "<span class=next>{first}–{last} of {} · page {}/{pages}",
-        shelf.total, shelf.page
+        "<span class=next>{first}–{last} of {total} · page {page}/{pages}"
     );
-    if shelf.page < pages {
+    if page < pages {
         let _ = write!(
             m,
-            " · <a href=\"{base}{}\" rel=next>next ›</a>",
-            shelf.page + 1
+            " · <a href=\"{}\" rel=next>next ›</a>",
+            escape(&link(page + 1))
         );
     }
     m.push_str("</span></nav>");
+}
+
+/// The title of a library page, with the grid/table switch.
+fn shelf_toolbar(m: &mut String, l: &Library, collection: Option<&str>, total: usize, table: bool) {
+    m.push_str("<div class=toolbar><h1>");
+    let folder = if l.folder.is_empty() {
+        "library"
+    } else {
+        &l.folder
+    };
+    match collection {
+        None => {
+            let _ = write!(m, "~/<b>{}</b>", escape(folder));
+        }
+        Some(c) => {
+            let _ = write!(
+                m,
+                "~/<a href=\"{}\">{}</a>/<b>{}</b>",
+                l.url(),
+                escape(folder),
+                escape(c)
+            );
+        }
+    }
+    let _ = write!(
+        m,
+        " {} · {} · {}</h1><div class=seg><a href=\"{}\"{}>grid</a><a href=\"{}\"{}>table</a></div></div>",
+        plural(
+            total as i64,
+            if table { "series" } else { "item" },
+            if table { "series" } else { "items" }
+        ),
+        l.kind.as_str(),
+        l.direction.as_str(),
+        escape(&shelf_url(l, collection, "")),
+        if table { "" } else { " aria-current=page" },
+        escape(&shelf_url(l, collection, "view=table")),
+        if table { " aria-current=page" } else { "" },
+    );
+}
+
+/// Rows a table page shows.
+pub const TABLE_PER_PAGE: usize = 50;
+
+/// What the library table is sorted by: a column, and whether reversed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortKey {
+    Title,
+    Author,
+    Books,
+    Pages,
+    Added,
+}
+
+impl SortKey {
+    pub const ALL: [SortKey; 5] = [
+        SortKey::Title,
+        SortKey::Author,
+        SortKey::Books,
+        SortKey::Pages,
+        SortKey::Added,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SortKey::Title => "title",
+            SortKey::Author => "author",
+            SortKey::Books => "books",
+            SortKey::Pages => "pages",
+            SortKey::Added => "added",
+        }
+    }
+
+    /// `title`, `-pages`… as in `?sort=`.
+    pub fn parse(s: &str) -> Option<(SortKey, bool)> {
+        let (reversed, key) = match s.strip_prefix('-') {
+            Some(k) => (true, k),
+            None => (false, s),
+        };
+        Self::ALL
+            .into_iter()
+            .find(|k| k.as_str() == key)
+            .map(|k| (k, reversed))
+    }
+}
+
+/// A library (or collection) as a sortable table, a page of rows.
+pub struct Table<'a> {
+    pub libraries: &'a [Library],
+    pub library: &'a Library,
+    pub collections: &'a [String],
+    pub collection: Option<&'a str>,
+    pub rows: &'a [crate::catalog::SeriesRow],
+    pub sort: (SortKey, bool),
+    pub page: usize,
+    pub total: usize,
+}
+
+/// `YYYY-MM-DD` (UTC) of unix seconds.
+pub fn date(unix: i64) -> String {
+    // Days to civil date: Howard Hinnant's algorithm.
+    let z = unix.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+pub fn table(t: &Table<'_>) -> String {
+    let l = t.library;
+    let mut m = String::new();
+    shelf_toolbar(&mut m, l, t.collection, t.total, true);
+    let sort_param = |(key, reversed): (SortKey, bool)| {
+        format!(
+            "view=table&sort={}{}",
+            if reversed { "-" } else { "" },
+            key.as_str()
+        )
+    };
+    // A collection column only for a whole library that has collections.
+    let show_collection = t.collection.is_none() && !t.collections.is_empty();
+    m.push_str("<table class=tbl><thead><tr>");
+    let columns: [(SortKey, &str, &str); 5] = [
+        (SortKey::Title, "title", ""),
+        (SortKey::Author, "author", " class=opt"),
+        (SortKey::Books, "books", " class=r"),
+        (SortKey::Pages, "pages", " class=\"r opt\""),
+        (SortKey::Added, "added", " class=opt"),
+    ];
+    for (i, (key, label, class)) in columns.iter().enumerate() {
+        if i == 1 && show_collection {
+            m.push_str("<th scope=col class=opt>collection");
+        }
+        if i == 4 {
+            m.push_str("<th scope=col class=opt>genres");
+        }
+        let current = t.sort.0 == *key;
+        // A click on the current column turns it round.
+        let next = (*key, current && !t.sort.1);
+        let _ = write!(
+            m,
+            "<th scope=col{class}><a href=\"{}\"{}>{label}{}</a>",
+            escape(&shelf_url(l, t.collection, &sort_param(next))),
+            match (current, t.sort.1) {
+                (true, false) => " aria-sort=ascending",
+                (true, true) => " aria-sort=descending",
+                _ => "",
+            },
+            match (current, t.sort.1) {
+                (true, false) => " ▴",
+                (true, true) => " ▾",
+                _ => "",
+            },
+        );
+    }
+    m.push_str("</thead><tbody>");
+    for r in t.rows {
+        let _ = write!(
+            m,
+            "<tr><td><a href=\"/s/{}\">{}</a>",
+            r.series.id,
+            escape(&r.series.name)
+        );
+        if show_collection {
+            let c = crate::libraries::collection_of(&r.series.path).unwrap_or("");
+            let _ = write!(m, "<td class=opt>{}", escape(c));
+        }
+        let _ = write!(
+            m,
+            "<td class=opt>{}<td class=r>{}<td class=\"r opt\">{}<td class=opt>{}<td class=opt>{}",
+            escape(&r.authors),
+            r.books,
+            r.pages,
+            escape(&r.genres),
+            date(r.added)
+        );
+    }
+    m.push_str("</tbody></table>");
+    pager(&mut m, t.page, t.total, TABLE_PER_PAGE, |n| {
+        shelf_url(l, t.collection, &format!("{}&page={n}", sort_param(t.sort)))
+    });
+    let here = Here {
+        library: Some(l),
+        collections: t.collections,
+        collection: t.collection,
+        go: "library",
+        query: "",
+    };
+    let title = match t.collection {
+        Some(c) => format!("{c} · {} · table", l.name),
+        None => format!("{} · table", l.name),
+    };
+    shell(&title, t.libraries, &here, &m)
 }
 
 /// A series: its cover and facts, then its books.
@@ -669,6 +862,22 @@ pub fn reader(series: &Series, book: &Book, pages: &[Page], number: usize) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dates() {
+        assert_eq!(date(0), "1970-01-01");
+        assert_eq!(date(951_782_400), "2000-02-29");
+        assert_eq!(date(1_795_737_600), "2026-11-27");
+        assert_eq!(date(-86_400), "1969-12-31");
+    }
+
+    #[test]
+    fn sort_keys() {
+        assert_eq!(SortKey::parse("pages"), Some((SortKey::Pages, false)));
+        assert_eq!(SortKey::parse("-added"), Some((SortKey::Added, true)));
+        assert_eq!(SortKey::parse("--added"), None);
+        assert_eq!(SortKey::parse("colour"), None);
+    }
 
     #[test]
     fn escapes_markup() {
