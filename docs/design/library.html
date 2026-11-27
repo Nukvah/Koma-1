@@ -7,12 +7,14 @@
 <link rel="stylesheet" href="koma.css">
 </head>
 <body>
+<input type="checkbox" id="menu" class="menu" aria-label="show the menu">
 <header class="top">
 <a class="brand" href="library.html">KOMA-1</a>
-<form class="search" role="search" action="#">
+<form class="search" role="search" action="search.html">
 <label for="q">/</label>
 <input id="q" name="q" type="search" placeholder="search all libraries: title, author:, tag:">
 </form>
+<label for="menu" class="menu-btn" aria-hidden="true">menu</label>
 <a class="user" href="#"><span class="avatar" aria-hidden="true">M</span><span>mirelle ▾</span></a>
 </header>
 
@@ -23,9 +25,9 @@
 <ul>
 <li><a href="library.html" aria-current="page">&gt; library<span class="n">g l</span></a></li>
 <li><a href="#">&nbsp; recent<span class="n">g r</span></a></li>
-<li><a href="#">&nbsp; collections<span class="n">g c</span></a></li>
+<li><a href="collections.html">&nbsp; collections<span class="n">g c</span></a></li>
 <li><a href="#">&nbsp; ingest<span class="n">g i</span></a></li>
-<li><a href="#">&nbsp; settings<span class="n">g s</span></a></li>
+<li><a href="settings.html">&nbsp; settings<span class="n">g s</span></a></li>
 </ul>
 </nav>
 <hr>
@@ -38,17 +40,15 @@
 <li><a class="sub" href="#">  └─ finished<span class="n">88</span></a></li>
 <li><a href="#">▸ ~/webtoons<span class="n">38</span></a></li>
 <li><a href="#">▸ ~/comics<span class="n">61</span></a></li>
-<li><a href="#">▸ ~/artbooks<span class="n">12</span></a></li>
+<li><a href="#">▸ ~/cosplay<span class="n">12</span></a></li>
 </ul>
-<a class="sub" href="#">+ mount library</a>
 </section>
 <hr>
 <section>
 <h2>// collections</h2>
 <ul>
-<li><a href="#">#favourites<span class="n">18</span></a></li>
-<li><a href="#">#to-read-next<span class="n">7</span></a></li>
-<li><a href="#">#finished-2026<span class="n">23</span></a></li>
+<li><a href="collections.html">Starfall Saga<span class="n">4</span></a></li>
+<li><a href="collections.html">Harbor Stories<span class="n">3</span></a></li>
 </ul>
 </section>
 <hr>
@@ -75,7 +75,7 @@
 
 <div class="toolbar">
 <h1>~/<b>manga</b> 214 series · sorted by <a href="#">title ▾</a> · filter <a href="#">all ▾</a></h1>
-<div class="seg"><a href="#" aria-current="page">grid</a><a href="#">table</a></div>
+<div class="seg"><a href="library.html" aria-current="page">grid</a><a href="table.html">table</a></div>
 </div>
 
 <div class="grid">

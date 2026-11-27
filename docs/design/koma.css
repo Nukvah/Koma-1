@@ -31,10 +31,11 @@ kbd{font:inherit;font-size:11px;border:1px solid var(--line2);padding:1px 5px}
 .tree .on .n{color:var(--on-accent)}
 .tree .sub{color:var(--dim)}
 .status{font-size:12px;color:var(--dim)}
+.status p+p{margin-top:4px}
 .status a{display:inline}
 .ok{color:var(--ok)}
 main{flex:1;min-width:0;max-width:1180px;padding:20px 28px 48px;display:flex;flex-direction:column;gap:20px}
-@media (max-width:760px){.layout{display:block}.side{position:static;width:auto;height:auto}.brand{width:auto;padding:12px 14px}.search{padding:8px 10px;min-width:0}.search input{min-width:0;width:100%}.user{padding:0 12px}.user span+span{display:none}main{padding:16px}.continue{gap:14px;padding:12px}.continue .cover{width:96px}.continue strong{font-size:26px}}
+@media (max-width:760px){.layout{display:block}.side{position:static;width:auto;height:auto}.brand{width:auto;padding:12px 14px}.search{padding:8px 10px;min-width:0}.search input{min-width:0;width:100%}.user{padding:0 12px}.user span+span{display:none}main{padding:16px}}
 
 /* Hero: continue panel + three also-reading cards */
 .hero{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:12px}
@@ -98,7 +99,7 @@ main{flex:1;min-width:0;max-width:1180px;padding:20px 28px 48px;display:flex;fle
 .vols .cover{font-size:20px;font-weight:bold;color:#fff}
 .section-h{font-size:12px;font-weight:normal;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}
 
-/* Table, search, collections, forms, notices */
+/* Table, search, collections, notices */
 .tbl{width:100%;border-collapse:collapse;font-size:13px}
 .tbl th,.tbl td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line)}
 .tbl th{font-weight:normal;color:var(--dim);border-bottom:2px solid var(--line2)}
@@ -113,16 +114,17 @@ mark{background:none;color:var(--accent);font-weight:bold}
 .stack::before,.stack::after{content:"";position:absolute;inset:0;border:2px solid var(--line2);background:var(--panel);transform:translate(10px,-10px)}
 .stack::after{transform:translate(5px,-5px)}
 .stack .cover{z-index:1}
-.form{display:grid;grid-template-columns:180px minmax(0,1fr);gap:14px 20px;max-width:760px;padding:22px 26px;border:2px solid var(--line2)}
-.form label{color:var(--dim);padding-top:6px}
-.form input,.form select{font:inherit;padding:6px 10px;background:var(--bg);border:1px solid var(--line2);color:var(--text)}
-.form .help{grid-column:2;font-size:12px;color:var(--dim);margin-top:-8px}
-.form .row{grid-column:1/-1;display:flex;gap:10px}
-@media (max-width:760px){.form{grid-template-columns:minmax(0,1fr)}.form .help{grid-column:1}}
 .swatch{display:inline-block;width:14px;height:14px;background:var(--c)}
-button.btn{font:inherit;font-weight:bold;background:none}
 .note{padding:10px 14px;border:1px solid var(--line2);border-left:4px solid var(--accent);background:var(--panel)}
 .note.err{border-left-color:#E5534B}
 .empty{display:flex;flex-direction:column;gap:12px;align-items:flex-start;padding:28px;border:2px dashed var(--line2)}
 .empty strong{font-size:28px;color:var(--bright)}
 .empty p{max-width:60ch;color:var(--dim)}
+/* Phones: the side panel folds behind a menu button (a checkbox, no JavaScript) */
+.menu{position:absolute;opacity:0;width:1px;height:1px}
+.menu-btn{display:none}
+@media (max-width:760px){.menu-btn{display:flex;align-items:center;padding:0 12px;border-left:1px solid var(--line);cursor:pointer}
+.menu:checked~.top .menu-btn{background:var(--accent);color:var(--on-accent)}
+.menu:focus-visible~.top .menu-btn{outline:2px solid var(--accent);outline-offset:-2px}
+.menu:not(:checked)~.layout .side{display:none}
+.continue{gap:14px;padding:12px}.continue .cover{width:96px}.continue strong{font-size:26px}}

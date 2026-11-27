@@ -78,8 +78,9 @@ naming-baseline example passes.
 Goal: the library from `docs/design/` on real data.
 
 - Design step: table view, search, collections, library settings, empty and error states.
-- Libraries made in the UI with name, folder, type (comics, manga, cosplay), reading
-  direction and colour; a new top-level folder becomes a library by itself *(proven)*.
+- Libraries: every top-level folder is one, found by itself at the next scan *(proven)*, with
+  a name, type (comics, manga, cosplay), reading direction and colour taken from the folder.
+  The UI shows them read-only; editing them comes with accounts (M5).
 - Collections: folders that group series, shown as stacked-cover cards *(proven)*.
 - Side panel, edge-strip progress, continue hero, Continue / Unread / Finished views, real
   `<table>` view.
@@ -123,6 +124,8 @@ Goal: know who is asking before anything can change the library.
   over *(proven)*.
 - Each account owns a folder and its libraries are private to it *(proven)*.
 - Roles: reader (read, download) and curator (organise, upload, convert).
+- Library settings editable by the admin (name, type, reading direction, colour): `koma serve`
+  queues the change and the worker applies it, so the worker stays the catalogue's only writer.
 
 Exit: a reader gets a refusal for every write action; two accounts never see each other's
 libraries.
@@ -274,7 +277,7 @@ lossless JPEG XL archival and a dedicated phone layout.
 
   | Budget | Now | Proposed | Why |
   |---|---|---|---|
-  | CSS | 5 KB | 10 KB | the chosen design is already 7.7 KB; curation and upload screens add more |
+  | CSS | 5 KB | 12 KB (10 until M3) | the library UI's design CSS is 9.6 KB before its real pages; curation and upload screens add more |
   | Reader JS | 10 KB | 16 KB | offline and sync logic |
   | EPUB reader JS | none | 16 KB, loaded only for EPUBs | reflowable book reader |
   | Curator pages JS | none | 24 KB, loaded only there | upload progress, rename preview |

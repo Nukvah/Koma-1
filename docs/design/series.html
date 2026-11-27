@@ -7,12 +7,14 @@
 <link rel="stylesheet" href="koma.css">
 </head>
 <body>
+<input type="checkbox" id="menu" class="menu" aria-label="show the menu">
 <header class="top">
 <a class="brand" href="library.html">KOMA-1</a>
-<form class="search" role="search" action="#">
+<form class="search" role="search" action="search.html">
 <label for="q">/</label>
 <input id="q" name="q" type="search" placeholder="search all libraries: title, author:, tag:">
 </form>
+<label for="menu" class="menu-btn" aria-hidden="true">menu</label>
 <a class="user" href="#"><span class="avatar" aria-hidden="true">M</span><span>mirelle ▾</span></a>
 </header>
 
@@ -23,9 +25,9 @@
 <ul>
 <li><a href="library.html" aria-current="page">&gt; library<span class="n">g l</span></a></li>
 <li><a href="#">&nbsp; recent<span class="n">g r</span></a></li>
-<li><a href="#">&nbsp; collections<span class="n">g c</span></a></li>
+<li><a href="collections.html">&nbsp; collections<span class="n">g c</span></a></li>
 <li><a href="#">&nbsp; ingest<span class="n">g i</span></a></li>
-<li><a href="#">&nbsp; settings<span class="n">g s</span></a></li>
+<li><a href="settings.html">&nbsp; settings<span class="n">g s</span></a></li>
 </ul>
 </nav>
 <hr>
@@ -38,16 +40,14 @@
 <li><a class="sub" href="#">  └─ finished<span class="n">88</span></a></li>
 <li><a href="#">▸ ~/webtoons<span class="n">38</span></a></li>
 <li><a href="#">▸ ~/comics<span class="n">61</span></a></li>
-<li><a href="#">▸ ~/artbooks<span class="n">12</span></a></li>
+<li><a href="#">▸ ~/cosplay<span class="n">12</span></a></li>
 </ul>
 </section>
 <hr>
 <section>
 <h2>// this series</h2>
 <ul>
-<li><a href="#">in #favourites</a></li>
-<li><a href="#">+ add to collection</a></li>
-<li><a href="#">series settings</a></li>
+<li><a href="collections.html">in Starfall Saga</a></li>
 </ul>
 </section>
 <hr>
@@ -76,7 +76,7 @@
 
 <div class="toolbar">
 <h2 class="section-h">volumes · 14 · 5 read</h2>
-<div class="seg"><a href="#" aria-current="page">grid</a><a href="#">table</a></div>
+<div class="seg"><a href="library.html" aria-current="page">grid</a><a href="table.html">table</a></div>
 </div>
 
 <div class="grid vols">

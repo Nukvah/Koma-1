@@ -10,7 +10,7 @@ Open any `.html` file here in a browser; they share `koma.css` and use no JavaSc
 | `table.html` | the library as a real `<table>`, sorted by a heading link |
 | `search.html` | search results across libraries, grouped by kind |
 | `collections.html` | collections as stacked covers, then what one holds |
-| `settings.html` | one library's settings, with the "applied by the worker" notice |
+| `settings.html` | the libraries and their settings, read-only until accounts (M5) |
 | `states.html` | empty and error states, one block per screen |
 They follow `prefers-color-scheme`, so switch your OS theme to see dark and light.
 
@@ -49,7 +49,9 @@ a terminal-era screenshot as in a modern browser.
      finished; the others stay collapsed. Several libraries are first-class.
   3. `// collections`, then one line of ingest status.
   On a series page, `// this series` and `// more by …` follow the libraries.
-- Below 760 px the panel stacks above the content and stops being sticky.
+- Below 760 px the panel folds away behind a `menu` button in the top bar and opens
+  above the content when tapped. The button is a label for a checkbox, so it works
+  without JavaScript, and the checkbox can be reached with the keyboard.
 
 ## Cover card (progress on the cover)
 
@@ -119,9 +121,12 @@ Font: `ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace`.
   `/library/cosplay`…), with default settings for its type until changed.
 - Inside a library, a folder that holds series folders is a collection, shown as
   a stack of covers that opens to its series.
-- Settings (name, type, reading direction, colour) are changed in the UI, but
-  `koma serve` never writes the catalogue: it queues the change, and the worker
-  applies it within seconds. The page says so until it has.
+- A library's settings come from its folder: the name, capitalised; the type from
+  the name (manga, comics, webtoon, cosplay…), manga if it says nothing; right to
+  left for manga, left to right otherwise; a colour from a fixed list in folder
+  order. The settings page shows them read-only. Editing them comes with accounts
+  (M5): `koma serve` will queue a change and the worker apply it, so the worker
+  stays the catalogue's only writer.
 
 ## Search (M3)
 
