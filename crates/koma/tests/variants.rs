@@ -190,21 +190,28 @@ fn a_stop_between_pages_keeps_what_is_done() {
     let data = root.join("data");
     let mut catalog = Catalog::open(&db(&data)).unwrap();
 
-    // Books are indexed, and their variants made, in folder order: Mirelle
-    // Set (one big page), then Starfall v01 (two), then v02. Stop in the
-    // middle of v01.
+    // Index only, then queue v01's variants alone (two big pages) and stop
+    // after its first: the order books are found in depends on the file
+    // system, so the test picks the book itself.
     let mut report = discover(&lib, &mut catalog, Check::Files).unwrap();
     let db_path = db(&data);
     run_jobs(&lib, &data, &mut catalog, &mut report, &|| {
-        variant_pages_done(&db_path) >= 2
+        books_indexed(&db_path) == 3
     })
     .unwrap();
     assert_eq!(report.indexed, 3);
-    assert_eq!(report.variant_pages, 2);
-    assert_eq!(catalog.variant_page_count(VERSION).unwrap(), 2);
-    // v01's job is back in the queue, its attempt not counted, and v02's
-    // waits behind it.
-    assert_eq!(catalog.job_count().unwrap(), 2);
+    catalog
+        .enqueue(JobKind::Variants, "Starfall/Starfall v01.cbz")
+        .unwrap();
+    let mut report = discover(&lib, &mut catalog, Check::Files).unwrap();
+    run_jobs(&lib, &data, &mut catalog, &mut report, &|| {
+        variant_pages_done(&db_path) >= 1
+    })
+    .unwrap();
+    assert_eq!(report.variant_pages, 1);
+    assert_eq!(catalog.variant_page_count(VERSION).unwrap(), 1);
+    // v01's job is back in the queue, its attempt not counted.
+    assert_eq!(catalog.job_count().unwrap(), 1);
     let job = catalog.claim_job().unwrap().unwrap();
     assert_eq!(job.kind, JobKind::Variants);
     assert_eq!(job.path, "Starfall/Starfall v01.cbz");
@@ -213,8 +220,9 @@ fn a_stop_between_pages_keeps_what_is_done() {
 
     let mut rest = discover(&lib, &mut catalog, Check::Files).unwrap();
     run_jobs(&lib, &data, &mut catalog, &mut rest, &|| false).unwrap();
-    // v01's second page and v02's JPEG; the page v02 shares with v01 is done.
-    assert_eq!(rest.variant_pages, 2);
+    // v01's second page first, then Mirelle Set's page and v02's JPEG; the
+    // page v02 shares with v01 is done by then.
+    assert_eq!(rest.variant_pages, 3);
     assert_eq!(catalog.variant_page_count(VERSION).unwrap(), 4);
     assert_eq!(catalog.job_count().unwrap(), 0);
     let _ = fs::remove_dir_all(&root);
