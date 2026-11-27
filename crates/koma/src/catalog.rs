@@ -1385,6 +1385,58 @@ impl Catalog {
         )
     }
 
+    /// One page of a book by its 0-based number.
+    pub fn page(&self, book_id: i64, number: i64) -> Result<Option<Page>, Error> {
+        self.conn
+            .prepare_cached(
+                "SELECT number, hash, format, length, offset, file, width, height FROM pages
+                 WHERE book_id = ?1 AND number = ?2",
+            )?
+            .query_row(params![book_id, number], |r| {
+                Ok(Page {
+                    number: r.get(0)?,
+                    hash: hash_from_row(r, 1)?,
+                    format: r.get(2)?,
+                    length: r.get::<_, i64>(3)? as u64,
+                    offset: r.get::<_, Option<i64>>(4)?.map(|o| o as u64),
+                    file: r.get(5)?,
+                    size: match (r.get::<_, Option<u32>>(6)?, r.get::<_, Option<u32>>(7)?) {
+                        (Some(width), Some(height)) => Some(Size { width, height }),
+                        _ => None,
+                    },
+                })
+            })
+            .optional()
+    }
+
+    /// One page's variants made with `version`, as `(width, format)`.
+    pub fn page_variants(
+        &self,
+        hash: &blake3::Hash,
+        version: i64,
+    ) -> Result<Vec<(u32, String)>, Error> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT variants.width, variants.format FROM variants
+             JOIN variant_pages vp ON vp.hash = variants.hash AND vp.version = ?2
+             WHERE variants.hash = ?1 ORDER BY variants.width, variants.format",
+        )?;
+        let rows = stmt.query_map(params![hash.as_bytes(), version], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?;
+        rows.collect()
+    }
+
+    /// A book's own reading direction (`"rtl"`, `"ltr"`), if its metadata
+    /// gives one.
+    pub fn book_direction(&self, book_id: i64) -> Result<Option<String>, Error> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT direction FROM books WHERE id = ?1")?
+            .query_row([book_id], |r| r.get(0))
+            .optional()?
+            .flatten())
+    }
+
     /// The variants of every page of a book made with `version`, as
     /// `(page number, width, format)`, by page then width.
     pub fn book_variants(

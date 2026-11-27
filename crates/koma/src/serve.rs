@@ -534,14 +534,28 @@ async fn reader(
 ) -> Result<Html<String>, Failure> {
     state
         .query(move |c| {
+            // Only what the page shows: this page and its variants (the
+            // script gets them all once, from /b/<book>).
             let book = c.book(book_id)?.ok_or(Failure::NotFound)?;
-            let series = c.series_by_id(book.series_id)?.ok_or(Failure::NotFound)?;
-            let pages = reader_pages(c, book_id)?;
-            if number == 0 || number > pages.len() {
+            let total = usize::try_from(book.page_count).unwrap_or(0);
+            if number == 0 || number > total {
                 return Err(Failure::NotFound);
             }
+            let page = c
+                .page(book_id, number as i64 - 1)?
+                .ok_or(Failure::NotFound)?;
+            let mut made: Vec<(u32, u8)> = Vec::new();
+            for (width, format) in c.page_variants(&page.hash, variants::VERSION)? {
+                let bit = if format == "jpg" { 1 } else { 2 };
+                match made.iter_mut().find(|(w, _)| *w == width) {
+                    Some((_, m)) => *m |= bit,
+                    None => made.push((width, bit)),
+                }
+            }
+            let page = html::ReaderPage::new(&page, made);
+            let series = c.series_by_id(book.series_id)?.ok_or(Failure::NotFound)?;
             // The book's own direction, else its library's.
-            let rtl = match c.details(&book.path)?.and_then(|d| d.direction) {
+            let rtl = match c.book_direction(book_id)? {
                 Some(d) => d == "rtl",
                 None => {
                     let folder = libraries::library_of(&series.path);
@@ -552,9 +566,9 @@ async fn reader(
             Ok(Html(html::reader(&html::Reader {
                 series: &series,
                 book: &book,
-                page: &pages[number - 1],
+                page: &page,
                 number,
-                total: pages.len(),
+                total,
                 rtl,
             })))
         })
@@ -776,6 +790,19 @@ pub async fn serve<F>(listener: TcpListener, state: AppState, shutdown: F) -> io
 where
     F: Future<Output = ()> + Send + 'static,
 {
+    use axum::serve::ListenerExt;
+    // No Nagle delay: a response written in two parts (head, then body)
+    // would otherwise wait for the client's delayed ACK of the previous
+    // response before its first byte leaves, adding up to tens of
+    // milliseconds on keep-alive connections.
+    let listener = listener.tap_io(|tcp| {
+        if let Err(e) = tcp.set_nodelay(true) {
+            log::error(
+                "serve: cannot set TCP_NODELAY",
+                &[("error", &e.to_string())],
+            );
+        }
+    });
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown)
         .await
