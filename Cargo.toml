@@ -26,3 +26,7 @@ strip = true
 # encoding page variants unoptimised makes the tests minutes instead of seconds.
 [profile.dev.package."*"]
 opt-level = 2
+
+# The test-material crate too: tests write tens of megabytes of made-up pages.
+[profile.dev.package.koma-fixtures]
+opt-level = 2

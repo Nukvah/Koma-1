@@ -208,7 +208,9 @@ only reads it.
   `scan::run_jobs` works through the queue. Each job is one transaction, so
   a killed worker leaves the catalogue as it was. On start, jobs left running
   are queued again; a job claimed three times without finishing is given up
-  and recorded as an error. A lock file (`<data>/worker.lock`) keeps a second
+  and recorded as an error. `tests/kill.rs` kills `koma worker` with SIGKILL
+  partway through indexing and checks that a restart reads only what was not
+  stored yet and gets every page back byte for byte. A lock file (`<data>/worker.lock`) keeps a second
   worker or scan out.
 - A file or folder that can't be read is logged, stored in `scan_errors`
   with the reason (and the file's size and time), and skipped; it never stops
