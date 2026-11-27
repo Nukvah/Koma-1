@@ -6,7 +6,8 @@ Why and how: [MANIFESTO.md](MANIFESTO.md). Contributing: [AGENTS.md](AGENTS.md).
 
 **Status: Milestone 2 in progress.** `koma worker` indexes a library of CBZ,
 ZIP and CB7 files and photo folders into SQLite and keeps it up to date, and
-`koma serve` shows it in a browser: library, series and a bare reader.
+`koma serve` shows it in a browser: library, series and a bare reader. The
+worker also makes smaller JPEG and WebP copies of each large page, once.
 
 ## Run
 
@@ -35,6 +36,14 @@ One binary, three modes:
 `--library` / `KOMA_LIBRARY` (default `/library`) and `--data` / `KOMA_DATA`
 (default `/data`) set the folders.
 Logs are JSON lines on stderr.
+
+## Third-party notices
+
+This software is based in part on the work of the Independent JPEG Group
+(through the `jpeg-encoder` crate, which writes JPEG page variants).
+It includes libwebp, Copyright (c) 2010, Google Inc., under the BSD
+3-Clause licence. Every other dependency is under the MIT, Apache-2.0,
+BSD-3-Clause, Zlib or Unicode-3.0 licence; `cargo deny check` lists them.
 
 ## Docs
 

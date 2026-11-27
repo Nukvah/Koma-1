@@ -13,6 +13,9 @@ ignore = []
 allow = [
     "Apache-2.0",
     "BSD-3-Clause",
+    # jpeg-encoder (page variants). Permissive; binaries must say they are
+    # "based in part on the work of the Independent JPEG Group": README.md.
+    "IJG",
     "MIT",
     "Unicode-3.0",
     "Zlib",

@@ -57,8 +57,8 @@ Exit: a test library of made-up CBZ files reads front to back.
 
 Goal: ingest does all the work once, and knows what each file is.
 
-- `koma worker` with a job queue; page variants in AVIF, WebP and JPEG; page sizes stored
-  without reading whole pages *(proven)*.
+- `koma worker` with a job queue; page variants in WebP and JPEG (AVIF variants come in M9);
+  page sizes stored without reading whole pages *(proven)*.
 - Incremental scan: only folders whose modification time changed are re-read, and a restart
   re-reads nothing *(proven)*.
 - Stable ids: a book and a series keep their id, progress, edits and date added through
@@ -187,6 +187,12 @@ Goal: save disk space when you decide to, and see where it went.
   pages and a before-and-after page compare *(proven)*.
 - Presets: Default (AVIF, quality 70, speed 6, full colour, grayscale for black-and-white
   pages), Lossless (lossless WebP for PNG, BMP and TIFF books), and custom ones *(proven)*.
+- AVIF page variants next to the WebP and JPEG ones, with the same encoder.
+- Variant widths as a library setting (today 720, 1080 and 1440): fewer widths for less disk.
+- JPEG variants: measure jpegli (through its own small crate, `koma-jpegli`, built like
+  `koma-webp`) against `jpeg-encoder` on made-up pages: size at equal visual quality, encode
+  time, image size, and whether it still needs the IJG notice. Switch only if it wins, by
+  raising `variants::VERSION`.
 - A page that would not get smaller is left alone; each book is written to a temporary file,
   every page checked, then swapped in keeping its id and progress *(proven)*.
 - Originals kept for a set number of days with Undo; new uploads can be converted
@@ -218,8 +224,8 @@ Goal: every remaining format, without letting a bad file hurt the server.
 
 - CBR, PDF and fixed-layout EPUB decoded in a sandboxed subprocess, extracted once at ingest.
 - HEIC and JPEG XL books converted once, with an offer to optimise them to AVIF *(proven)*.
-- Continuous fuzzing of every parser; `koma scrub` re-hashes blobs and checks the journal
-  against the disk.
+- Continuous fuzzing of every parser; `koma scrub` re-hashes blobs, removes variants of pages no
+  longer in the library, and checks the journal against the disk.
 
 Exit: a corpus of malformed archives crashes no more than its own job.
 
@@ -272,7 +278,7 @@ lossless JPEG XL archival and a dedicated phone layout.
   | Reader JS | 10 KB | 16 KB | offline and sync logic |
   | EPUB reader JS | none | 16 KB, loaded only for EPUBs | reflowable book reader |
   | Curator pages JS | none | 24 KB, loaded only there | upload progress, rename preview |
-  | Container image | 20 MB | 40 MB | AVIF encoder and more libvips loaders |
+  | Container image | 20 MB | 40 MB | AVIF encoder and vendored codecs (libwebp) |
   | Idle RAM (serve) | 25 MB | 40 MB | metadata and sync state |
   | Idle RAM (worker) | none | 64 MB | rename plans and upload buffers |
 

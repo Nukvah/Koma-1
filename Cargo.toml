@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/koma", "crates/koma-fixtures", "xtask"]
+members = ["crates/koma", "crates/koma-fixtures", "crates/koma-webp", "xtask"]
 # Fuzz targets build on nightly, with their own lock file: see docs/development.md.
 exclude = ["fuzz"]
 
@@ -21,3 +21,8 @@ todo = "deny"
 lto = "fat"
 codegen-units = 1
 strip = true
+
+# Dependencies optimised even in debug builds: decoding, resizing and
+# encoding page variants unoptimised makes the tests minutes instead of seconds.
+[profile.dev.package."*"]
+opt-level = 2

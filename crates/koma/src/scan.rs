@@ -40,6 +40,7 @@ use crate::catalog::{
 };
 use crate::log;
 use crate::names;
+use crate::variants;
 
 /// A folder modified less than this long before it is read is read again
 /// next time: file systems with coarse times (FAT, some network shares) could
@@ -65,6 +66,8 @@ pub struct ScanReport {
     pub folders_read: usize,
     /// Folders not read because their modification time is unchanged.
     pub folders_skipped: usize,
+    /// Pages whose variants were made (or found impossible to make).
+    pub variant_pages: usize,
 }
 
 /// How closely a scan looks at folders that have not changed.
@@ -121,6 +124,7 @@ pub fn log_report(report: &ScanReport, started: Instant) {
             ("moved", &report.moved.to_string()),
             ("folders_read", &report.folders_read.to_string()),
             ("folders_skipped", &report.folders_skipped.to_string()),
+            ("variant_pages", &report.variant_pages.to_string()),
             ("ms", &started.elapsed().as_millis().to_string()),
         ],
     );
@@ -409,10 +413,26 @@ pub fn run_jobs(
     blobs
         .clean_temp()
         .map_err(|e| ScanError::Io(data.join("blobs"), e))?;
+    // Once the queue is empty, pages still lacking variants are looked for
+    // once: new books, and any left by an older version of the variants.
+    let mut looked_for_variants = false;
     while !should_stop() {
         let Some(job) = catalog.claim_job()? else {
+            if !looked_for_variants {
+                looked_for_variants = true;
+                let min_width = variants::WIDTHS[0];
+                if catalog.queue_missing_variants(variants::VERSION, min_width)? > 0 {
+                    continue;
+                }
+            }
             break;
         };
+        if job.attempts > MAX_ATTEMPTS && job.kind == JobKind::Variants {
+            variants::give_up_page(catalog, &job.path)?;
+            catalog.finish_job(job.id)?;
+            catalog.enqueue(JobKind::Variants, &job.path)?;
+            continue;
+        }
         if job.attempts > MAX_ATTEMPTS {
             let e = format!(
                 "gave up after {MAX_ATTEMPTS} attempts: the worker stopped while reading it each time"
@@ -429,6 +449,15 @@ pub fn run_jobs(
         }
         match job.kind {
             JobKind::Index => index_job(library, &blobs, catalog, &job.path, report)?,
+            JobKind::Variants => {
+                let (end, pages) =
+                    variants::run_job(library, &blobs, catalog, &job.path, should_stop)?;
+                report.variant_pages += pages;
+                if end == variants::JobEnd::Stopped {
+                    catalog.release_job(job.id)?;
+                    break;
+                }
+            }
         }
         catalog.finish_job(job.id)?;
     }

@@ -60,7 +60,7 @@ Every pull request runs a k6 load test and an image-size check against this tabl
 ```
 
 ### Runtime
-- Rust (axum on hyper and tokio) with libvips for image work. No garbage collector, predictable latency.
+- Rust (axum on hyper and tokio). Images are decoded and resized in pure Rust; small vendored C encoders (libwebp) only where Rust has none. No garbage collector, predictable latency.
 - Statically linked with musl, built `FROM scratch`.
 - Non-root, read-only root filesystem, all capabilities dropped, seccomp profile.
 - Reproducible builds via Nix, SBOM, cosign-signed images.
@@ -107,7 +107,7 @@ inotify/fanotify + periodic full scan
   → parse archive (fuzzed parser)
   → page order (natural sort), spread detection (aspect > 1.2 = double page)
   → job queue (SQLite table)
-  → libvips transcode, workers = cores − 1, nice 19, ionice idle
+  → variants: decode, resize, encode (one page at a time), nice 19, ionice idle
 ```
 
 Ingest may be slow. Serving never is.

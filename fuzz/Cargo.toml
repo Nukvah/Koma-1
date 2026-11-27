@@ -50,3 +50,10 @@ path = "fuzz_targets/metadata.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "variants"
+path = "fuzz_targets/variants.rs"
+test = false
+doc = false
+bench = false
