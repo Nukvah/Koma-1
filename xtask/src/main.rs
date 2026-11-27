@@ -1,11 +1,14 @@
 //! Project tasks for Koma-1. Run with `cargo xtask <task>`.
 //!
+//! `fixtures` writes a made-up test library of CBZ files.
+//!
 //! `budgets` checks the numbers in `budgets.toml`: static asset sizes always,
 //! and with `--image` the container image size, cold start, idle memory and
 //! page latency of the real image. CI fails when any budget is exceeded.
 
 mod budgets;
 mod docker;
+mod fixtures;
 mod http;
 mod measure;
 mod report;
@@ -18,10 +21,13 @@ use report::Report;
 
 const USAGE: &str = "\
 Usage: cargo xtask budgets (--image <tag> | --assets-only)
+       cargo xtask fixtures <dir>
 
   --image <tag>   Check every budget against this locally built image
                   (needs Docker; build it with: docker build -t koma:dev .)
   --assets-only   Check only static asset sizes (no Docker needed)
+
+fixtures writes a made-up library of CBZ files for testing and trying koma.
 ";
 
 fn main() -> ExitCode {
@@ -36,6 +42,13 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("xtask budgets: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("fixtures") => match fixtures::run(&args[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("xtask fixtures: {e}");
                 ExitCode::FAILURE
             }
         },

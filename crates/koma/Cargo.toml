@@ -11,6 +11,7 @@ axum = { version = "0.8.9", default-features = false, features = ["http1", "toki
 tokio = { version = "1.54", features = ["rt", "rt-multi-thread", "net", "signal", "macros"] }
 
 [dev-dependencies]
+koma-fixtures = { path = "../koma-fixtures" }
 tokio = { version = "1.54", features = ["sync"] }
 
 [lints]
