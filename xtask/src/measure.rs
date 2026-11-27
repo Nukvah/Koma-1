@@ -103,8 +103,16 @@ pub fn image(image: &str, budgets: &Budgets, report: &mut Report) -> Result<(), 
         &format!("max {:.1} ms", ms(starts[starts.len() - 1])),
     );
 
-    serve_container(image, budgets, report)?;
-    worker_container(image, budgets, report)?;
+    // One made-up library and data folder, shared: the worker scans into the
+    // data folder, then serve reads it, so the pages measured are real ones.
+    let shared = Shared::create()?;
+    let measured =
+        worker_container(image, &shared, budgets, report).and_then(|scanned| match scanned {
+            true => serve_container(image, &shared, budgets, report),
+            false => Ok(()),
+        });
+    shared.remove();
+    measured?;
 
     let scrub = docker::run(&["run", "--rm", image, "scrub"]);
     report.check(
@@ -115,11 +123,61 @@ pub fn image(image: &str, budgets: &Budgets, report: &mut Report) -> Result<(), 
     Ok(())
 }
 
-fn serve_container(image: &str, budgets: &Budgets, report: &mut Report) -> Result<(), String> {
-    eprintln!("starting koma serve in a container...");
+/// The test library and the data folder that the worker and serve containers share.
+struct Shared {
+    root: PathBuf,
+    books: usize,
+    /// `uid:gid` of the host user. The containers run as that user so the
+    /// host can read and delete what they write.
+    user: String,
+    library: String,
+    data: String,
+}
+
+impl Shared {
+    fn create() -> Result<Self, String> {
+        use std::os::unix::fs::MetadataExt;
+
+        let root = std::env::temp_dir().join(format!("koma-budgets-shared-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let books = koma_fixtures::library::write(&root.join("library"))
+            .map_err(|e| e.to_string())?
+            .len();
+        fs::create_dir_all(root.join("data")).map_err(|e| e.to_string())?;
+        let meta = fs::metadata(&root).map_err(|e| e.to_string())?;
+        Ok(Self {
+            books,
+            user: format!("{}:{}", meta.uid(), meta.gid()),
+            library: format!("{}:/library:ro", root.join("library").display()),
+            data: format!("{}:/data", root.join("data").display()),
+            root,
+        })
+    }
+
+    fn remove(&self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+fn serve_container(
+    image: &str,
+    shared: &Shared,
+    budgets: &Budgets,
+    report: &mut Report,
+) -> Result<(), String> {
+    eprintln!("starting koma serve on the scanned test library...");
     let port = free_port()?;
     let publish = format!("127.0.0.1:{port}:8080");
-    let mut args = vec!["--publish", &publish];
+    let mut args = vec![
+        "--publish",
+        &publish,
+        "--user",
+        &shared.user,
+        "--volume",
+        &shared.library,
+        "--volume",
+        &shared.data,
+    ];
     args.extend(LIMITS);
     args.extend(HARDENING);
     args.extend([image, "serve"]);
@@ -144,17 +202,27 @@ fn serve_container(image: &str, budgets: &Budgets, report: &mut Report) -> Resul
     thread::sleep(Duration::from_millis(500));
     let idle = c.rss_bytes()?;
 
-    eprintln!("timing {} requests...", LOAD_CONNECTIONS * LOAD_REQUESTS);
-    let mut ttfb = load(addr, "/healthz")?;
-    ttfb.sort();
-    let p99 = ttfb[(ttfb.len() * 99).div_ceil(100) - 1];
-    report.budget(
-        "TTFB p99",
-        ms(p99),
-        budgets.latency.ttfb_p99_ms,
-        "ms",
-        &format!("/healthz until pages exist, {} requests", ttfb.len()),
-    );
+    // Follow links like a reader would: library, first series, first book.
+    let reader = follow(addr, "/", "/s/")
+        .and_then(|series| follow(addr, &series, "/r/"))
+        .map_err(|e| format!("finding a reader page: {e}"))?;
+    let image = follow(addr, &reader, "/p/").map_err(|e| format!("finding a page image: {e}"))?;
+    for (name, path) in [("reader page", &reader), ("page image", &image)] {
+        eprintln!(
+            "timing {} requests of {path}...",
+            LOAD_CONNECTIONS * LOAD_REQUESTS
+        );
+        let mut ttfb = load(addr, path)?;
+        ttfb.sort();
+        let p99 = ttfb[(ttfb.len() * 99).div_ceil(100) - 1];
+        report.budget(
+            &format!("TTFB p99 ({name})"),
+            ms(p99),
+            budgets.latency.ttfb_p99_ms,
+            "ms",
+            &format!("{}, {} requests", short(path), ttfb.len()),
+        );
+    }
 
     for page in &budgets.pages {
         let mut conn = http::Conn::open(addr, Duration::from_secs(2))?;
@@ -202,19 +270,22 @@ fn serve_container(image: &str, budgets: &Budgets, report: &mut Report) -> Resul
     stop_cleanly(&c, "koma serve stops on SIGTERM", report)
 }
 
-/// Runs `koma worker` on the made-up test library (read-only) with a tmpfs
-/// for its data, waits for the scan, then measures its idle memory.
-fn worker_container(image: &str, budgets: &Budgets, report: &mut Report) -> Result<(), String> {
-    let library = std::env::temp_dir().join(format!("koma-budgets-library-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&library);
-    let books = koma_fixtures::library::write(&library).map_err(|e| e.to_string())?;
-    let volume = format!("{}:/library:ro", library.display());
-
+/// Runs `koma worker` on the made-up test library (read-only), waits for the
+/// scan, then measures its idle memory. Returns whether the scan succeeded.
+fn worker_container(
+    image: &str,
+    shared: &Shared,
+    budgets: &Budgets,
+    report: &mut Report,
+) -> Result<bool, String> {
+    eprintln!("starting koma worker on the test library...");
     let mut args = vec![
+        "--user",
+        &shared.user,
         "--volume",
-        &volume,
-        "--tmpfs",
-        "/data:rw,uid=65532,gid=65532,mode=0700",
+        &shared.library,
+        "--volume",
+        &shared.data,
     ];
     args.extend(LIMITS);
     args.extend(HARDENING);
@@ -229,7 +300,7 @@ fn worker_container(image: &str, budgets: &Budgets, report: &mut Report) -> Resu
             .map(str::to_owned);
         done.is_some()
     });
-    let want = format!("\"indexed\":\"{}\"", books.len());
+    let want = format!("\"indexed\":\"{}\"", shared.books);
     let ok = scanned
         && done
             .as_deref()
@@ -246,7 +317,6 @@ fn worker_container(image: &str, budgets: &Budgets, report: &mut Report) -> Resu
             None => "no \"scan: done\" within 30 s".into(),
         },
     );
-    let _ = fs::remove_dir_all(&library);
 
     thread::sleep(Duration::from_millis(500));
     let rss = c.rss_bytes()?;
@@ -257,7 +327,38 @@ fn worker_container(image: &str, budgets: &Budgets, report: &mut Report) -> Resu
         "MiB",
         "after scanning",
     );
-    stop_cleanly(&c, "koma worker stops on SIGTERM", report)
+    stop_cleanly(&c, "koma worker stops on SIGTERM", report)?;
+    Ok(ok)
+}
+
+/// `path` cut to fit a report line: page image names are 64-digit hashes.
+fn short(path: &str) -> String {
+    match path.char_indices().nth(16) {
+        Some((cut, _)) if path.len() > 24 => format!("{}…", &path[..cut]),
+        _ => path.to_owned(),
+    }
+}
+
+/// GETs `path` and returns the first link in it that starts with `prefix`.
+fn follow(addr: SocketAddr, path: &str, prefix: &str) -> Result<String, String> {
+    let mut conn = http::Conn::open(addr, Duration::from_secs(2))?;
+    let response = conn.get(path)?;
+    if response.status != 200 {
+        return Err(format!("GET {path}: status {}", response.status));
+    }
+    first_link(&String::from_utf8_lossy(&response.body), prefix)
+        .ok_or_else(|| format!("GET {path}: no link to {prefix}"))
+}
+
+/// The first `href` or `src` value in `html` that starts with `prefix`.
+fn first_link(html: &str, prefix: &str) -> Option<String> {
+    ["href=\"", "src=\""]
+        .iter()
+        .flat_map(|attr| html.match_indices(attr).map(move |(i, _)| i + attr.len()))
+        .filter(|&start| html[start..].starts_with(prefix))
+        .min()
+        .and_then(|start| html[start..].split_once('"'))
+        .map(|(link, _)| link.to_owned())
 }
 
 /// The value of `"key":"value"` in one of koma's JSON log lines.
@@ -414,5 +515,14 @@ mod tests {
         assets(&root, &budgets, &mut report).unwrap();
         assert!(!report.passed());
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn finds_the_first_link_with_a_prefix() {
+        let html = r#"<a href="/">Library</a><a href="/r/4/2" rel=next>Next</a>
+            <a href="/r/4/1"><img src="/p/ab12.png" alt="Page 1"></a>"#;
+        assert_eq!(first_link(html, "/r/").as_deref(), Some("/r/4/2"));
+        assert_eq!(first_link(html, "/p/").as_deref(), Some("/p/ab12.png"));
+        assert_eq!(first_link(html, "/s/"), None);
     }
 }

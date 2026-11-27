@@ -16,7 +16,7 @@ serve_idle_mib = 40   # resident memory of `koma serve`, idle and after a burst
 worker_idle_mib = 64  # resident memory of an idle `koma worker`
 
 [latency]
-ttfb_p99_ms = 10      # time to first byte, p99, measured in a 2 CPU / 1 GB container
+ttfb_p99_ms = 10      # time to first byte, p99, of a reader page and a page image (2 CPU / 1 GB)
 cold_start_ms = 200   # process start to first successful health check (median of 5)
 
 # Static assets, summed per group. Groups with no files yet pass at 0.
@@ -38,9 +38,8 @@ dir = "crates/koma/assets/curator"
 suffix = ".js"
 max_kib = 24
 
-# Server-rendered pages, fetched from the running image. Each must stay
-# under 15 KiB with or without JavaScript. The library page joins in M1:
-#
-# [[pages]]
-# path = "/"
-# max_kib = 15
+# Server-rendered pages, fetched from the running image serving the made-up
+# test library. Each must stay under 15 KiB with or without JavaScript.
+[[pages]]
+path = "/"
+max_kib = 15

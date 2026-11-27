@@ -30,6 +30,13 @@ image on ARM64 and x86_64 and runs `cargo xtask budgets` in a container capped
 at 2 CPUs and 1 GB; any budget exceeded fails the pull request. A budget may be
 raised only with a `Budget change:` line in the pull request saying why.
 
+The image checks run on real data. `koma worker` scans the made-up test library
+(below) into a data folder, then `koma serve` reads the same library and data
+folder. Time to first byte is timed on a reader page and on a page image found
+by following links from `/`, and the `[[pages]]` sizes are those of the pages
+it serves. The containers run as the host's user so the runner can clean up
+what they write.
+
 ## Test libraries
 
 ```sh
