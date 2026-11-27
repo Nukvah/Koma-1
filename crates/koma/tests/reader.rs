@@ -1,6 +1,7 @@
 //! The reader page and what its script reads: the page with its variants,
 //! tap thirds in the book's direction (its own, else its library's), the
-//! bars without JavaScript, and the book's pages as JSON.
+//! bars without JavaScript, and the book's pages as JSON with the card for
+//! its end.
 
 use std::fs;
 use std::io::{Read, Write};
@@ -42,6 +43,7 @@ fn book(path: &Path, pages: &[Vec<u8>], info: Option<&str>) {
 
 /// ```text
 /// manga/Starfall/v01.cbz         a big page (variants), then two small ones: right to left
+/// manga/Starfall/v02.cbz         the next book
 /// comics/Harbor Lights/v01.cbz   left to right, by its library
 /// comics/Moonforge/v01.cbz       right to left, by its own metadata
 /// ```
@@ -53,6 +55,7 @@ fn library(root: &Path) -> PathBuf {
         &[koma_fixtures::png::page(1200, 1800, 1), small(2), small(3)],
         None,
     );
+    book(&lib.join("manga/Starfall/v02.cbz"), &[small(8)], None);
     book(
         &lib.join("comics/Harbor Lights/v01.cbz"),
         &[small(4), small(5)],
@@ -90,6 +93,7 @@ async fn the_reader_page() {
     let (harbor, _) = book_id(&c, "Harbor Lights");
     let (moonforge, _) = book_id(&c, "Moonforge");
     let big = c.pages(starfall).unwrap()[0].hash.to_hex().to_string();
+    let v02 = c.books(starfall_series).unwrap()[1].id;
     drop(c);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -130,6 +134,14 @@ async fn the_reader_page() {
             assert!(page.contains(&format!("data-mode={mode}</a>")), "{mode}");
         }
         assert!(page.contains("data-shift>shift <kbd>s</kbd></a>"));
+        // Fit, and the tools that need the script: hidden until it runs.
+        for fit in ["page aria-current=true>page", "width>width", "height>height"] {
+            assert!(page.contains(&format!("data-fit={fit}</a>")), "{fit}");
+        }
+        assert!(page.contains("<div class=scrub hidden><input id=scrub type=range min=1 max=3 value=1"));
+        assert!(page.contains("<div class=thumbs hidden></div>"));
+        assert!(page.contains("data-zoom hidden>zoom <kbd>z</kbd></a>"));
+        assert!(page.contains("data-thumbs hidden>thumbnails <kbd>t</kbd></a>"));
         assert!(page.contains(&format!("<link rel=next href=\"/r/{starfall}/2\">")));
 
         // The last page goes on to the series.
@@ -158,6 +170,16 @@ async fn the_reader_page() {
         assert_eq!(p[0]["w"], 1200);
         assert_eq!(p[0]["s"], serde_json::json!([[720, 3], [1080, 3]]));
         assert_eq!(p[1]["s"], serde_json::json!([]));
+        // At its end, the next book with its cover; the last one goes back.
+        let end = j["end"].as_str().unwrap();
+        assert!(end.contains("<p>end of v01 · 3 pages</p><strong>v02</strong>"), "{end}");
+        assert!(end.contains(&format!(
+            "<a class=\"btn primary\" href=\"/r/{v02}/1\" data-next={v02}>read v02 <kbd>space</kbd></a>\
+             <a class=btn href=\"/s/{starfall_series}\">back to Starfall</a>"
+        )), "{end}");
+        assert!(end.contains("<div class=cover"));
+        let (_, last) = get(addr, &format!("/b/{v02}"));
+        assert!(last.contains("the last book"), "{last}");
         assert_eq!(get(addr, "/b/999").0, 404);
 
         for url in [koma::html::reader_css_url(), koma::html::reader_js_url()] {

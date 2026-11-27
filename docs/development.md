@@ -278,7 +278,7 @@ The script loads the book's pages and their variants once from
 `GET /b/{book}` (JSON) and turns pages in place, keeping the URL in step:
 arrows and `h`/`l` in the book's direction, space / `j` / `k` /
 PageDown / PageUp, tap thirds, swipes; `m` or Enter shows the bars, Escape
-hides them. Past either end it goes to the series. The direction is the
+hides them. Back past the first page it goes to the series. The direction is the
 book's own (from its metadata), else its library's, and can be switched in
 the bars for the series. That choice and the position are kept in the
 browser (`localStorage`) until accounts (M5). The tap zones are shown once,
@@ -309,6 +309,32 @@ network throttled to 1.6 Mbit/s and 150 ms round trips, reading a page every
 loaded and decoded (at most 3 ms waiting on `decode()`), and no page was
 fetched at the turn. That is M4's exit check for pictures; EPUB's (its
 position on another device) comes with accounts.
+
+**Fit**, per series in the bars: the whole **page** in the window (the
+default), its **width** or its **height**. A page larger than the window
+scrolls, and a turn first scrolls by most of a screen (down for width;
+for height towards the reading direction) before it turns; a new page
+starts at its start (top; left, or right in right-to-left books), and going
+back, at its end. `sizes` follows the fit, so the variant picked is the one
+sharp at that size. **Zoom** (`z`, or the bars) doubles the pages on
+screen, with `sizes` set to the new width so a sharper picture loads;
+scrolling or dragging pans, and `z`, Escape, a double click or a turn
+zooms out. On phones the browser's own pinch works too, and while pinched
+in, taps and swipes don't turn.
+
+The bottom bar also has a **scrubber** (a range input, in the reading
+direction): while it moves, a preview of the page under it (its smallest
+picture: the 720 variant, else the page); let go, it turns there. **Thumbnails**
+(`t`, or the bars) are a row of every page's smallest picture, loaded
+lazily as the row scrolls, the current one marked; a click turns there.
+Both need the script and stay hidden without it.
+
+**At the end** of a book, a card: the next book in the series with its
+cover, its pages, and whether it was started (read from the browser), with
+a button to read it from where it was left (space, or forward again) and
+one back to the series; for the last book, only the way back. Back,
+Escape or a tap outside closes it. The card's HTML comes with
+`GET /b/{book}` (`end`), built by the server so names are escaped there.
 
 ## Search
 
@@ -392,14 +418,15 @@ round (`-<column>`, `aria-sort` says which).
 | `GET /a/koma.{hash}.css`, `/a/scroll.{hash}.js` | the stylesheet and the library script, cached for a year |
 | `GET /d/{book}` | the book's original: the file as it is, or a photo folder as a stored ZIP of its images in reading order |
 | `GET /r/{book}/{n}` | the reader, page `n` (1-based): see Reader |
+| `GET /b/{book}` | the reader's JSON: the book's pages with their sizes and variants, and the card for its end |
 | `GET /p/{hash}.{ext}` | a page's bytes, `Cache-Control: public, max-age=31536000, immutable`, `ETag` = hash |
 | `GET /p/{hash}.{width}.v{version}.{format}` | a page variant (`jpg` or `webp`; `variants::url`), cached the same way; 404 if that variant was not made, or not with this version |
 | `GET /healthz` | health check |
 
 Page bytes come from the book file at the recorded offset (stored pages) or
 from the blob store (pages that were compressed, and variants): nothing is
-decompressed or resized at request time. The reader still shows originals;
-`<picture>` and `srcset` over the variants come with the reader (M4). Each
+decompressed or resized at request time. The reader shows them through
+`<picture>` and `srcset` (see Reader). Each
 page is read with one positioned read; a true
 `sendfile()` path can replace it later if the budgets ask for it. Until the
 first scan, `/` answers 503.

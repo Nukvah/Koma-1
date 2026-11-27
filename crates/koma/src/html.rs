@@ -935,7 +935,14 @@ impl ReaderPage {
 
 /// The book's pages for the reader's script: `{"v": variants version,
 /// "p": [{"h", "f", "w", "ht", "s": [[width, formats]]}]}`.
-pub fn reader_json(pages: &[ReaderPage]) -> String {
+/// `end`: the card shown at the end of `book`, as HTML: the book after it
+/// in its series (`next`, with its cover), or back to the series.
+pub fn reader_json(
+    pages: &[ReaderPage],
+    series: &Series,
+    book: &Book,
+    next: Option<&(Book, Option<Cover>)>,
+) -> String {
     let p: Vec<serde_json::Value> = pages
         .iter()
         .map(|p| {
@@ -948,7 +955,39 @@ pub fn reader_json(pages: &[ReaderPage]) -> String {
             })
         })
         .collect();
-    serde_json::json!({ "v": variants::VERSION, "p": p }).to_string()
+    let back = escape(&series.name);
+    let mut end = String::from("<div>");
+    match next {
+        Some((b, c)) => {
+            cover(&mut end, c.as_ref(), shade(b.series_id), &b.name);
+            let name = escape(&b.name);
+            let _ = write!(
+                end,
+                "<section><p>end of {} · {} pages</p><strong>{name}</strong>\
+                 <p>{} pages · <span class=at>not started</span></p>\
+                 <a class=\"btn primary\" href=\"/r/{}/1\" data-next={}>read {name} <kbd>space</kbd></a>\
+                 <a class=btn href=\"/s/{}\">back to {back}</a></section>",
+                escape(&book.name),
+                book.page_count,
+                b.page_count,
+                b.id,
+                b.id,
+                series.id
+            );
+        }
+        None => {
+            let _ = write!(
+                end,
+                "<section><p>end of {} · {} pages</p><strong>{back}</strong><p>the last book</p>\
+                 <a class=\"btn primary\" href=\"/s/{}\">back to {back}</a></section>",
+                escape(&book.name),
+                book.page_count,
+                series.id
+            );
+        }
+    }
+    end.push_str("</div>");
+    serde_json::json!({ "v": variants::VERSION, "p": p, "end": end }).to_string()
 }
 
 /// One page of a book, 1-based `number`: the page alone, tap thirds that
@@ -1017,15 +1056,22 @@ pub fn reader(r: &Reader<'_>) -> String {
     let _ = write!(
         b,
         "<div id=bars class=bars><header class=\"rbar top\"><a href=\"{up}\">‹ {}</a><b>{}</b>\
-         <span class=\"end dim\"><span id=count>{number} / {total}</span> · <kbd>←</kbd><kbd>→</kbd> \
-         <kbd>space</kbd> turn · <kbd>m</kbd> bars</span><a href=\"#\">close</a></header>\
-         <footer class=\"rbar bot\"><span class=\"dim label\">mode</span><div class=seg>\
+         <span class=\"end dim\"><span id=count>{number} / {total}</span><span class=keys> · <kbd>←</kbd><kbd>→</kbd> \
+         <kbd>space</kbd> turn · <kbd>m</kbd> bars</span></span><a href=\"#\">close</a></header>\
+         <footer class=\"rbar bot\"><div class=thumbs hidden></div>\
+         <div class=scrub hidden><input id=scrub type=range min=1 max={total} value={number} \
+         aria-label=Page><span class=peek></span></div>\
+         <span class=\"dim label\">mode</span><div class=seg>\
          <a href=\"#bars\" data-mode=auto aria-current=true>auto</a><a href=\"#bars\" data-mode=single>single</a>\
          <a href=\"#bars\" data-mode=double>double</a><a href=\"#bars\" data-mode=strip>strip</a></div>\
          <a href=\"#bars\" data-shift>shift <kbd>s</kbd></a>\
+         <span class=\"dim label\">fit</span><div class=seg>\
+         <a href=\"#bars\" data-fit=page aria-current=true>page</a><a href=\"#bars\" data-fit=width>width</a>\
+         <a href=\"#bars\" data-fit=height>height</a></div>\
          <span class=\"dim label\">direction</span><div class=seg>\
          <a href=\"#bars\" data-dir=rtl{}>← rtl</a><a href=\"#bars\" data-dir=ltr{}>ltr →</a></div>\
-         </footer></div>",
+         <a class=end href=\"#bars\" data-zoom hidden>zoom <kbd>z</kbd></a>\
+         <a href=\"#bars\" data-thumbs hidden>thumbnails <kbd>t</kbd></a></footer></div>",
         escape(&r.series.name),
         escape(&book.name),
         if r.rtl { " aria-current=true" } else { "" },
