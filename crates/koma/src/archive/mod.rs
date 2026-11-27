@@ -5,6 +5,7 @@
 //! malformed data.
 
 pub mod crc32;
+pub mod page;
 pub mod zip;
 
 use std::io;
