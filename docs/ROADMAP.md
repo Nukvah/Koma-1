@@ -278,7 +278,7 @@ lossless JPEG XL archival and a dedicated phone layout.
 
   | Budget | Now | Proposed | Why |
   |---|---|---|---|
-  | CSS | 5 KB | 12 KB (10 until M3) | the library UI's design CSS is 9.6 KB before its real pages; curation and upload screens add more |
+  | CSS | 5 KB | 14 KB (10 until M3, 12 until M4) | the library UI's design CSS is 9.6 KB before its real pages; curation and upload screens add more |
   | Reader JS | 10 KB | 16 KB | offline and sync logic |
   | EPUB reader JS | none | 16 KB, loaded only for EPUBs | reflowable book reader |
   | Curator pages JS | none | 24 KB, loaded only there | upload progress, rename preview |

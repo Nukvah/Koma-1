@@ -73,9 +73,6 @@ const SHADES: [&str; 8] = [
     "#1E3A6E", "#2F5E4C", "#6B3426", "#4E3A6B", "#6E5A22", "#1F5468", "#704622", "#3F4C5C",
 ];
 
-const READER_STYLE: &str = "body{font-family:system-ui,sans-serif;margin:0;padding:0;background:#000;color:#ccc;text-align:center}\
-a{color:inherit}img{display:block;margin:0 auto;max-width:100%;max-height:100vh}nav{padding:.5rem}";
-
 fn document(title: &str, head_extra: &str, body: &str) -> String {
     format!(
         "<!doctype html>\n<html lang=en><head><meta charset=utf-8>\
@@ -867,45 +864,179 @@ pub fn settings(libraries: &[Library]) -> String {
     shell("Settings", libraries, &here, &m)
 }
 
-/// One page of a book, 1-based `number`. The image links to the next page;
-/// the last page links back to the series.
-pub fn reader(series: &Series, book: &Book, pages: &[Page], number: usize) -> String {
-    let total = pages.len();
-    let page = &pages[number - 1];
-    let up = format!("/s/{}", series.id);
-    let prev = (number > 1).then(|| format!("/r/{}/{}", book.id, number - 1));
-    let next = (number < total).then(|| format!("/r/{}/{}", book.id, number + 1));
+/// The reader's stylesheet and script, served like [`CSS`].
+pub const READER_CSS: &str = include_str!("../assets/reader/reader.css");
+pub const READER_JS: &str = include_str!("../assets/reader/reader.js");
 
-    let mut head = String::new();
-    if let Some(next) = &next {
-        let _ = write!(head, "<link rel=next href=\"{next}\">");
-        let next_image = page_url(&pages[number]);
-        let _ = write!(head, "<link rel=prefetch href=\"{next_image}\">");
+static READER_CSS_URL: LazyLock<String> = LazyLock::new(|| {
+    let hex = blake3::hash(READER_CSS.as_bytes()).to_hex();
+    format!("/a/reader.{}.css", &hex[..16])
+});
+static READER_JS_URL: LazyLock<String> = LazyLock::new(|| {
+    let hex = blake3::hash(READER_JS.as_bytes()).to_hex();
+    format!("/a/reader.{}.js", &hex[..16])
+});
+
+pub fn reader_css_url() -> &'static str {
+    &READER_CSS_URL
+}
+
+pub fn reader_js_url() -> &'static str {
+    &READER_JS_URL
+}
+
+/// One page of a book for the reader: its size as displayed and the widths
+/// of its variants, with which formats (bit 1: JPEG, bit 2: WebP).
+pub struct ReaderPage {
+    pub hash: blake3::Hash,
+    pub format: String,
+    pub width: u32,
+    pub height: u32,
+    pub variants: Vec<(u32, u8)>,
+}
+
+impl ReaderPage {
+    /// A page whose header gave no size is taken as a usual 2:3 page.
+    pub fn new(page: &Page, variants: Vec<(u32, u8)>) -> Self {
+        let (width, height) = page.size.map_or((1440, 2160), |s| (s.width, s.height));
+        Self {
+            hash: page.hash,
+            format: page.format.clone(),
+            width,
+            height,
+            variants,
+        }
     }
-    if let Some(prev) = &prev {
+
+    fn url(&self) -> String {
+        format!("/p/{}.{}", self.hash.to_hex(), self.format)
+    }
+
+    /// `srcset` with the variants in `format` (bit), then the page itself.
+    fn srcset(&self, bit: u8, format: Format) -> String {
+        let mut set: Vec<String> = self
+            .variants
+            .iter()
+            .filter(|(_, m)| m & bit != 0)
+            .map(|(w, _)| format!("{} {w}w", variants::url(&self.hash, *w, format)))
+            .collect();
+        set.push(format!("{} {}w", self.url(), self.width));
+        set.join(", ")
+    }
+
+    /// The width the page is shown at: the whole page in the window.
+    fn sizes(&self) -> String {
+        format!(
+            "min(100vw, {:.1}vh)",
+            100.0 * f64::from(self.width) / f64::from(self.height)
+        )
+    }
+}
+
+/// The book's pages for the reader's script: `{"v": variants version,
+/// "p": [{"h", "f", "w", "ht", "s": [[width, formats]]}]}`.
+pub fn reader_json(pages: &[ReaderPage]) -> String {
+    let p: Vec<serde_json::Value> = pages
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "h": p.hash.to_hex().to_string(),
+                "f": p.format,
+                "w": p.width,
+                "ht": p.height,
+                "s": p.variants,
+            })
+        })
+        .collect();
+    serde_json::json!({ "v": variants::VERSION, "p": p }).to_string()
+}
+
+/// One page of a book, 1-based `number`: the page alone, tap thirds that
+/// are links (in the book's direction), and bars behind `#bars`. With the
+/// script, pages turn in place.
+pub struct Reader<'a> {
+    pub series: &'a Series,
+    pub book: &'a Book,
+    pub page: &'a ReaderPage,
+    pub number: usize,
+    pub total: usize,
+    /// `true`: right to left.
+    pub rtl: bool,
+}
+
+pub fn reader(r: &Reader<'_>) -> String {
+    let (book, number, total) = (r.book, r.number, r.total);
+    let up = format!("/s/{}", r.series.id);
+    let at = |n: usize| format!("/r/{}/{n}", book.id);
+    let prev = if number > 1 {
+        at(number - 1)
+    } else {
+        up.clone()
+    };
+    let next = if number < total {
+        at(number + 1)
+    } else {
+        up.clone()
+    };
+    let mut head = format!(
+        "<link rel=stylesheet href=\"{}\"><script defer src=\"{}\"></script>",
+        reader_css_url(),
+        reader_js_url()
+    );
+    if number < total {
+        let _ = write!(head, "<link rel=next href=\"{next}\">");
+    }
+    if number > 1 {
         let _ = write!(head, "<link rel=prev href=\"{prev}\">");
     }
-
-    let link = |href: &Option<String>, text: &str, rel: &str| match href {
-        Some(href) => format!("<a href=\"{href}\" rel={rel}>{text}</a>"),
-        None => format!("<span>{text}</span>"),
-    };
-    let nav = format!(
-        "<nav>{} · <a href=\"{up}\">{}</a> · {number} / {total} · {}</nav>",
-        link(&prev, "‹ previous", "prev"),
-        escape(&book.name),
-        link(&next, "next ›", "next"),
+    let p = r.page;
+    let mut b = format!(
+        "<main class=stage><picture><source id=pgw type=image/webp srcset=\"{}\" sizes=\"{}\">\
+         <img id=pg src=\"{}\" srcset=\"{}\" sizes=\"{}\" width={} height={} alt=\"Page {number}\" \
+         fetchpriority=high></picture></main>",
+        p.srcset(2, Format::Webp),
+        p.sizes(),
+        p.url(),
+        p.srcset(1, Format::Jpeg),
+        p.sizes(),
+        p.width,
+        p.height
     );
-    let image_target = next.as_deref().unwrap_or(&up);
-    let body = format!(
-        "{nav}<a href=\"{image_target}\"><img src=\"{}\" alt=\"Page {number}\"></a>{nav}",
-        page_url(page)
+    // In right-to-left books the left third goes forward.
+    let (left, right) = if r.rtl {
+        ((next.as_str(), "‹ next"), (prev.as_str(), "previous ›"))
+    } else {
+        ((prev.as_str(), "‹ previous"), (next.as_str(), "next ›"))
+    };
+    let _ = write!(
+        b,
+        "<nav class=zones aria-label=Pages><a href=\"{}\"><span>{}</span></a>\
+         <a href=\"#bars\"><span>bars</span></a><a href=\"{}\"><span>{}</span></a></nav>",
+        left.0, left.1, right.0, right.1
+    );
+    let _ = write!(
+        b,
+        "<div id=bars class=bars><header class=\"rbar top\"><a href=\"{up}\">‹ {}</a><b>{}</b>\
+         <span class=\"end dim\"><span id=count>{number} / {total}</span> · <kbd>←</kbd><kbd>→</kbd> \
+         <kbd>space</kbd> turn · <kbd>m</kbd> bars</span><a href=\"#\">close</a></header>\
+         <footer class=\"rbar bot\"><span class=\"dim label\">direction</span><div class=seg>\
+         <a href=\"#bars\" data-dir=rtl{}>← rtl</a><a href=\"#bars\" data-dir=ltr{}>ltr →</a></div>\
+         </footer></div>",
+        escape(&r.series.name),
+        escape(&book.name),
+        if r.rtl { " aria-current=true" } else { "" },
+        if r.rtl { "" } else { " aria-current=true" },
     );
     let title = format!("{} · {number}/{total} · Koma-1", book.name);
-    document(
-        &title,
-        &format!("<style>{READER_STYLE}</style>{head}"),
-        &body,
+    format!(
+        "<!doctype html>\n<html lang=en><head><meta charset=utf-8>\
+         <meta name=viewport content=\"width=device-width,initial-scale=1\">\
+         <title>{}</title>{head}</head><body class=reader data-book={} data-series={} \
+         data-n={number} data-dir={}>{b}</body></html>\n",
+        escape(&title),
+        book.id,
+        r.series.id,
+        if r.rtl { "rtl" } else { "ltr" }
     )
 }
 

@@ -262,6 +262,28 @@ A file that changed since the scan ends the download with an error, never as
 if complete. Every book card on a series page has a download link with the
 size.
 
+## Reader
+
+`GET /r/{book}/{n}` (`html::reader`), designed in docs/design/reader*.html,
+with its own `assets/reader/reader.css` and `reader.js`, served at
+content-named URLs like the library's. The page alone fills the window: a
+`<picture>` whose WebP `<source>` and JPEG `srcset` list the page's variants
+and the page itself, with `sizes` set to the width a whole page takes
+(`min(100vw, {w/h}vh)`), so the browser picks the smallest that is sharp.
+Without JavaScript it still reads: the tap thirds are links (in right-to-left
+books the left third goes forward), and the middle third opens the bars
+through `#bars` and `:target`.
+
+The script loads the book's pages and their variants once from
+`GET /b/{book}` (JSON) and turns pages in place, keeping the URL in step:
+arrows and `h`/`l` in the book's direction, space / `j` / `k` /
+PageDown / PageUp, tap thirds, swipes; `m` or Enter shows the bars, Escape
+hides them. Past either end it goes to the series. The direction is the
+book's own (from its metadata), else its library's, and can be switched in
+the bars for the series. That choice and the position are kept in the
+browser (`localStorage`) until accounts (M5). The tap zones are shown once,
+faintly, on the first open.
+
 ## Search
 
 `koma::search` and the `search` table: SQLite FTS5 with the trigram
@@ -343,7 +365,7 @@ round (`-<column>`, `aria-sort` says which).
 | `GET /s/{id}` | a series: its cover, facts and books, each with its cover |
 | `GET /a/koma.{hash}.css`, `/a/scroll.{hash}.js` | the stylesheet and the library script, cached for a year |
 | `GET /d/{book}` | the book's original: the file as it is, or a photo folder as a stored ZIP of its images in reading order |
-| `GET /r/{book}/{n}` | the reader, page `n` (1-based); the image links to the next page, and the last page back to the series |
+| `GET /r/{book}/{n}` | the reader, page `n` (1-based): see Reader |
 | `GET /p/{hash}.{ext}` | a page's bytes, `Cache-Control: public, max-age=31536000, immutable`, `ETag` = hash |
 | `GET /p/{hash}.{width}.v{version}.{format}` | a page variant (`jpg` or `webp`; `variants::url`), cached the same way; 404 if that variant was not made, or not with this version |
 | `GET /healthz` | health check |
