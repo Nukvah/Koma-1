@@ -1,0 +1,46 @@
+# Koma-1 budgets: the single source of truth, checked by `cargo xtask budgets`
+# on every pull request. A budget that is exceeded fails CI.
+#
+# A budget protects speed; it does not block a feature. A pull request may
+# raise a number here if its description says why, in a line starting with
+# "Budget change:". The reader-facing speed targets (TTFB, cold start, page
+# size) never move.
+#
+# Units: KiB = 1024 bytes, MiB = 1024 KiB. Asset sizes are raw bytes on disk.
+
+[image]
+max_mib = 40          # FROM scratch; leaves room for the AVIF encoder and libvips
+
+[memory]
+serve_idle_mib = 40   # resident memory of `koma serve`, idle and after a burst
+worker_idle_mib = 64  # resident memory of an idle `koma worker`
+
+[latency]
+ttfb_p99_ms = 10      # time to first byte, p99, measured in a 2 CPU / 1 GB container
+cold_start_ms = 200   # process start to first successful health check (median of 5)
+
+# Static assets, summed per group. Groups with no files yet pass at 0.
+[[assets]]
+name = "CSS"
+dir = "crates/koma/assets"
+suffix = ".css"
+max_kib = 10
+
+[[assets]]
+name = "Reader JS"
+dir = "crates/koma/assets/reader"
+suffix = ".js"
+max_kib = 16
+
+[[assets]]
+name = "Curator pages JS"
+dir = "crates/koma/assets/curator"
+suffix = ".js"
+max_kib = 24
+
+# Server-rendered pages, fetched from the running image. Each must stay
+# under 15 KiB with or without JavaScript. The library page joins in M1:
+#
+# [[pages]]
+# path = "/"
+# max_kib = 15
