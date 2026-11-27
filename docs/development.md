@@ -247,6 +247,19 @@ Schema 7 is upgraded in place to 8 (one generated column and its index), so
 the catalogue and its page variants are kept; older versions are rebuilt by
 the next scan, as before.
 
+## Downloads
+
+`koma::download`. `GET /d/{book}` streams the book's original: a blocking
+thread reads 256 KiB chunks into a short queue that the response body
+drains, so nothing is held whole in memory or written to disk. A photo
+folder is not one file, so it goes out as a stored (uncompressed) ZIP of its
+images, in reading order, made while it is sent: each image is read once,
+its CRC-32 taken, then sent; its exact size is known before the first byte.
+Folders that would need ZIP64 (over 4 GiB or 65,535 images) are not offered.
+A file that changed since the scan ends the download with an error, never as
+if complete. Every book card on a series page has a download link with the
+size.
+
 ## Search
 
 `koma::search` and the `search` table: SQLite FTS5 with the trigram
@@ -299,6 +312,7 @@ round (`-<column>`, `aria-sort` says which).
 | `GET /search?q={query}&l={folder}` | search, in every library or one (see Search) |
 | `GET /s/{id}` | a series: its cover, facts and books, each with its cover |
 | `GET /a/koma.{hash}.css` | the stylesheet, cached for a year |
+| `GET /d/{book}` | the book's original: the file as it is, or a photo folder as a stored ZIP of its images in reading order |
 | `GET /r/{book}/{n}` | the reader, page `n` (1-based); the image links to the next page, and the last page back to the series |
 | `GET /p/{hash}.{ext}` | a page's bytes, `Cache-Control: public, max-age=31536000, immutable`, `ETag` = hash |
 | `GET /p/{hash}.{width}.v{version}.{format}` | a page variant (`jpg` or `webp`; `variants::url`), cached the same way; 404 if that variant was not made, or not with this version |

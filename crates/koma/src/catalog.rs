@@ -188,6 +188,10 @@ pub struct Book {
     pub page_count: i64,
     /// Unix seconds when Koma-1 first saw it; kept through moves and renames.
     pub added: i64,
+    /// Bytes: the book file's, or a photo folder's images together.
+    pub size: u64,
+    /// A photo folder (its path is a folder of images), not one file.
+    pub photos: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1099,7 +1103,7 @@ impl Catalog {
     pub fn book(&self, id: i64) -> Result<Option<Book>, Error> {
         self.conn
             .prepare_cached(
-                "SELECT id, series_id, path, name, page_count, added FROM books
+                "SELECT id, series_id, path, name, page_count, added, size, folder = path FROM books
                  WHERE id = ?1 AND gone IS NULL",
             )?
             .query_row([id], |r| {
@@ -1110,6 +1114,8 @@ impl Catalog {
                     name: r.get(3)?,
                     page_count: r.get(4)?,
                     added: r.get(5)?,
+                    size: r.get::<_, i64>(6)? as u64,
+                    photos: r.get(7)?,
                 })
             })
             .optional()
@@ -1118,7 +1124,7 @@ impl Catalog {
     /// The books of a series, in natural order of their file names.
     pub fn books(&self, series_id: i64) -> Result<Vec<Book>, Error> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT id, series_id, path, name, page_count, added FROM books
+            "SELECT id, series_id, path, name, page_count, added, size, folder = path FROM books
              WHERE series_id = ?1 AND gone IS NULL ORDER BY path COLLATE natsort",
         )?;
         let rows = stmt.query_map([series_id], |r| {
@@ -1129,6 +1135,8 @@ impl Catalog {
                 name: r.get(3)?,
                 page_count: r.get(4)?,
                 added: r.get(5)?,
+                size: r.get::<_, i64>(6)? as u64,
+                photos: r.get(7)?,
             })
         })?;
         rows.collect()

@@ -8,6 +8,7 @@ pub mod archive;
 pub mod blobs;
 pub mod catalog;
 pub mod cli;
+pub mod download;
 pub mod health;
 pub mod html;
 pub mod libraries;

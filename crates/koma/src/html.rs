@@ -190,6 +190,23 @@ fn cover(out: &mut String, cover: Option<&Cover>, shade: &str, label: &str) {
     out.push_str("</div>");
 }
 
+/// `1.4 GB`, `812 MB`, `96 KB`: decimal units, as file managers show them.
+pub fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64 / 1000.0;
+    for unit in UNITS {
+        if size < 999.5 || unit == "TB" {
+            return if size < 10.0 {
+                format!("{size:.1} {unit}")
+            } else {
+                format!("{size:.0} {unit}")
+            };
+        }
+        size /= 1000.0;
+    }
+    unreachable!()
+}
+
 fn shade(id: i64) -> &'static str {
     SHADES[id.rem_euclid(SHADES.len() as i64) as usize]
 }
@@ -596,13 +613,16 @@ pub fn series(
         books.len()
     );
     for (book, c) in books {
-        let _ = write!(m, "<a class=card href=\"/r/{}/1\">", book.id);
+        let _ = write!(m, "<div class=vol><a class=card href=\"/r/{}/1\">", book.id);
         cover(&mut m, c.as_ref(), shade(series.id), &book.name);
         let _ = write!(
             m,
-            "<b>{}</b><span>{}</span></a>",
+            "<b>{}</b><span>{}</span></a><a class=dl href=\"/d/{}\" download>download · {}{}</a></div>",
             escape(&book.name),
-            plural(book.page_count, "page", "pages")
+            plural(book.page_count, "page", "pages"),
+            book.id,
+            human_size(book.size),
+            if book.photos { " zip" } else { "" }
         );
     }
     m.push_str("</div>");
@@ -862,6 +882,16 @@ pub fn reader(series: &Series, book: &Book, pages: &[Page], number: usize) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sizes() {
+        assert_eq!(human_size(0), "0.0 KB");
+        assert_eq!(human_size(96_400), "96 KB");
+        assert_eq!(human_size(999_400), "999 KB");
+        assert_eq!(human_size(999_600), "1.0 MB");
+        assert_eq!(human_size(812_000_000), "812 MB");
+        assert_eq!(human_size(1_410_000_000), "1.4 GB");
+    }
 
     #[test]
     fn dates() {
