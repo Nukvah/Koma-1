@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/koma", "xtask"]
+members = ["crates/koma", "crates/koma-fixtures", "xtask"]
 
 [workspace.package]
 edition = "2024"

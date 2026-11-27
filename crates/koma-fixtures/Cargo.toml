@@ -1,0 +1,10 @@
+[package]
+name = "koma-fixtures"
+version = "0.0.0"
+description = "Made-up CBZ test libraries for Koma-1: tiny PNG pages, zip archives, tricky names"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

@@ -3,9 +3,11 @@
 //! Milestone 0 is the skeleton: `serve` answers a health check, `worker` idles
 //! until it is stopped and `scrub` has nothing to check yet.
 
+pub mod archive;
 pub mod cli;
 pub mod health;
 pub mod log;
+pub mod natsort;
 pub mod serve;
 mod signal;
 

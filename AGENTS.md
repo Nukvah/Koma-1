@@ -48,7 +48,7 @@ request saying why. The reader-facing targets (TTFB, cold start, page size) neve
 
 ## Commands
 
-See [README.md](README.md#develop) for build, test and budget commands.
+See [docs/development.md](docs/development.md) for build, test and budget commands.
 
 ## Before you start
 
