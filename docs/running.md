@@ -4,7 +4,7 @@ Koma-1 is one image with two long-running modes that share two folders:
 
 | Folder | Mount | Holds |
 |---|---|---|
-| `/library` | read-only | your CBZ files. Koma-1 never writes here. |
+| `/library` | read-only | your books: CBZ and ZIP files, and folders of images. Koma-1 never writes here. |
 | `/data` | read-write | the catalogue (`koma.db`) and the blob store (`blobs/`) |
 
 `koma worker` scans `/library` into `/data`. `koma serve` reads both and

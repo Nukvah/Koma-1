@@ -12,7 +12,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// A job claimed this many times without finishing is given up: the worker
 /// died on it each time (crash, out of memory), so it would only die again.
@@ -27,8 +27,9 @@ CREATE TABLE series (
 CREATE TABLE books (
     id         INTEGER PRIMARY KEY,
     series_id  INTEGER NOT NULL REFERENCES series(id),
-    path       TEXT NOT NULL UNIQUE, -- file relative to the library
-    folder     TEXT NOT NULL,        -- its folder relative to the library; '' is the root
+    path       TEXT NOT NULL UNIQUE, -- file (or photo folder) relative to the library
+    folder     TEXT NOT NULL,        -- its folder relative to the library ('' is the root);
+                                     -- a photo folder's own path
     name       TEXT NOT NULL,
     size       INTEGER NOT NULL,     -- with mtime: skip unchanged files on rescan
     mtime      INTEGER NOT NULL,
@@ -43,6 +44,7 @@ CREATE TABLE pages (
     format   TEXT NOT NULL,          -- file extension: jpg, png, webp...
     length   INTEGER NOT NULL,
     offset   INTEGER,                -- byte offset in the book file; NULL: in the blob store
+    file     TEXT,                   -- the file holding the page if not the book's (photo folders)
     PRIMARY KEY (book_id, number)
 ) WITHOUT ROWID;
 CREATE INDEX pages_hash ON pages(hash);
@@ -70,13 +72,15 @@ CREATE TABLE jobs (
 );
 ";
 
-/// Tables of schema version 1, dropped when upgrading: until accounts exist
-/// the catalogue holds nothing that the next scan cannot rebuild.
-const DROP_V1: &str = "
+/// Tables of earlier schema versions, dropped when upgrading: until accounts
+/// exist the catalogue holds nothing that the next scan cannot rebuild.
+const DROP_OLD: &str = "
 DROP TABLE IF EXISTS pages;
 DROP TABLE IF EXISTS books;
 DROP TABLE IF EXISTS series;
 DROP TABLE IF EXISTS scan_errors;
+DROP TABLE IF EXISTS folders;
+DROP TABLE IF EXISTS jobs;
 ";
 
 /// A file's size and modification time (nanoseconds since the epoch): if
@@ -109,13 +113,18 @@ pub struct Page {
     pub hash: blake3::Hash,
     pub format: String,
     pub length: u64,
-    /// Offset in the book file, or `None` when the page is in the blob store.
+    /// Offset in the book file (or in `file`), or `None` when the page is in
+    /// the blob store.
     pub offset: Option<u64>,
+    /// The file holding the page, relative to the library, when it is not
+    /// the book file: each page of a photo folder is a file of its own.
+    pub file: Option<String>,
 }
 
 /// Where a page's bytes are, found by hash.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PageLocation {
+    /// The file to read at `offset`: the book file, or a photo folder's image.
     pub book_path: String,
     pub format: String,
     pub length: u64,
@@ -173,8 +182,8 @@ impl Catalog {
             .conn
             .pragma_query_value(None, "user_version", |r| r.get(0))?;
         match version {
-            0 | 1 => {
-                let drop = if version == 1 { DROP_V1 } else { "" };
+            0..SCHEMA_VERSION => {
+                let drop = if version > 0 { DROP_OLD } else { "" };
                 self.conn.execute_batch(&format!(
                     "BEGIN; {drop} {SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
                 ))?;
@@ -226,8 +235,8 @@ impl Catalog {
         let book_id = tx.last_insert_rowid();
         {
             let mut insert = tx.prepare(
-                "INSERT INTO pages (book_id, number, hash, format, length, offset)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO pages (book_id, number, hash, format, length, offset, file)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?;
             for page in book.pages {
                 insert.execute(params![
@@ -237,6 +246,7 @@ impl Catalog {
                     page.format,
                     page.length as i64,
                     page.offset.map(|o| o as i64),
+                    page.file,
                 ])?;
             }
         }
@@ -541,7 +551,7 @@ impl Catalog {
     /// The pages of a book, in reading order.
     pub fn pages(&self, book_id: i64) -> Result<Vec<Page>, Error> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT number, hash, format, length, offset FROM pages
+            "SELECT number, hash, format, length, offset, file FROM pages
              WHERE book_id = ?1 ORDER BY number",
         )?;
         let rows = stmt.query_map([book_id], |r| {
@@ -551,6 +561,7 @@ impl Catalog {
                 format: r.get(2)?,
                 length: r.get::<_, i64>(3)? as u64,
                 offset: r.get::<_, Option<i64>>(4)?.map(|o| o as u64),
+                file: r.get(5)?,
             })
         })?;
         rows.collect()
@@ -560,7 +571,7 @@ impl Catalog {
     pub fn page_by_hash(&self, hash: &blake3::Hash) -> Result<Option<PageLocation>, Error> {
         self.conn
             .prepare_cached(
-                "SELECT books.path, pages.format, pages.length, pages.offset
+                "SELECT COALESCE(pages.file, books.path), pages.format, pages.length, pages.offset
                  FROM pages JOIN books ON books.id = pages.book_id
                  WHERE pages.hash = ?1 ORDER BY pages.offset IS NULL LIMIT 1",
             )?

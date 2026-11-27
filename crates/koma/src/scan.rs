@@ -25,7 +25,7 @@
 
 use std::collections::HashSet;
 use std::fs::{self, File, Metadata};
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -33,7 +33,7 @@ use crate::archive::page::{PageError, PageLimits, copy_page};
 use crate::archive::zip::{self, Limits, Method};
 use crate::archive::{self};
 use crate::blobs::BlobStore;
-use crate::catalog::{self, Catalog, JobKind, MAX_ATTEMPTS, NewBook, Page};
+use crate::catalog::{self, Catalog, JobKind, MAX_ATTEMPTS, NewBook, Page, Stamp};
 use crate::log;
 
 /// A folder modified less than this long before it is read is read again
@@ -183,7 +183,7 @@ impl Walker<'_> {
         }
 
         self.report.folders_read += 1;
-        let (dirs, files) = match self.read_folder(rel) {
+        let listing = match list_folder(self.library, rel) {
             Ok(found) => found,
             Err(e) => {
                 let e = e.to_string();
@@ -197,12 +197,21 @@ impl Walker<'_> {
             self.catalog.remove_error(rel)?;
         }
 
+        // The books here: each archive, or the folder itself if it is a
+        // photo folder.
+        let books: Vec<(String, Stamp)> = match listing.photo_stamp(meta) {
+            Some(stamp) if !rel.is_empty() => vec![(rel.to_owned(), stamp)],
+            _ => listing
+                .archives
+                .iter()
+                .map(|(path, m)| (path.clone(), (m.len(), mtime_ns(m))))
+                .collect(),
+        };
         let mut present = HashSet::new();
-        for (path, meta) in &files {
+        for (path, stamp) in &books {
             present.insert(path.as_str());
-            let stamp = (meta.len(), mtime_ns(meta));
-            if self.catalog.book_stamp(path)? == Some(stamp)
-                || self.catalog.error_stamp(path)? == Some(stamp)
+            if self.catalog.book_stamp(path)? == Some(*stamp)
+                || self.catalog.error_stamp(path)? == Some(*stamp)
             {
                 self.report.unchanged += 1;
             } else {
@@ -214,6 +223,7 @@ impl Walker<'_> {
                 self.report.removed += 1;
             }
         }
+        let dirs = &listing.dirs;
         let dir_names: HashSet<&str> = dirs.iter().map(|(d, _)| d.as_str()).collect();
         for (path, _) in self.catalog.errors_in(rel)? {
             if !present.contains(path.as_str()) && !dir_names.contains(path.as_str()) {
@@ -227,7 +237,7 @@ impl Walker<'_> {
         }
 
         let mut complete = true;
-        for (child, meta) in &dirs {
+        for (child, meta) in dirs {
             complete &= self.visit(child, Some(rel), meta)?;
         }
         // Recorded last: if the scan stops before this, the folder is read
@@ -239,16 +249,15 @@ impl Walker<'_> {
     }
 
     /// Re-checks the books of a folder that was not read, by size and time.
+    /// A photo folder's own images are listed for this.
     fn check_known_files(&mut self, rel: &str) -> Result<(), ScanError> {
         for (path, size, mtime) in self.catalog.books_in(rel)? {
-            match fs::symlink_metadata(self.abs(&path)) {
-                Ok(m) if m.is_file() && (m.len(), mtime_ns(&m)) == (size, mtime) => {
-                    self.report.unchanged += 1;
-                }
-                Ok(m) if m.is_file() => {
+            match self.current_stamp(&path) {
+                Some(stamp) if stamp == (size, mtime) => self.report.unchanged += 1,
+                Some(_) => {
                     self.catalog.enqueue(JobKind::Index, &path)?;
                 }
-                _ => {
+                None => {
                     if self.catalog.remove_book(&path)? {
                         self.report.removed += 1;
                     }
@@ -257,54 +266,107 @@ impl Walker<'_> {
         }
         for (path, stamp) in self.catalog.errors_in(rel)? {
             let Some(stamp) = stamp else { continue };
-            match fs::symlink_metadata(self.abs(&path)) {
-                Ok(m) if m.is_file() && (m.len(), mtime_ns(&m)) == stamp => {}
-                Ok(m) if m.is_file() => {
+            match self.current_stamp(&path) {
+                Some(now) if now == stamp => {}
+                Some(_) => {
                     self.catalog.enqueue(JobKind::Index, &path)?;
                 }
-                _ => self.catalog.remove_error(&path)?,
+                None => self.catalog.remove_error(&path)?,
             }
         }
         Ok(())
     }
 
-    /// The subfolders and book files directly in a folder, as paths relative
-    /// to the library. Hidden entries and symbolic links are skipped.
-    fn read_folder(&self, rel: &str) -> io::Result<(Found, Found)> {
-        let mut dirs = Vec::new();
-        let mut files = Vec::new();
-        for entry in fs::read_dir(self.abs(rel))? {
-            let entry = entry?;
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else {
-                let lossy = entry.path().to_string_lossy().into_owned();
-                log::error(
-                    "scan: skipped a name that is not UTF-8",
-                    &[("path", &lossy)],
-                );
-                continue;
-            };
-            if name.starts_with('.') {
-                continue;
-            }
-            let meta = entry.metadata()?; // does not follow symlinks
-            let child = if rel.is_empty() {
-                name.to_owned()
-            } else {
-                format!("{rel}/{name}")
-            };
-            if meta.is_dir() {
-                dirs.push((child, meta));
-            } else if meta.is_file() && is_cbz(name) {
-                files.push((child, meta));
-            }
+    /// The stamp a book has now: an archive's, or a photo folder's. `None`
+    /// if it is gone or no longer a book.
+    fn current_stamp(&self, rel: &str) -> Option<Stamp> {
+        let meta = fs::symlink_metadata(self.abs(rel)).ok()?;
+        if meta.is_file() {
+            Some((meta.len(), mtime_ns(&meta)))
+        } else if meta.is_dir() {
+            list_folder(self.library, rel).ok()?.photo_stamp(&meta)
+        } else {
+            None
         }
-        Ok((dirs, files))
     }
 }
 
 /// Entries found in a folder: paths relative to the library, with metadata.
 type Found = Vec<(String, Metadata)>;
+
+/// What is directly in a folder that matters to the scan.
+struct Listing {
+    dirs: Found,
+    /// Book archives: CBZ and ZIP.
+    archives: Found,
+    /// Page images.
+    images: Found,
+}
+
+impl Listing {
+    /// A photo folder holds images and nothing else that is read (no
+    /// archives, no subfolders): it is one book, each image a page. A series
+    /// folder with a `cover.jpg` next to its volumes is not one.
+    ///
+    /// Its stamp is the images' total size and the latest time of the folder
+    /// and its images, so adding, removing or overwriting one changes it.
+    fn photo_stamp(&self, folder: &Metadata) -> Option<Stamp> {
+        if self.images.is_empty() || !self.archives.is_empty() || !self.dirs.is_empty() {
+            return None;
+        }
+        let size = self.images.iter().map(|(_, m)| m.len()).sum();
+        let mtime = self
+            .images
+            .iter()
+            .map(|(_, m)| mtime_ns(m))
+            .fold(mtime_ns(folder), i64::max);
+        Some((size, mtime))
+    }
+}
+
+/// Lists a folder. Paths are relative to the library; hidden entries and
+/// symbolic links are skipped.
+fn list_folder(library: &Path, rel: &str) -> io::Result<Listing> {
+    let mut listing = Listing {
+        dirs: Vec::new(),
+        archives: Vec::new(),
+        images: Vec::new(),
+    };
+    let dir = if rel.is_empty() {
+        library.to_path_buf()
+    } else {
+        library.join(rel)
+    };
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            let lossy = entry.path().to_string_lossy().into_owned();
+            log::error(
+                "scan: skipped a name that is not UTF-8",
+                &[("path", &lossy)],
+            );
+            continue;
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        let meta = entry.metadata()?; // does not follow symlinks
+        let child = if rel.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{rel}/{name}")
+        };
+        if meta.is_dir() {
+            listing.dirs.push((child, meta));
+        } else if meta.is_file() && is_archive(name) {
+            listing.archives.push((child, meta));
+        } else if meta.is_file() && archive::is_page_name(name) {
+            listing.images.push((child, meta));
+        }
+    }
+    Ok(listing)
+}
 
 fn recently_modified(meta: &Metadata) -> bool {
     match meta.modified() {
@@ -354,7 +416,8 @@ pub fn run_jobs(
     Ok(())
 }
 
-/// Indexes one book file and stores it, or records why it can't be read.
+/// Indexes one book (an archive or a photo folder) and stores it, or
+/// records why it can't be read.
 fn index_job(
     library: &Path,
     blobs: &BlobStore,
@@ -363,29 +426,41 @@ fn index_job(
     report: &mut ScanReport,
 ) -> Result<(), ScanError> {
     let path = library.join(rel);
-    let meta = match fs::symlink_metadata(&path) {
-        Ok(m) if m.is_file() => m,
-        _ => {
-            // Gone (or replaced by something else) since it was queued.
-            if catalog.remove_book(rel)? {
-                report.removed += 1;
-            }
-            catalog.remove_error(rel)?;
-            return Ok(());
-        }
+    // The stamp is taken before reading: if the book changes meanwhile, the
+    // next scan sees a different one and reads it again.
+    let meta = fs::symlink_metadata(&path).ok();
+    let found = match &meta {
+        Some(m) if m.is_file() => Some(((m.len(), mtime_ns(m)), Source::Archive)),
+        Some(m) if m.is_dir() => list_folder(library, rel)
+            .ok()
+            .and_then(|l| Some((l.photo_stamp(m)?, Source::Photos(l.images)))),
+        _ => None,
     };
-    // Taken before reading: if the file changes meanwhile, the next scan
-    // sees a different time and reads it again.
-    let stamp = (meta.len(), mtime_ns(&meta));
-    match index_book(&path, blobs) {
+    let Some((stamp, source)) = found else {
+        // Gone (or no longer a book) since it was queued.
+        if catalog.remove_book(rel)? {
+            report.removed += 1;
+        }
+        catalog.remove_error(rel)?;
+        return Ok(());
+    };
+    let (folder, name, (series_path, series_name)) = match source {
+        Source::Archive => (folder_of(rel), stem(rel), series_of(rel)),
+        // A photo folder is its own folder, and is named as it is, dots and all.
+        Source::Photos(_) => (rel, last_part(rel), series_of_folder(rel)),
+    };
+    let pages = match &source {
+        Source::Archive => index_book(&path, blobs),
+        Source::Photos(images) => index_photos(library, images),
+    };
+    match pages {
         Ok(pages) => {
-            let (series_path, series_name) = series_of(rel);
             catalog.replace_book(&NewBook {
                 series_path,
                 series_name,
                 path: rel,
-                folder: folder_of(rel),
-                name: stem(rel),
+                folder,
+                name,
                 size: stamp.0,
                 mtime: stamp.1,
                 pages: &pages,
@@ -394,7 +469,7 @@ fn index_job(
         }
         Err(e) => {
             log::error("scan: skipped a book", &[("path", rel), ("error", &e)]);
-            catalog.record_error(rel, folder_of(rel), Some(stamp), &e)?;
+            catalog.record_error(rel, folder, Some(stamp), &e)?;
             catalog.remove_book(rel)?;
             report.failed += 1;
         }
@@ -402,27 +477,95 @@ fn index_job(
     Ok(())
 }
 
+enum Source {
+    Archive,
+    /// A photo folder, with its images.
+    Photos(Found),
+}
+
 /// The folder a file is in, relative to the library; `""` for the root.
 fn folder_of(rel: &str) -> &str {
     rel.rsplit_once('/').map_or("", |(dir, _)| dir)
 }
 
-fn is_cbz(name: &str) -> bool {
-    name.rsplit_once('.')
-        .is_some_and(|(stem, ext)| !stem.is_empty() && ext.eq_ignore_ascii_case("cbz"))
+/// Book archives: `.cbz`, and `.zip` (photo sets are often kept as plain zips).
+fn is_archive(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(stem, ext)| {
+        !stem.is_empty() && (ext.eq_ignore_ascii_case("cbz") || ext.eq_ignore_ascii_case("zip"))
+    })
 }
 
-/// The series a book belongs to: its folder, or the book itself in the root.
+/// The series a book file belongs to: its folder, or the book itself in the root.
 fn series_of(rel: &str) -> (&str, &str) {
     match rel.rsplit_once('/') {
-        Some((dir, _)) => (dir, dir.rsplit('/').next().unwrap_or(dir)),
+        Some((dir, _)) => (dir, last_part(dir)),
         None => (rel, stem(rel)),
     }
 }
 
+/// The series a photo folder belongs to: the folder above it, or the photo
+/// folder itself in the root.
+fn series_of_folder(rel: &str) -> (&str, &str) {
+    match rel.rsplit_once('/') {
+        Some((dir, _)) => (dir, last_part(dir)),
+        None => (rel, rel),
+    }
+}
+
+fn last_part(rel: &str) -> &str {
+    rel.rsplit('/').next().unwrap_or(rel)
+}
+
 fn stem(rel: &str) -> &str {
-    let file = rel.rsplit('/').next().unwrap_or(rel);
+    let file = last_part(rel);
     file.rsplit_once('.').map_or(file, |(stem, _)| stem)
+}
+
+/// Most pages a photo folder may have.
+const MAX_PHOTO_PAGES: usize = 10_000;
+
+/// Indexes a photo folder: each image is a page, read in place from its own
+/// file. `cover.*` comes first, then natural order.
+fn index_photos(library: &Path, images: &Found) -> Result<Vec<Page>, String> {
+    if images.len() > MAX_PHOTO_PAGES {
+        return Err(format!("too many pages: over {MAX_PHOTO_PAGES}"));
+    }
+    let limits = PageLimits::default();
+    let mut order: Vec<&(String, Metadata)> = images.iter().collect();
+    order.sort_by(|(a, _), (b, _)| {
+        is_cover(b)
+            .cmp(&is_cover(a))
+            .then_with(|| crate::natsort::compare_paths(a, b))
+    });
+    order
+        .into_iter()
+        .enumerate()
+        .map(|(number, (rel, meta))| {
+            if meta.len() > limits.max_bytes {
+                return Err(format!("{}: page over limit: too large", last_part(rel)));
+            }
+            let mut file = File::open(library.join(rel)).map_err(|e| e.to_string())?;
+            let mut hasher = blake3::Hasher::new();
+            let read = io::copy(&mut (&mut file).take(limits.max_bytes + 1), &mut hasher)
+                .map_err(|e| format!("{}: read error: {e}", last_part(rel)))?;
+            if read != meta.len() {
+                return Err(format!("{}: changed while being read", last_part(rel)));
+            }
+            Ok(Page {
+                number: number as i64,
+                hash: hasher.finalize(),
+                format: format_of(rel),
+                length: read,
+                offset: Some(0),
+                file: Some(rel.clone()),
+            })
+        })
+        .collect()
+}
+
+/// `cover.jpg`, `Cover.PNG`… (any page extension).
+fn is_cover(rel: &str) -> bool {
+    stem(rel).eq_ignore_ascii_case("cover")
 }
 
 fn mtime_ns(meta: &Metadata) -> i64 {
@@ -464,6 +607,7 @@ fn index_book(path: &Path, blobs: &BlobStore) -> Result<Vec<Page>, String> {
                 format,
                 length: entry.uncompressed_size,
                 offset: located.1,
+                file: None,
             })
         })
         .collect::<Result<Vec<_>, PageError>>()
@@ -540,10 +684,19 @@ mod tests {
     }
 
     #[test]
+    fn photo_folder_series() {
+        assert_eq!(series_of_folder("Mirelle/Set 1.5"), ("Mirelle", "Mirelle"));
+        assert_eq!(series_of_folder("Set 1.5"), ("Set 1.5", "Set 1.5"));
+        assert!(is_cover("Set/Cover.JPG"));
+        assert!(!is_cover("Set/cover 2.jpg"));
+    }
+
+    #[test]
     fn names() {
-        assert!(is_cbz("a.CBZ"));
-        assert!(!is_cbz(".cbz"));
-        assert!(!is_cbz("a.zip"));
+        assert!(is_archive("a.CBZ"));
+        assert!(is_archive("a.zip"));
+        assert!(!is_archive(".cbz"));
+        assert!(!is_archive("a.cbr"));
         assert_eq!(stem("x/Ch. 10.5.cbz"), "Ch. 10.5");
         assert_eq!(format_of("p/1.JPEG"), "jpg");
     }
