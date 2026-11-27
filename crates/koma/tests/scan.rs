@@ -154,6 +154,7 @@ fn every_page_is_found_again_byte_for_byte() {
 
     let mut in_place = 0;
     let mut in_blobs = 0;
+    let mut spreads = 0;
     for series in s.catalog.series().unwrap() {
         for book in s.catalog.books(series.id).unwrap() {
             let fixture = s.books.iter().find(|b| b.path == book.path).unwrap();
@@ -169,6 +170,11 @@ fn every_page_is_found_again_byte_for_byte() {
                     book.path
                 );
                 assert_eq!(page.format, "png");
+                // Sizes come from the header, in place and in blobs alike.
+                let ihdr = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
+                let size = page.size.expect("every page has a size");
+                assert_eq!((size.width, size.height), (ihdr(16), ihdr(20)));
+                spreads += usize::from(size.is_spread());
                 let found = s.catalog.page_by_hash(&page.hash).unwrap().unwrap();
                 assert_eq!(found.length, bytes.len() as u64);
                 match page.offset {
@@ -180,6 +186,7 @@ fn every_page_is_found_again_byte_for_byte() {
     }
     // Only the deflated book (8 pages) needed the blob store.
     assert_eq!((in_place, in_blobs), (25, 8));
+    assert_eq!(spreads, 1, "the fixture library has one double-page spread");
 }
 
 #[test]
@@ -558,6 +565,8 @@ fn photo_folders_are_books_with_the_cover_first() {
         ]
     );
     for (p, seed) in pages.iter().zip([99, 2, 10]) {
+        let size = p.size.unwrap();
+        assert_eq!((size.width, size.height), (20, 30));
         assert_eq!(s.read_page(&books[0].path, p), page(seed));
         let at = s.catalog.page_by_hash(&p.hash).unwrap().unwrap();
         assert_eq!(
