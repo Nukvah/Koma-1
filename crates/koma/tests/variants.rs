@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use koma::blobs::BlobStore;
 use koma::catalog::{Catalog, JobKind};
 use koma::scan::{Check, discover, run_jobs, scan};
-use koma::variants::{self, VERSION};
+use koma::variants::{self, Format, VERSION};
 use koma_fixtures::png;
 use koma_fixtures::zip::{Compression, ZipWriter};
 
@@ -145,7 +145,7 @@ fn every_big_page_gets_its_variants_once() {
             .collect();
         assert_eq!(got, want, "{path} page {}", page.number);
         for (w, h, format) in got {
-            let bytes = fs::read(blobs.variant_path(&page.hash, w, &format)).unwrap();
+            let bytes = fs::read(blobs.variant_path(&page.hash, w, VERSION, &format)).unwrap();
             let img = image::load_from_memory(&bytes).unwrap();
             assert_eq!((img.width(), img.height()), (w, h));
             files += 1;
@@ -337,7 +337,7 @@ fn killing_the_worker_mid_job_then_restarting_finishes_cleanly() {
     for (_, page) in all_pages(&catalog) {
         for (w, h, format) in catalog.variants_of(&page.hash).unwrap() {
             let img = image::load_from_memory(
-                &fs::read(blobs.variant_path(&page.hash, w, &format)).unwrap(),
+                &fs::read(blobs.variant_path(&page.hash, w, VERSION, &format)).unwrap(),
             )
             .unwrap();
             assert_eq!((img.width(), img.height()), (w, h));
@@ -385,17 +385,13 @@ async fn variants_are_served_at_their_own_immutable_urls() {
         .find(|(_, p)| p.size.unwrap().width == 1200)
         .unwrap()
         .1
-        .hash
-        .to_hex()
-        .to_string();
+        .hash;
     let small = pages
         .iter()
         .find(|(_, p)| p.size.unwrap().width == 60)
         .unwrap()
         .1
-        .hash
-        .to_hex()
-        .to_string();
+        .hash;
     drop(catalog);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -410,10 +406,13 @@ async fn variants_are_served_at_their_own_immutable_urls() {
     ));
 
     tokio::task::spawn_blocking(move || {
-        for (format, mime) in [("jpg", "image/jpeg"), ("webp", "image/webp")] {
+        let hex = big.to_hex();
+        for (format, mime) in [(Format::Jpeg, "image/jpeg"), (Format::Webp, "image/webp")] {
             for width in [720, 1080] {
-                let (status, headers, body) = get(addr, &format!("/p/{big}.{width}.{format}"));
-                assert_eq!(status, 200, "{width}.{format}");
+                let url = variants::url(&big, width, format);
+                assert_eq!(url, format!("/p/{hex}.{width}.v{VERSION}.{}", format.ext()));
+                let (status, headers, body) = get(addr, &url);
+                assert_eq!(status, 200, "{url}");
                 assert!(
                     headers.contains(&format!("content-type: {mime}")),
                     "{headers}"
@@ -423,22 +422,27 @@ async fn variants_are_served_at_their_own_immutable_urls() {
                     "{headers}"
                 );
                 assert!(
-                    headers.contains(&format!("etag: \"{big}.{width}\"")),
+                    headers.contains(&format!("etag: \"{hex}.{width}.v{VERSION}\"")),
                     "{headers}"
                 );
                 assert_eq!(image::load_from_memory(&body).unwrap().width(), width);
             }
         }
         // The original is still there as it was.
-        assert_eq!(get(addr, &format!("/p/{big}.png")).0, 200);
+        assert_eq!(get(addr, &format!("/p/{hex}.png")).0, 200);
+        let v = VERSION;
         for missing in [
-            format!("/p/{big}.1440.jpg"), // not made: the page is 1200 wide
-            format!("/p/{big}.0720.jpg"), // one URL per variant
-            format!("/p/{big}.720.png"),  // not a variant format
-            format!("/p/{big}.720.avif"), // not yet
-            format!("/p/{big}.-720.jpg"),
-            format!("/p/{big}.720.jpg.x"),
-            format!("/p/{small}.720.jpg"), // too small to have any
+            format!("/p/{hex}.1440.v{v}.jpg"), // not made: the page is 1200 wide
+            format!("/p/{hex}.720.v{}.jpg", v + 1), // another version's URL
+            format!("/p/{hex}.720.v0{v}.jpg"), // one URL per variant
+            format!("/p/{hex}.0720.v{v}.jpg"),
+            format!("/p/{hex}.720.jpg"), // no version
+            format!("/p/{hex}.720.{v}.jpg"),
+            format!("/p/{hex}.720.v{v}.png"), // not a variant format
+            format!("/p/{hex}.720.v{v}.avif"), // not yet
+            format!("/p/{hex}.-720.v{v}.jpg"),
+            format!("/p/{hex}.720.v{v}.jpg.x"),
+            variants::url(&small, 720, Format::Jpeg), // too small to have any
         ] {
             assert_eq!(get(addr, &missing).0, 404, "{missing}");
         }

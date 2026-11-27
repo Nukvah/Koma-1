@@ -140,7 +140,8 @@ serving never resizes or transcodes (`koma::variants`):
 - Variants belong to page content, not to books: `variants` and
   `variant_pages` are keyed by the page's hash, so a page in two books, or a
   book moved, is not redone. Their bytes are blobs next to the page,
-  `<data>/blobs/ab/<hash>.<width>.<format>`.
+  `<data>/blobs/ab/<hash>.<width>.v<version>.<format>`. Variants of a page
+  that leaves the library stay on disk until `koma scrub` removes them.
 - Once the job queue is empty, every present book with a page lacking
   variants gets a `variants` job. Index jobs always go first, so a new book is
   readable before its variants exist. A job makes one page at a time and
@@ -149,9 +150,10 @@ serving never resizes or transcodes (`koma::variants`):
   most one page. If the worker dies on the same page three times, that page
   alone is given up. The test `tests/variants.rs` kills `koma worker` with
   SIGKILL mid-book and checks that a restart finishes, redoing nothing else.
-- `variants::VERSION` names the settings (widths, formats, qualities).
-  Raising it makes the worker redo every page under the new settings, in
-  place, at the same URLs.
+- `variants::VERSION` names the settings (widths, formats, qualities) and is
+  part of every variant's file name and URL. Raising it makes the worker redo
+  every page under the new settings, at new URLs: copies already cached for
+  a year under the old URLs are never wrong, only old.
 - One page at a time on one thread: on the 2-CPU target the other CPU stays
   free for `koma serve`.
 
@@ -230,7 +232,7 @@ HTML (`koma::html`): no JavaScript, a few lines of CSS. The real design
 | `GET /s/{id}` | a series: its books |
 | `GET /r/{book}/{n}` | the reader, page `n` (1-based); the image links to the next page, and the last page back to the series |
 | `GET /p/{hash}.{ext}` | a page's bytes, `Cache-Control: public, max-age=31536000, immutable`, `ETag` = hash |
-| `GET /p/{hash}.{width}.{format}` | a page variant (`jpg` or `webp`), cached the same way; 404 if that variant was not made |
+| `GET /p/{hash}.{width}.v{version}.{format}` | a page variant (`jpg` or `webp`; `variants::url`), cached the same way; 404 if that variant was not made, or not with this version |
 | `GET /healthz` | health check |
 
 Page bytes come from the book file at the recorded offset (stored pages) or

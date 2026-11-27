@@ -188,6 +188,7 @@ Goal: save disk space when you decide to, and see where it went.
 - Presets: Default (AVIF, quality 70, speed 6, full colour, grayscale for black-and-white
   pages), Lossless (lossless WebP for PNG, BMP and TIFF books), and custom ones *(proven)*.
 - AVIF page variants next to the WebP and JPEG ones, with the same encoder.
+- Variant widths as a library setting (today 720, 1080 and 1440): fewer widths for less disk.
 - JPEG variants: measure jpegli (through its own small crate, `koma-jpegli`, built like
   `koma-webp`) against `jpeg-encoder` on made-up pages: size at equal visual quality, encode
   time, image size, and whether it still needs the IJG notice. Switch only if it wins, by
@@ -223,8 +224,8 @@ Goal: every remaining format, without letting a bad file hurt the server.
 
 - CBR, PDF and fixed-layout EPUB decoded in a sandboxed subprocess, extracted once at ingest.
 - HEIC and JPEG XL books converted once, with an offer to optimise them to AVIF *(proven)*.
-- Continuous fuzzing of every parser; `koma scrub` re-hashes blobs and checks the journal
-  against the disk.
+- Continuous fuzzing of every parser; `koma scrub` re-hashes blobs, removes variants of pages no
+  longer in the library, and checks the journal against the disk.
 
 Exit: a corpus of malformed archives crashes no more than its own job.
 

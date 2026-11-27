@@ -44,7 +44,8 @@ pub const WEBP_QUALITY: f32 = 80.0;
 pub const GRAY_TOLERANCE: u8 = 8;
 
 /// Changes whenever what [`make`] produces changes (widths, formats,
-/// qualities): pages made under an older version are made again.
+/// qualities): pages made under an older version are made again, with new
+/// file names and URLs (see [`url`]).
 pub const VERSION: i64 = 1;
 
 /// A variant's format.
@@ -399,8 +400,10 @@ pub fn run_job(
             Ok(variants) => {
                 let mut rows = Vec::with_capacity(variants.len());
                 for v in &variants {
-                    let path = blobs.variant_path(&hash, v.width, v.format.ext());
-                    write_blob(blobs, &path, &v.bytes).map_err(|e| ScanError::Io(path, e))?;
+                    write_blob(blobs, &hash, v).map_err(|e| {
+                        let path = blobs.variant_path(&hash, v.width, VERSION, v.format.ext());
+                        ScanError::Io(path, e)
+                    })?;
                     rows.push((v.width, v.height, v.format.ext(), v.bytes.len() as u64));
                 }
                 catalog.store_variants(&hash, VERSION, &rows, None)?;
@@ -467,12 +470,25 @@ fn read_page(
     Ok(bytes)
 }
 
-fn write_blob(blobs: &BlobStore, path: &Path, bytes: &[u8]) -> io::Result<()> {
+fn write_blob(blobs: &BlobStore, hash: &blake3::Hash, v: &Variant) -> io::Result<()> {
     let (temp, mut file) = blobs.temp()?;
-    file.write_all(bytes)?;
+    file.write_all(&v.bytes)?;
     file.sync_data()?;
     drop(file);
-    blobs.commit_replacing(&temp, path)
+    blobs
+        .commit_variant(&temp, hash, v.width, VERSION, v.format.ext())
+        .map(drop)
+}
+
+/// The URL of a page's variant: `/p/<hash>.<width>.v<version>.<format>`.
+/// The version is in it so that variants made again under new settings get
+/// new URLs: the old ones stay cached, for a year, as they were.
+pub fn url(hash: &blake3::Hash, width: u32, format: Format) -> String {
+    format!(
+        "/p/{}.{}",
+        hash.to_hex(),
+        crate::blobs::variant_suffix(width, VERSION, format.ext())
+    )
 }
 
 #[cfg(test)]

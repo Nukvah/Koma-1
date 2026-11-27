@@ -984,20 +984,23 @@ impl Catalog {
         rows.collect()
     }
 
-    /// Whether a page of a present book has this variant.
+    /// Whether a page of a present book has this variant, made with `version`.
     pub fn has_variant(
         &self,
         hash: &blake3::Hash,
         width: u32,
+        version: i64,
         format: &str,
     ) -> Result<bool, Error> {
         self.conn
             .prepare_cached(
-                "SELECT 1 FROM variants WHERE hash = ?1 AND width = ?2 AND format = ?3
+                "SELECT 1 FROM variants
+                 JOIN variant_pages v ON v.hash = variants.hash AND v.version = ?3
+                 WHERE variants.hash = ?1 AND variants.width = ?2 AND variants.format = ?4
                    AND EXISTS (SELECT 1 FROM pages JOIN books ON books.id = pages.book_id
                                WHERE pages.hash = ?1 AND books.gone IS NULL)",
             )?
-            .query_row(params![hash.as_bytes(), width, format], |_| Ok(()))
+            .query_row(params![hash.as_bytes(), width, version, format], |_| Ok(()))
             .optional()
             .map(|r| r.is_some())
     }

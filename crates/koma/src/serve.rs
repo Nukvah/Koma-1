@@ -8,7 +8,7 @@
 //! | `GET /s/{id}` | a series: its books |
 //! | `GET /r/{book}/{n}` | the reader, page `n` (1-based) |
 //! | `GET /p/{hash}.{ext}` | a page's bytes, cached for a year |
-//! | `GET /p/{hash}.{width}.{format}` | a page variant (`jpg` or `webp`), cached for a year |
+//! | `GET /p/{hash}.{width}.v{version}.{format}` | a page variant (`jpg` or `webp`), cached for a year |
 //! | `GET /healthz` | health check |
 
 use std::future::Future;
@@ -172,15 +172,23 @@ async fn page_bytes(
 ) -> Result<Response, Failure> {
     let (hex, rest) = file.split_once('.').ok_or(Failure::NotFound)?;
     let hash = blake3::Hash::from_hex(hex).map_err(|_| Failure::NotFound)?;
-    // `<hash>.<ext>`: the page as it is; `<hash>.<width>.<ext>`: a variant.
-    let (width, ext) = match rest.split_once('.') {
+    // `<hash>.<ext>`: the page as it is; `<hash>.<width>.v<version>.<ext>`: a variant.
+    let (variant, ext) = match rest.split_once('.') {
         None => (None, rest),
-        Some((w, ext)) => (Some(variant_width(w).ok_or(Failure::NotFound)?), ext),
+        Some((w, rest)) => {
+            let (v, ext) = rest.split_once('.').ok_or(Failure::NotFound)?;
+            let width = number(w).ok_or(Failure::NotFound)?;
+            let version = v
+                .strip_prefix('v')
+                .and_then(number)
+                .ok_or(Failure::NotFound)?;
+            (Some((width, i64::from(version))), ext)
+        }
     };
     let content_type = content_type(ext).ok_or(Failure::NotFound)?;
-    let etag = match width {
+    let etag = match variant {
         None => format!("\"{hex}\""),
-        Some(w) => format!("\"{hex}.{w}\""),
+        Some((w, v)) => format!("\"{hex}.{w}.v{v}\""),
     };
     if headers
         .get(IF_NONE_MATCH)
@@ -193,13 +201,13 @@ async fn page_bytes(
     let inner = Arc::clone(&state.inner);
     let bytes = state
         .query(move |c| {
-            if let Some(width) = width {
+            if let Some((width, version)) = variant {
                 if crate::variants::Format::from_ext(&ext).is_none()
-                    || !c.has_variant(&hash, width, &ext)?
+                    || !c.has_variant(&hash, width, version, &ext)?
                 {
                     return Err(Failure::NotFound);
                 }
-                let path = inner.blobs.variant_path(&hash, width, &ext);
+                let path = inner.blobs.variant_path(&hash, width, version, &ext);
                 return std::fs::read(&path)
                     .map_err(|e| Failure::Internal(format!("{}: {e}", path.display())));
             }
@@ -231,9 +239,9 @@ async fn page_bytes(
     Ok((headers, bytes).into_response())
 }
 
-/// A variant width as written in a URL: digits only, no leading zero, so
-/// each variant has exactly one URL.
-fn variant_width(w: &str) -> Option<u32> {
+/// A variant's width or version as written in a URL: digits only, no
+/// leading zero, so each variant has exactly one URL.
+fn number(w: &str) -> Option<u32> {
     if w.is_empty() || w.len() > 5 || w.starts_with('0') || !w.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
