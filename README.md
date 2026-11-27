@@ -5,8 +5,8 @@ library and reader, built to stay fast on small hardware.
 Why and how: [MANIFESTO.md](MANIFESTO.md). Contributing: [AGENTS.md](AGENTS.md).
 
 **Status: Milestone 1 in progress.** The binary, the image and the CI checks
-exist, and `koma worker` indexes a CBZ library into SQLite; it does not serve
-the library over HTTP yet.
+exist, `koma worker` indexes a CBZ library into SQLite, and `koma serve` shows
+it in a browser: library, series and a bare reader.
 
 ## Run
 
@@ -15,15 +15,17 @@ docker build -t koma .
 docker run --read-only --cap-drop ALL -p 8080:8080 koma serve
 curl http://localhost:8080/healthz   # ok
 
-# Index a library: read-only books in /library, catalogue and blobs in /data
+# Read a library: books read-only in /library, catalogue and blobs in /data
 docker run --read-only --cap-drop ALL -v /path/to/manga:/library:ro -v koma-data:/data koma scan
+docker run --read-only --cap-drop ALL -v /path/to/manga:/library:ro -v koma-data:/data \
+    -p 8080:8080 koma serve        # then open http://localhost:8080
 ```
 
 One binary, three modes:
 
 | Command | Does |
 |---|---|
-| `koma serve` | HTTP server. Today: `GET /healthz`. |
+| `koma serve` | HTTP server: the library, series and reader pages, page images, `/healthz`. |
 | `koma worker` | Scans the library into the catalogue, then waits for jobs (none yet). |
 | `koma scan` | Scans the library once and exits (3 if some books could not be read). |
 | `koma scrub` | Integrity checks. Today: nothing to check. |

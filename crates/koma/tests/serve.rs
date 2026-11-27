@@ -15,7 +15,12 @@ async fn answers_health_check_and_stops_on_signal() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (stop, stopped) = oneshot::channel::<()>();
-    let server = tokio::spawn(koma::serve::serve(listener, async {
+    let empty = std::env::temp_dir().join(format!("koma-serve-empty-{}", std::process::id()));
+    let state = koma::serve::AppState::new(&koma::cli::Paths {
+        library: empty.join("library"),
+        data: empty.join("data"),
+    });
+    let server = tokio::spawn(koma::serve::serve(listener, state, async {
         let _ = stopped.await;
     }));
 
@@ -26,6 +31,11 @@ async fn answers_health_check_and_stops_on_signal() {
     assert_eq!(
         blocking(move || koma::health::status(addr, "/nothing-here", TIMEOUT)).await,
         Ok(404)
+    );
+    // Nothing scanned yet: the library says so instead of failing.
+    assert_eq!(
+        blocking(move || koma::health::status(addr, "/", TIMEOUT)).await,
+        Ok(503)
     );
 
     stop.send(()).unwrap();
