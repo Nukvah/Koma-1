@@ -600,8 +600,25 @@ async fn book_json(
 ) -> Result<Response, Failure> {
     let json = state
         .query(move |c| {
-            c.book(book_id)?.ok_or(Failure::NotFound)?;
-            Ok(html::reader_json(&reader_pages(c, book_id)?))
+            let book = c.book(book_id)?.ok_or(Failure::NotFound)?;
+            // The book after this one in its series, for the end card.
+            let series = c.series_by_id(book.series_id)?.ok_or(Failure::NotFound)?;
+            let books = c.books(book.series_id)?;
+            let next = books
+                .iter()
+                .skip_while(|b| b.id != book_id)
+                .nth(1)
+                .map(|b| -> Result<_, Failure> {
+                    let cover = c.book_cover(b.id, html::COVER_WIDTH, variants::VERSION)?;
+                    Ok((b.clone(), cover))
+                })
+                .transpose()?;
+            Ok(html::reader_json(
+                &reader_pages(c, book_id)?,
+                &series,
+                &book,
+                next.as_ref(),
+            ))
         })
         .await?;
     Ok((
