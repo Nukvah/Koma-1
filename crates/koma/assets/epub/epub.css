@@ -1,0 +1,23 @@
+/* Koma-1 EPUB reader: a column of text on paper, in the reader's own
+   typography; bars and contents over it. Design: docs/design/reader-epub.html. */
+:root{--s:19px;--w:34em;--l:1.65}
+.reader.book{height:auto;overflow:visible;background:#F4F1EA;color:#222}
+.book main{max-width:var(--w);margin:0 auto;padding:8px 24px 32px;font:var(--s)/var(--l) Georgia,"Iowan Old Style",serif;overflow-wrap:break-word}
+.book main :is(h1,h2,h3,h4){line-height:1.25;margin:1.2em 0 .8em}
+.book main :is(p,ul,ol,dl,blockquote,figure,table,pre){margin:0 0 1em}
+.book main img{max-width:100%;height:auto}.book main pre{white-space:pre-wrap}
+.book main a{color:#1E3A6E}.book main aside{font-size:.85em;color:#555}
+.book main table{border-collapse:collapse}.book main :is(td,th){border:1px solid #D8D2C4;padding:2px 6px}
+/* Where you are, and the chapters around it: links, for reading without
+   the script too. */
+.head,.chap{max-width:var(--w);margin:0 auto;padding:16px 24px;display:flex;flex-wrap:wrap;gap:6px 14px;color:#6B6B6B}
+.head a,.chap a{color:#1E3A6E}
+.chap{justify-content:space-between;border-top:1px solid #D8D2C4;padding-bottom:96px}
+/* The bars (a tap) and the contents (c, or #toc). */
+.ebar{display:none;flex-wrap:wrap;background:#0F1215}.open .ebar{display:flex}
+.ebar .seg span{padding:2px 9px;color:#fff}
+.toc{display:none;position:fixed;top:0;left:0;bottom:0;z-index:2;width:300px;overflow:auto;padding:12px 16px;box-sizing:border-box;background:#0F1215;border-right:2px solid #3A424C}
+.toc:target,.toc-open .toc{display:block}
+.toc a{display:block;padding:6px 0;text-decoration:none;color:#8A949E}.toc [aria-current]{color:#F2A33A}
+.toc .l2{padding-left:16px}.toc .l3{padding-left:32px}.toc .shut{text-align:right;color:#D6DCE1;text-decoration:underline}
+@media (max-width:760px){.toc{width:auto;right:0}.book main{padding:8px 16px 32px}}

@@ -23,7 +23,7 @@
 //! A file or folder that can't be read is recorded with its reason and
 //! skipped; it never stops the scan, and is retried once it changes.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, Metadata};
 use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -36,8 +36,10 @@ use crate::archive::zip::{self, Limits, Method};
 use crate::archive::{self};
 use crate::blobs::BlobStore;
 use crate::catalog::{
-    self, Catalog, Details, GONE_GRACE_SECS, JobKind, MAX_ATTEMPTS, NewBook, Page, Place, Stamp,
+    self, Catalog, Chapter, Details, GONE_GRACE_SECS, JobKind, MAX_ATTEMPTS, NewBook, Page, Place,
+    Stamp, TocRow,
 };
+use crate::epub;
 use crate::log;
 use crate::names;
 use crate::variants;
@@ -527,14 +529,18 @@ fn index_job(
         }
         return Ok(());
     }
+    let plain = |r: Result<(Vec<Page>, MetaFiles), String>| r.map(|(p, m)| (p, m, Epub::default()));
     let read = match &source {
-        Source::Archive if is_7z(rel) => index_7z(&path, blobs),
-        Source::Archive => index_book(&path, blobs),
-        Source::Photos(listing) => index_photos(library, listing),
+        Source::Archive if is_epub(rel) => index_epub(&path, blobs),
+        Source::Archive if is_7z(rel) => plain(index_7z(&path, blobs)),
+        Source::Archive => plain(index_book(&path, blobs)),
+        Source::Photos(listing) => plain(index_photos(library, listing)),
     };
     match read {
-        Ok((pages, meta_files)) => {
-            let details = details(name, &crate::meta::read(&meta_files));
+        Ok((pages, meta_files, epub)) => {
+            // An EPUB's own metadata is the weakest layer.
+            let meta = crate::meta::merge(epub.meta, crate::meta::read(&meta_files));
+            let details = details(name, &meta);
             catalog.replace_book(
                 &NewBook {
                     series_path: &series_path,
@@ -546,6 +552,8 @@ fn index_job(
                     size: stamp.0,
                     mtime: stamp.1,
                     pages: &pages,
+                    chapters: &epub.chapters,
+                    toc: &epub.toc,
                 },
                 unix_now(),
             )?;
@@ -561,6 +569,14 @@ fn index_job(
     Ok(())
 }
 
+/// What only an EPUB has: its chapters, contents and package metadata.
+#[derive(Default)]
+struct Epub {
+    chapters: Vec<Chapter>,
+    toc: Vec<TocRow>,
+    meta: crate::meta::Meta,
+}
+
 enum Source {
     Archive,
     /// A photo folder, with its images and metadata files.
@@ -572,15 +588,21 @@ fn folder_of(rel: &str) -> &str {
     rel.rsplit_once('/').map_or("", |(dir, _)| dir)
 }
 
-/// Book archives: `.cbz`, `.zip` (photo sets are often kept as plain zips),
-/// and 7z: `.cb7`, `.7z`.
+/// Book files: `.cbz`, `.zip` (photo sets are often kept as plain zips),
+/// 7z (`.cb7`, `.7z`), and EPUB.
 fn is_archive(name: &str) -> bool {
     name.rsplit_once('.').is_some_and(|(stem, ext)| {
         !stem.is_empty()
-            && ["cbz", "zip", "cb7", "7z"]
+            && ["cbz", "zip", "cb7", "7z", "epub"]
                 .iter()
                 .any(|e| ext.eq_ignore_ascii_case(e))
     })
+}
+
+/// An EPUB book (`.epub`).
+pub fn is_epub(name: &str) -> bool {
+    name.rsplit_once('.')
+        .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("epub"))
 }
 
 fn is_7z(name: &str) -> bool {
@@ -717,35 +739,163 @@ fn index_book(path: &Path, blobs: &BlobStore) -> Result<(Vec<Page>, MetaFiles), 
     let pages = pages
         .iter()
         .enumerate()
-        .map(|(number, entry)| {
-            let format = format_of(&entry.name);
-            let length = entry.uncompressed_size;
-            let (hash, offset, size) = match entry.method {
-                Method::Stored => {
-                    let mut hasher = blake3::Hasher::new();
-                    copy_page(&file, entry, &limits, &mut hasher)?;
-                    let size = read_size(&file, entry.data_offset, length);
-                    (hasher.finalize(), Some(entry.data_offset), size)
-                }
-                _ => {
-                    let hash = inflate_to_blob(&file, entry, &limits, blobs, &format)?;
-                    let blob = File::open(blobs.path(&hash, &format))?;
-                    (hash, None, read_size(&blob, 0, length))
-                }
-            };
-            Ok(Page {
-                number: number as i64,
-                hash,
-                format,
-                length,
-                offset,
-                file: None,
-                size,
-            })
-        })
+        .map(|(number, entry)| page_of(&file, entry, number as i64, &limits, blobs))
         .collect::<Result<Vec<_>, PageError>>()
         .map_err(|e| e.to_string())?;
     Ok((pages, meta_files))
+}
+
+/// One page of a zip book: hashed in place if stored, else inflated into
+/// the blob store.
+fn page_of(
+    file: &File,
+    entry: &zip::Entry,
+    number: i64,
+    limits: &PageLimits,
+    blobs: &BlobStore,
+) -> Result<Page, PageError> {
+    let format = format_of(&entry.name);
+    let length = entry.uncompressed_size;
+    let (hash, offset, size) = match entry.method {
+        Method::Stored => {
+            let mut hasher = blake3::Hasher::new();
+            copy_page(file, entry, limits, &mut hasher)?;
+            let size = read_size(file, entry.data_offset, length);
+            (hasher.finalize(), Some(entry.data_offset), size)
+        }
+        _ => {
+            let hash = inflate_to_blob(file, entry, limits, blobs, &format)?;
+            let blob = File::open(blobs.path(&hash, &format))?;
+            (hash, None, read_size(&blob, 0, length))
+        }
+    };
+    Ok(Page {
+        number,
+        hash,
+        format,
+        length,
+        offset,
+        file: None,
+        size,
+    })
+}
+
+/// Indexes one EPUB: its package, its pictures as pages (the cover first),
+/// its chapters cleaned into the blob store, and its contents. See
+/// [`crate::epub`].
+fn index_epub(path: &Path, blobs: &BlobStore) -> Result<(Vec<Page>, MetaFiles, Epub), String> {
+    let entries = zip::read_file_index(path, &Limits::default()).map_err(|e| e.to_string())?;
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let find = |name: &str| {
+        entries
+            .iter()
+            .find(|e| e.name == name && !e.is_dir() && !e.encrypted)
+    };
+    let xml_limits = PageLimits {
+        max_bytes: epub::MAX_XML_BYTES,
+        ..PageLimits::default()
+    };
+    let read = |name: &str| -> Option<Vec<u8>> {
+        let mut bytes = Vec::new();
+        copy_page(&file, find(name)?, &xml_limits, &mut bytes).ok()?;
+        Some(bytes)
+    };
+    let package_path = read("META-INF/container.xml")
+        .and_then(|c| epub::rootfile(&c))
+        .ok_or("not an EPUB: META-INF/container.xml names no package")?;
+    let package = epub::package(
+        &package_path,
+        &read(&package_path).ok_or("EPUB package missing or unreadable")?,
+    );
+    if package.fixed_layout {
+        return Err("fixed-layout EPUB: not read yet (comes in M11)".into());
+    }
+    if package.spine.is_empty() {
+        return Err("EPUB with no chapters".into());
+    }
+    // Pictures are the book's pages: the cover first, so it is the cover.
+    // A picture that cannot be read is left out, not the book.
+    let limits = PageLimits::default();
+    let mut pages = Vec::new();
+    let mut pictures = HashMap::new();
+    for name in package.images() {
+        let Some(entry) = find(name) else { continue };
+        let Ok(page) = page_of(&file, entry, pages.len() as i64, &limits, blobs) else {
+            continue;
+        };
+        pictures.insert(
+            name.to_owned(),
+            epub::Picture {
+                url: format!("/p/{}.{}", page.hash.to_hex(), page.format),
+                width: page.size.map(|s| s.width),
+                height: page.size.map(|s| s.height),
+            },
+        );
+        pages.push(page);
+    }
+    let toc = package
+        .nav
+        .as_deref()
+        .and_then(|p| Some(epub::nav(p, &read(p)?)))
+        .filter(|t| !t.is_empty())
+        .or_else(|| {
+            let p = package.ncx.as_deref()?;
+            Some(epub::ncx(p, &read(p)?))
+        })
+        .unwrap_or_default();
+    let numbers: HashMap<String, usize> = package
+        .spine
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.clone(), i + 1))
+        .collect();
+    let mut chapters = Vec::new();
+    for (i, chapter) in package.spine.iter().enumerate() {
+        // A chapter that cannot be read stays, empty, so the numbers hold.
+        let html = epub::clean(
+            &read(chapter).unwrap_or_default(),
+            &epub::Links {
+                path: chapter,
+                chapters: &numbers,
+                pictures: &pictures,
+            },
+        );
+        let hash = blobs
+            .put(html.as_bytes(), "html")
+            .map_err(|e| e.to_string())?;
+        let title = toc
+            .iter()
+            .find(|t| &t.path == chapter)
+            .map(|t| t.title.clone())
+            .unwrap_or_default();
+        chapters.push(Chapter {
+            number: i as i64,
+            hash,
+            length: html.len() as u64,
+            title,
+        });
+    }
+    let toc = toc
+        .into_iter()
+        .filter_map(|t| {
+            Some(TocRow {
+                chapter: *numbers.get(&t.path)? as i64 - 1,
+                level: t.level,
+                title: t.title,
+                anchor: t.anchor,
+            })
+        })
+        .collect();
+    let meta_files = archive_meta_files(&file, &entries);
+    Ok((
+        pages,
+        meta_files,
+        Epub {
+            chapters,
+            toc,
+            meta: package.meta,
+        },
+    ))
 }
 
 /// Indexes one 7z book (CB7): read once, front to back, every page

@@ -242,6 +242,7 @@ pub fn media_type(file_name: &str) -> &'static str {
         .unwrap_or_default();
     match ext.as_str() {
         "cbz" => "application/vnd.comicbook+zip",
+        "epub" => "application/epub+zip",
         "zip" => "application/zip",
         "7z" | "cb7" => "application/x-7z-compressed",
         _ => "application/octet-stream",

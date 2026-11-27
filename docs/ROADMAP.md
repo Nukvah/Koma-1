@@ -278,7 +278,7 @@ lossless JPEG XL archival and a dedicated phone layout.
 
   | Budget | Now | Proposed | Why |
   |---|---|---|---|
-  | CSS | 5 KB | 14 KB (10 until M3, 12 until M4) | the library UI's design CSS is 9.6 KB before its real pages; curation and upload screens add more |
+  | CSS | 5 KB | 16 KB (10 until M3, 12 until M4, 14 until the EPUB reader) | the library UI's design CSS is 9.6 KB before its real pages; both readers add theirs; curation and upload screens add more |
   | Reader JS | 10 KB | 16 KB | offline and sync logic |
   | EPUB reader JS | none | 16 KB, loaded only for EPUBs | reflowable book reader |
   | Curator pages JS | none | 24 KB, loaded only there | upload progress, rename preview |
@@ -286,6 +286,11 @@ lossless JPEG XL archival and a dedicated phone layout.
   | Idle RAM (serve) | 25 MB | 40 MB | metadata and sync state |
   | Idle RAM (worker) | none | 64 MB | rename plans and upload buffers |
 
+- **CSS per area.** One CSS budget covers the library and both readers, though
+  each page loads only its own stylesheets. Split it so each area has its own
+  number (library, page reader, EPUB reader, curation), as the scripts are.
+- **Vertical writing.** EPUB books read horizontally for now; Japanese books
+  written vertically (`writing-mode: vertical-rl`) want their own reading.
 - **ffmpeg.** Video thumbnails need ffmpeg, which alone is bigger than the image budget.
   Options: a separate optional media image, thumbnails only when ffmpeg is present, or no
   video thumbnails.

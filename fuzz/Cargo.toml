@@ -57,3 +57,10 @@ path = "fuzz_targets/variants.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "epub"
+path = "fuzz_targets/epub.rs"
+test = false
+doc = false
+bench = false

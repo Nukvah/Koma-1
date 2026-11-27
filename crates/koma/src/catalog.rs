@@ -14,7 +14,7 @@ pub use crate::archive::size::Size;
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 
 /// How long a book whose file vanished is remembered, so that a folder that
 /// comes back (a drive mounted late, a move noticed in two steps) keeps its
@@ -84,6 +84,25 @@ CREATE TABLE pages (
     PRIMARY KEY (book_id, number)
 ) WITHOUT ROWID;
 CREATE INDEX pages_hash ON pages(hash);
+-- An EPUB's chapters, cleaned at ingest (crate::epub), and its contents.
+-- Its pictures are its pages.
+CREATE TABLE chapters (
+    book_id  INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    number   INTEGER NOT NULL,       -- 0-based reading order
+    hash     BLOB NOT NULL,          -- BLAKE3 of the cleaned chapter: blob <hash>.html
+    length   INTEGER NOT NULL,
+    title    TEXT NOT NULL,          -- its first entry in the contents, else ''
+    PRIMARY KEY (book_id, number)
+) WITHOUT ROWID;
+CREATE TABLE toc (
+    book_id  INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    pos      INTEGER NOT NULL,       -- order in the contents
+    level    INTEGER NOT NULL,       -- 1 for the top level
+    title    TEXT NOT NULL,
+    chapter  INTEGER NOT NULL,       -- 0-based chapter number
+    anchor   TEXT,                   -- the place in it (an id, as the book writes it)
+    PRIMARY KEY (book_id, pos)
+) WITHOUT ROWID;
 CREATE TABLE scan_errors (
     path    TEXT PRIMARY KEY,        -- a book file, or a folder that could not be read
     folder  TEXT NOT NULL,           -- the folder it is in
@@ -169,9 +188,24 @@ fn migrate_9_to_10() -> String {
 const MIGRATE_8_TO_9: &str = "CREATE VIRTUAL TABLE search USING fts5(
     name, people, genres, tags, kind UNINDEXED, ref UNINDEXED, tokenize = 'trigram');";
 
+/// Schema 10 to 11: EPUB chapters and contents. Every folder is read again
+/// at the next scan, so EPUB files, not books before, are found; books
+/// already known are not read again.
+const MIGRATE_10_TO_11: &str = "CREATE TABLE chapters (
+    book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE, number INTEGER NOT NULL,
+    hash BLOB NOT NULL, length INTEGER NOT NULL, title TEXT NOT NULL,
+    PRIMARY KEY (book_id, number)) WITHOUT ROWID;
+CREATE TABLE toc (
+    book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE, pos INTEGER NOT NULL,
+    level INTEGER NOT NULL, title TEXT NOT NULL, chapter INTEGER NOT NULL, anchor TEXT,
+    PRIMARY KEY (book_id, pos)) WITHOUT ROWID;
+UPDATE folders SET mtime = NULL;";
+
 /// Tables of earlier schema versions, dropped when upgrading: until accounts
 /// exist the catalogue holds nothing that the next scan cannot rebuild.
 const DROP_OLD: &str = "
+DROP TABLE IF EXISTS toc;
+DROP TABLE IF EXISTS chapters;
 DROP TABLE IF EXISTS pages;
 DROP TABLE IF EXISTS book_terms;
 DROP TABLE IF EXISTS books;
@@ -284,7 +318,31 @@ pub struct NewBook<'a> {
     pub size: u64,
     pub mtime: i64,
     pub pages: &'a [Page],
+    /// An EPUB's chapters and contents; empty for a book of pages.
+    pub chapters: &'a [Chapter],
+    pub toc: &'a [TocRow],
     pub details: &'a Details,
+}
+
+/// A chapter of an EPUB, cleaned (see [`crate::epub::clean`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Chapter {
+    /// 0-based reading order.
+    pub number: i64,
+    /// The cleaned chapter is the blob `<hash>.html`.
+    pub hash: blake3::Hash,
+    pub length: u64,
+    pub title: String,
+}
+
+/// An entry of an EPUB's contents.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TocRow {
+    pub level: u32,
+    pub title: String,
+    /// 0-based chapter number.
+    pub chapter: i64,
+    pub anchor: Option<String>,
 }
 
 /// What a book says about itself: its metadata files, with gaps filled from
@@ -368,7 +426,7 @@ impl Catalog {
         match version {
             // From 7 on the catalogue is upgraded in place, one step at a
             // time: remaking page variants is too costly to start over.
-            7..=9 => {
+            7..=10 => {
                 let mut steps = String::new();
                 if version == 7 {
                     steps.push_str(&migrate_7_to_8());
@@ -376,7 +434,10 @@ impl Catalog {
                 if version <= 8 {
                     steps.push_str(MIGRATE_8_TO_9);
                 }
-                steps.push_str(&migrate_9_to_10());
+                if version <= 9 {
+                    steps.push_str(&migrate_9_to_10());
+                }
+                steps.push_str(MIGRATE_10_TO_11);
                 self.conn.execute_batch(&format!(
                     "BEGIN; {steps} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
                 ))?;
@@ -436,7 +497,11 @@ impl Catalog {
                 book.name,
                 book.size as i64,
                 book.mtime,
-                book.pages.len() as i64,
+                if book.chapters.is_empty() {
+                    book.pages.len()
+                } else {
+                    book.chapters.len()
+                } as i64,
                 now
             ],
             |r| r.get(0),
@@ -490,6 +555,30 @@ impl Catalog {
                     page.file,
                     page.size.map(|s| s.width),
                     page.size.map(|s| s.height),
+                ])?;
+            }
+        }
+        tx.execute("DELETE FROM chapters WHERE book_id = ?1", [book_id])?;
+        tx.execute("DELETE FROM toc WHERE book_id = ?1", [book_id])?;
+        {
+            let mut insert = tx.prepare(
+                "INSERT INTO chapters (book_id, number, hash, length, title) VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            for c in book.chapters {
+                insert.execute(params![
+                    book_id,
+                    c.number,
+                    c.hash.as_bytes(),
+                    c.length as i64,
+                    c.title
+                ])?;
+            }
+            let mut insert = tx.prepare(
+                "INSERT INTO toc (book_id, pos, level, title, chapter, anchor) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for (pos, t) in book.toc.iter().enumerate() {
+                insert.execute(params![
+                    book_id, pos as i64, t.level, t.title, t.chapter, t.anchor
                 ])?;
             }
         }
@@ -1273,6 +1362,39 @@ impl Catalog {
         rows.collect()
     }
 
+    /// One chapter of an EPUB, 0-based.
+    pub fn chapter(&self, book_id: i64, number: i64) -> Result<Option<Chapter>, Error> {
+        self.conn
+            .prepare_cached(
+                "SELECT number, hash, length, title FROM chapters WHERE book_id = ?1 AND number = ?2",
+            )?
+            .query_row(params![book_id, number], |r| {
+                Ok(Chapter {
+                    number: r.get(0)?,
+                    hash: hash_from_row(r, 1)?,
+                    length: r.get::<_, i64>(2)? as u64,
+                    title: r.get(3)?,
+                })
+            })
+            .optional()
+    }
+
+    /// An EPUB's contents, in order.
+    pub fn toc(&self, book_id: i64) -> Result<Vec<TocRow>, Error> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT level, title, chapter, anchor FROM toc WHERE book_id = ?1 ORDER BY pos",
+        )?;
+        let rows = stmt.query_map([book_id], |r| {
+            Ok(TocRow {
+                level: r.get(0)?,
+                title: r.get(1)?,
+                chapter: r.get(2)?,
+                anchor: r.get(3)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     /// Where to read a page with this hash, preferring one inside an archive.
     pub fn page_by_hash(&self, hash: &blake3::Hash) -> Result<Option<PageLocation>, Error> {
         self.conn
@@ -1435,6 +1557,16 @@ impl Catalog {
             .query_row([book_id], |r| r.get(0))
             .optional()?
             .flatten())
+    }
+
+    /// A book's language as its metadata gives it (`''` if it does not).
+    pub fn book_language(&self, book_id: i64) -> Result<String, Error> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT language FROM books WHERE id = ?1")?
+            .query_row([book_id], |r| r.get(0))
+            .optional()?
+            .unwrap_or_default())
     }
 
     /// The variants of every page of a book made with `version`, as

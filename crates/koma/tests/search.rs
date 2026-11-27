@@ -172,7 +172,9 @@ fn schema_8_is_upgraded_and_filled() {
     drop(c);
     let conn = rusqlite::Connection::open(&db).unwrap();
     conn.execute_batch(
-        "DROP INDEX series_shelf;
+        "DROP TABLE toc;
+         DROP TABLE chapters;
+         DROP INDEX series_shelf;
          DROP INDEX series_names;
          ALTER TABLE series DROP COLUMN collection;
          DROP TABLE search;

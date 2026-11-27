@@ -24,11 +24,18 @@ cold_start_ms = 200   # process start to first successful health check (median o
 name = "CSS"
 dir = "crates/koma/assets"
 suffix = ".css"
-max_kib = 14          # 10 until M3, 12 until M4: the library UI's and the reader's together
+max_kib = 16          # 10 until M3, 12 until M4, 14 until EPUB: the library UI's and both readers'
+                      # together (to be split per area: see docs/ROADMAP.md, Open questions)
 
 [[assets]]
 name = "Reader JS"
 dir = "crates/koma/assets/reader"
+suffix = ".js"
+max_kib = 16
+
+[[assets]]
+name = "EPUB reader JS"  # loaded only on EPUB chapter pages
+dir = "crates/koma/assets/epub"
 suffix = ".js"
 max_kib = 16
 
