@@ -76,11 +76,20 @@ The library only needs to be readable by the container's user.
 
 ## Scanning
 
-Today the worker scans once, when it starts. After adding or changing books,
-restart it (`docker compose restart worker`) or run `koma scan` again. A
-rescan only re-reads books whose size or modification time changed, and it
-forgets books that were removed. `serve` picks up the new catalogue on the
-next request; it does not need a restart.
+The worker scans when it starts and then every 15 minutes (`--rescan`), so
+books you add, change or remove show up on their own. `serve` picks up the
+new catalogue on the next request; it does not need a restart.
+
+Rescans are cheap. A folder whose modification time hasn't changed is not
+read again, and a book whose size and modification time haven't changed is
+never re-indexed, so a restart re-reads nothing. A book overwritten in place
+doesn't change its folder's time; the worker looks at every known book once
+a day and on each start, and `koma scan` always does, so those are found too.
+
+Only one worker or `koma scan` can use a data folder at a time; a second one
+exits with an error. A worker that is stopped or killed in the middle of a
+book picks that book up again when it restarts. A book that stops the worker
+three times in a row is skipped and logged.
 
 Until the first scan has finished, `/` answers 503.
 
@@ -91,8 +100,9 @@ Until the first scan has finished, `/` answers 503.
   answers no HTTP, so turn the check off for it, as the Compose file does.
 - Logs are JSON lines on stderr (`docker logs koma`). A scan ends with a
   `scan: done` line that counts the books indexed, unchanged, failed and
-  removed.
-- `SIGTERM` (`docker stop`) stops both modes cleanly within a second.
+  removed, and the folders read and skipped.
+- `SIGTERM` (`docker stop`) stops `serve` cleanly within a second, and the
+  worker after the book it is indexing.
 
 ## Settings
 
@@ -101,5 +111,6 @@ Until the first scan has finished, `/` answers 503.
 | `--listen <ip:port>` | `KOMA_LISTEN` | `0.0.0.0:8080` |
 | `--library <dir>` | `KOMA_LIBRARY` | `/library` |
 | `--data <dir>` | `KOMA_DATA` | `/data` |
+| `--rescan <minutes>` (worker) | `KOMA_RESCAN` | `15`; `0` scans only at start |
 
 A flag wins over its variable.

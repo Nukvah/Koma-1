@@ -71,7 +71,7 @@ folder, with the extension only breaking ties.
 
 ## Catalogue and scan
 
-`koma worker` (at start) and `koma scan` index the library into
+`koma worker` (at start, then every `--rescan` minutes) and `koma scan` index the library into
 `<data>/koma.db`, a SQLite database in WAL mode (`koma::catalog`); `koma serve`
 only reads it.
 
@@ -85,10 +85,26 @@ only reads it.
   `<data>/blobs/ab/<hash>.<ext>`; identical pages share one blob. Inflating
   stops at the declared size, at 256 MiB, or if the declared ratio is over
   1000:1.
+- The scan is incremental. A folder whose modification time is unchanged
+  since it was last read in full is not listed again, only its known
+  subfolders are visited (`folders` table). A folder modified less than two
+  seconds before it is read is read again next time, for file systems with
+  coarse times. A `Check::Files` scan (worker start, once a day, `koma scan`)
+  also stats every known book, to catch files overwritten in place.
 - A book whose size and modification time haven't changed is skipped; books
   whose files are gone are removed, and empty series with them.
-- A file that can't be read is logged, stored in `scan_errors` with the
-  reason, and skipped; it never stops the scan.
+- The scan only queues an index job per changed book (`jobs` table);
+  `scan::run_jobs` works through the queue. Each job is one transaction, so
+  a killed worker leaves the catalogue as it was. On start, jobs left running
+  are queued again; a job claimed three times without finishing is given up
+  and recorded as an error. A lock file (`<data>/worker.lock`) keeps a second
+  worker or scan out.
+- A file or folder that can't be read is logged, stored in `scan_errors`
+  with the reason (and the file's size and time), and skipped; it never stops
+  the scan, and is retried only once it changes.
+- The catalogue's schema version is in `PRAGMA user_version`. Version 1 (M1)
+  is dropped and rebuilt by the next scan: it holds nothing a scan can't
+  recreate.
 
 Order is natural everywhere: SQL uses the `natsort` collation, which is
 `koma::natsort::compare_paths`.

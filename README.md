@@ -4,9 +4,9 @@ A self-hosted manga and comics server: one small Rust binary, a plain web
 library and reader, built to stay fast on small hardware.
 Why and how: [MANIFESTO.md](MANIFESTO.md). Contributing: [AGENTS.md](AGENTS.md).
 
-**Status: Milestone 1 in progress.** The binary, the image and the CI checks
-exist, `koma worker` indexes a CBZ library into SQLite, and `koma serve` shows
-it in a browser: library, series and a bare reader.
+**Status: Milestone 2 in progress.** `koma worker` indexes a CBZ library into
+SQLite and keeps it up to date, and `koma serve` shows it in a browser:
+library, series and a bare reader.
 
 ## Run
 
@@ -26,7 +26,7 @@ One binary, three modes:
 | Command | Does |
 |---|---|
 | `koma serve` | HTTP server: the library, series and reader pages, page images, `/healthz`. |
-| `koma worker` | Scans the library into the catalogue, then waits for jobs (none yet). |
+| `koma worker` | Scans the library into the catalogue, then rescans every 15 minutes (`--rescan`). |
 | `koma scan` | Scans the library once and exits (3 if some books could not be read). |
 | `koma scrub` | Integrity checks. Today: nothing to check. |
 | `koma healthcheck` | Exits 0 if the local server is healthy; the image's `HEALTHCHECK`. |

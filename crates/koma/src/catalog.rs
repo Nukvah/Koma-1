@@ -2,6 +2,9 @@
 //!
 //! `koma worker` writes it; `koma serve` only reads it. Names and paths sort
 //! with the `natsort` collation: [`crate::natsort::compare_paths`].
+//!
+//! It also holds what the scan needs to stay incremental (folders and their
+//! modification times) and the worker's job queue.
 
 use std::path::Path;
 
@@ -9,7 +12,11 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
+
+/// A job claimed this many times without finishing is given up: the worker
+/// died on it each time (crash, out of memory), so it would only die again.
+pub const MAX_ATTEMPTS: i64 = 3;
 
 const SCHEMA: &str = "
 CREATE TABLE series (
@@ -21,12 +28,14 @@ CREATE TABLE books (
     id         INTEGER PRIMARY KEY,
     series_id  INTEGER NOT NULL REFERENCES series(id),
     path       TEXT NOT NULL UNIQUE, -- file relative to the library
+    folder     TEXT NOT NULL,        -- its folder relative to the library; '' is the root
     name       TEXT NOT NULL,
     size       INTEGER NOT NULL,     -- with mtime: skip unchanged files on rescan
     mtime      INTEGER NOT NULL,
     page_count INTEGER NOT NULL
 );
 CREATE INDEX books_series ON books(series_id);
+CREATE INDEX books_folder ON books(folder);
 CREATE TABLE pages (
     book_id  INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
     number   INTEGER NOT NULL,       -- 0-based reading order
@@ -38,10 +47,41 @@ CREATE TABLE pages (
 ) WITHOUT ROWID;
 CREATE INDEX pages_hash ON pages(hash);
 CREATE TABLE scan_errors (
-    path   TEXT PRIMARY KEY,
-    error  TEXT NOT NULL
+    path    TEXT PRIMARY KEY,        -- a book file, or a folder that could not be read
+    folder  TEXT NOT NULL,           -- the folder it is in
+    size    INTEGER,                 -- with mtime: don't retry an unchanged broken file
+    mtime   INTEGER,
+    error   TEXT NOT NULL
+);
+CREATE INDEX scan_errors_folder ON scan_errors(folder);
+CREATE TABLE folders (
+    path    TEXT PRIMARY KEY,        -- relative to the library; '' is the root
+    parent  TEXT,                    -- NULL for the root
+    mtime   INTEGER                  -- when last read in full; NULL: read it next time
+);
+CREATE INDEX folders_parent ON folders(parent);
+CREATE TABLE jobs (
+    id        INTEGER PRIMARY KEY,
+    kind      TEXT NOT NULL,         -- see JobKind
+    path      TEXT NOT NULL,         -- what it works on, relative to the library
+    running   INTEGER NOT NULL DEFAULT 0,
+    attempts  INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (kind, path)
 );
 ";
+
+/// Tables of schema version 1, dropped when upgrading: until accounts exist
+/// the catalogue holds nothing that the next scan cannot rebuild.
+const DROP_V1: &str = "
+DROP TABLE IF EXISTS pages;
+DROP TABLE IF EXISTS books;
+DROP TABLE IF EXISTS series;
+DROP TABLE IF EXISTS scan_errors;
+";
+
+/// A file's size and modification time (nanoseconds since the epoch): if
+/// both are unchanged, the file is not read again.
+pub type Stamp = (u64, i64);
 
 pub struct Catalog {
     conn: Connection,
@@ -87,6 +127,7 @@ pub struct NewBook<'a> {
     pub series_path: &'a str,
     pub series_name: &'a str,
     pub path: &'a str,
+    pub folder: &'a str,
     pub name: &'a str,
     pub size: u64,
     pub mtime: i64,
@@ -132,9 +173,10 @@ impl Catalog {
             .conn
             .pragma_query_value(None, "user_version", |r| r.get(0))?;
         match version {
-            0 => {
+            0 | 1 => {
+                let drop = if version == 1 { DROP_V1 } else { "" };
                 self.conn.execute_batch(&format!(
-                    "BEGIN; {SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                    "BEGIN; {drop} {SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
                 ))?;
                 Ok(())
             }
@@ -144,7 +186,7 @@ impl Catalog {
     }
 
     /// Size and modification time recorded for a book, if it is known.
-    pub fn book_stamp(&self, path: &str) -> Result<Option<(u64, i64)>, Error> {
+    pub fn book_stamp(&self, path: &str) -> Result<Option<Stamp>, Error> {
         self.conn
             .query_row(
                 "SELECT size, mtime FROM books WHERE path = ?1",
@@ -169,11 +211,12 @@ impl Catalog {
         )?;
         tx.execute("DELETE FROM books WHERE path = ?1", [book.path])?;
         tx.execute(
-            "INSERT INTO books (series_id, path, name, size, mtime, page_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO books (series_id, path, folder, name, size, mtime, page_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 series_id,
                 book.path,
+                book.folder,
                 book.name,
                 book.size as i64,
                 book.mtime,
@@ -198,44 +241,208 @@ impl Catalog {
             }
         }
         tx.execute("DELETE FROM scan_errors WHERE path = ?1", [book.path])?;
+        // The series may have been left empty by a book that changed series.
+        prune_series(&tx)?;
         tx.commit()
     }
 
-    /// Forgets books whose files are gone, and series left empty. Returns how
-    /// many books were removed.
-    pub fn retain_books(&mut self, keep: &dyn Fn(&str) -> bool) -> Result<usize, Error> {
+    /// Forgets a book (its file is gone or no longer readable), and its series
+    /// if that is left empty. Returns whether the book was known.
+    pub fn remove_book(&mut self, path: &str) -> Result<bool, Error> {
         let tx = self.conn.transaction()?;
-        let gone: Vec<String> = {
-            let mut stmt = tx.prepare("SELECT path FROM books")?;
-            let paths = stmt.query_map([], |r| r.get::<_, String>(0))?;
-            paths
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .filter(|p| !keep(p))
-                .collect()
-        };
-        for path in &gone {
-            tx.execute("DELETE FROM books WHERE path = ?1", [path])?;
-        }
-        tx.execute(
-            "DELETE FROM series WHERE id NOT IN (SELECT series_id FROM books)",
-            [],
-        )?;
+        let removed = tx.execute("DELETE FROM books WHERE path = ?1", [path])? > 0;
+        prune_series(&tx)?;
         tx.commit()?;
-        Ok(gone.len())
+        Ok(removed)
     }
 
-    pub fn clear_errors(&self) -> Result<(), Error> {
-        self.conn.execute_batch("DELETE FROM scan_errors")
+    /// Forgets a folder that is gone: everything known under it, and series
+    /// left empty. Returns how many books were removed.
+    pub fn remove_tree(&mut self, folder: &str) -> Result<usize, Error> {
+        let tx = self.conn.transaction()?;
+        // Inside `folder`: the folder itself, or anything under `folder/`
+        // (paths that sort from "folder/" up to, not including, "folder0").
+        let under = "(?1 = col OR (col >= ?1 || '/' AND col < ?1 || '0'))";
+        let removed = tx.execute(
+            &format!("DELETE FROM books WHERE {}", under.replace("col", "folder")),
+            [folder],
+        )?;
+        tx.execute(
+            &format!(
+                "DELETE FROM scan_errors WHERE {}",
+                under.replace("col", "folder")
+            ),
+            [folder],
+        )?;
+        tx.execute(
+            &format!(
+                "DELETE FROM scan_errors WHERE path = ?1 OR {}",
+                under.replace("col", "path")
+            ),
+            [folder],
+        )?;
+        tx.execute(
+            &format!("DELETE FROM folders WHERE {}", under.replace("col", "path")),
+            [folder],
+        )?;
+        prune_series(&tx)?;
+        tx.commit()?;
+        Ok(removed)
     }
 
-    pub fn record_error(&self, path: &str, error: &str) -> Result<(), Error> {
+    /// Records a book or folder that could not be read, with the size and
+    /// modification time it had, so it is retried only once it changes.
+    pub fn record_error(
+        &self,
+        path: &str,
+        folder: &str,
+        stamp: Option<Stamp>,
+        error: &str,
+    ) -> Result<(), Error> {
         self.conn.execute(
-            "INSERT INTO scan_errors (path, error) VALUES (?1, ?2)
-             ON CONFLICT (path) DO UPDATE SET error = excluded.error",
-            params![path, error],
+            "INSERT INTO scan_errors (path, folder, size, mtime, error) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (path) DO UPDATE SET folder = excluded.folder, size = excluded.size,
+                 mtime = excluded.mtime, error = excluded.error",
+            params![
+                path,
+                folder,
+                stamp.map(|s| s.0 as i64),
+                stamp.map(|s| s.1),
+                error
+            ],
         )?;
         Ok(())
+    }
+
+    pub fn remove_error(&self, path: &str) -> Result<(), Error> {
+        self.conn
+            .execute("DELETE FROM scan_errors WHERE path = ?1", [path])?;
+        Ok(())
+    }
+
+    /// Size and modification time of a file that failed, if it is recorded.
+    pub fn error_stamp(&self, path: &str) -> Result<Option<Stamp>, Error> {
+        self.conn
+            .query_row(
+                "SELECT size, mtime FROM scan_errors WHERE path = ?1 AND size IS NOT NULL",
+                [path],
+                |r| Ok((r.get::<_, i64>(0)? as u64, r.get(1)?)),
+            )
+            .optional()
+    }
+
+    /// Books directly in `folder`, with their size and modification time.
+    pub fn books_in(&self, folder: &str) -> Result<Vec<(String, u64, i64)>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT path, size, mtime FROM books WHERE folder = ?1")?;
+        let rows = stmt.query_map([folder], |r| {
+            Ok((r.get(0)?, r.get::<_, i64>(1)? as u64, r.get(2)?))
+        })?;
+        rows.collect()
+    }
+
+    /// Failed files and folders directly in `folder`, with the size and
+    /// modification time of files.
+    pub fn errors_in(&self, folder: &str) -> Result<Vec<(String, Option<Stamp>)>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT path, size, mtime FROM scan_errors WHERE folder = ?1")?;
+        let rows = stmt.query_map([folder], |r| {
+            let size: Option<i64> = r.get(1)?;
+            let mtime: Option<i64> = r.get(2)?;
+            Ok((r.get(0)?, size.zip(mtime).map(|(s, m)| (s as u64, m))))
+        })?;
+        rows.collect()
+    }
+
+    /// A folder's modification time when it was last read in full: `None`
+    /// if it was never read, `Some(None)` if it must be read again.
+    pub fn folder_mtime(&self, path: &str) -> Result<Option<Option<i64>>, Error> {
+        self.conn
+            .prepare_cached("SELECT mtime FROM folders WHERE path = ?1")?
+            .query_row([path], |r| r.get(0))
+            .optional()
+    }
+
+    /// The known folders directly inside `path`.
+    pub fn subfolders(&self, path: &str) -> Result<Vec<String>, Error> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT path FROM folders WHERE parent = ?1")?;
+        let rows = stmt.query_map([path], |r| r.get(0))?;
+        rows.collect()
+    }
+
+    /// Records that a folder was read in full when it had this modification
+    /// time (`None`: read it again next time).
+    pub fn set_folder(
+        &self,
+        path: &str,
+        parent: Option<&str>,
+        mtime: Option<i64>,
+    ) -> Result<(), Error> {
+        self.conn.execute(
+            "INSERT INTO folders (path, parent, mtime) VALUES (?1, ?2, ?3)
+             ON CONFLICT (path) DO UPDATE SET parent = excluded.parent, mtime = excluded.mtime",
+            params![path, parent, mtime],
+        )?;
+        Ok(())
+    }
+
+    /// Queues a job, unless the same one is already waiting or running.
+    /// Returns whether it was added.
+    pub fn enqueue(&self, kind: JobKind, path: &str) -> Result<bool, Error> {
+        let added = self.conn.execute(
+            "INSERT INTO jobs (kind, path) VALUES (?1, ?2) ON CONFLICT (kind, path) DO NOTHING",
+            params![kind.as_str(), path],
+        )?;
+        Ok(added > 0)
+    }
+
+    /// Takes the oldest waiting job and marks it running, counting the attempt.
+    pub fn claim_job(&self) -> Result<Option<Job>, Error> {
+        self.conn
+            .prepare_cached(
+                "UPDATE jobs SET running = 1, attempts = attempts + 1
+                 WHERE id = (SELECT id FROM jobs WHERE running = 0 ORDER BY id LIMIT 1)
+                 RETURNING id, kind, path, attempts",
+            )?
+            .query_row([], |r| {
+                let kind: String = r.get(1)?;
+                Ok(Job {
+                    id: r.get(0)?,
+                    kind: JobKind::parse(&kind).ok_or_else(|| {
+                        Error::FromSqlConversionFailure(
+                            1,
+                            rusqlite::types::Type::Text,
+                            format!("unknown job kind: {kind}").into(),
+                        )
+                    })?,
+                    path: r.get(2)?,
+                    attempts: r.get(3)?,
+                })
+            })
+            .optional()
+    }
+
+    /// Removes a job that is done (or given up).
+    pub fn finish_job(&self, id: i64) -> Result<(), Error> {
+        self.conn.execute("DELETE FROM jobs WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Puts jobs that were running when the worker last stopped back in the
+    /// queue. Returns how many there were.
+    pub fn requeue_running(&self) -> Result<usize, Error> {
+        self.conn
+            .execute("UPDATE jobs SET running = 0 WHERE running = 1", [])
+    }
+
+    /// Jobs waiting or running.
+    pub fn job_count(&self) -> Result<i64, Error> {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM jobs", [], |r| r.get(0))
     }
 
     /// Files the last scan could not read, with the reason.
@@ -367,6 +574,45 @@ impl Catalog {
             })
             .optional()
     }
+}
+
+/// What a job does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JobKind {
+    /// Index a book file: hash and locate its pages.
+    Index,
+}
+
+impl JobKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            JobKind::Index => "index",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "index" => Some(JobKind::Index),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Job {
+    pub id: i64,
+    pub kind: JobKind,
+    pub path: String,
+    /// How many times it has been claimed, this time included.
+    pub attempts: i64,
+}
+
+fn prune_series(tx: &rusqlite::Transaction<'_>) -> Result<(), Error> {
+    tx.execute(
+        "DELETE FROM series WHERE id NOT IN (SELECT series_id FROM books)",
+        [],
+    )?;
+    Ok(())
 }
 
 fn hash_from_row(r: &rusqlite::Row<'_>, i: usize) -> Result<blake3::Hash, Error> {
