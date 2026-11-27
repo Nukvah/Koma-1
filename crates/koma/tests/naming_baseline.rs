@@ -308,3 +308,30 @@ fn photo_folders_read_their_metadata_too() {
     assert_eq!(got.title, "Starfall Bunny");
     assert_eq!(got.publishers, ["Lumen Studio"]);
 }
+
+#[test]
+fn cb7_books_read_their_metadata_too() {
+    let page = koma_fixtures::png::page(20, 30, 4);
+    let lib = Library::scan(
+        "cb7",
+        &[(
+            "Starfall Academy/Starfall Academy - Ch. 04.cb7",
+            koma_fixtures::sevenz::write(
+                &[
+                    ("01.png", &page),
+                    ("ComicInfo.xml", COMIC_INFO),
+                    ("metadata.json", METADATA_JSON),
+                ],
+                true,
+            ),
+        )],
+    );
+    let got = lib.details("Starfall Academy/Starfall Academy - Ch. 04.cb7");
+    assert_eq!(got.title, "The Longest Night");
+    assert_eq!(
+        got.number,
+        Some(3.0),
+        "ComicInfo.xml's number wins over the name's"
+    );
+    assert_eq!(got.publishers, ["Moonforge Press"]);
+}

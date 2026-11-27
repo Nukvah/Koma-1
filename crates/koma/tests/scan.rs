@@ -116,7 +116,7 @@ fn every_page_is_found_again_byte_for_byte() {
     assert_eq!(
         report,
         ScanReport {
-            indexed: 7,
+            indexed: 8,
             folders_read: 4,
             ..ScanReport::default()
         }
@@ -146,6 +146,7 @@ fn every_page_is_found_again_byte_for_byte() {
             "Mirelle's Garden/Mirelle's Garden 第1巻.cbz",
             "Moonforge Chronicles/Moonforge Chronicles - Ch. 001.cbz",
             "Moonforge Chronicles/Moonforge Chronicles - Ch. 001.5.cbz",
+            "Moonforge Chronicles/Moonforge Chronicles - Ch. 002.cb7",
             "Starfall/Starfall v01.cbz",
             "Starfall/Starfall v02.cbz",
             "Starfall/Starfall v10.cbz",
@@ -184,9 +185,12 @@ fn every_page_is_found_again_byte_for_byte() {
             }
         }
     }
-    // Only the deflated book (8 pages) needed the blob store.
-    assert_eq!((in_place, in_blobs), (25, 8));
-    assert_eq!(spreads, 1, "the fixture library has one double-page spread");
+    // Only the deflated book (8 pages) and the 7z book (3) needed the blob store.
+    assert_eq!((in_place, in_blobs), (25, 11));
+    assert_eq!(
+        spreads, 2,
+        "the fixture library has two double-page spreads"
+    );
 }
 
 #[test]
@@ -197,7 +201,7 @@ fn rescans_skip_unchanged_books_and_follow_changes() {
     assert_eq!(
         s.scan(),
         ScanReport {
-            unchanged: 7,
+            unchanged: 8,
             folders_skipped: 4,
             ..ScanReport::default()
         }
@@ -218,7 +222,7 @@ fn rescans_skip_unchanged_books_and_follow_changes() {
         s.scan(),
         ScanReport {
             indexed: 1,
-            unchanged: 5,
+            unchanged: 6,
             removed: 1,
             folders_read: 1,
             folders_skipped: 3,
@@ -335,7 +339,7 @@ fn quick_rescans_read_only_changed_folders() {
 fn jobs_cut_short_run_again_and_are_given_up_after_three_tries() {
     let mut s = Setup::new();
     let mut report = discover(&s.library, &mut s.catalog, Check::Files).unwrap();
-    assert_eq!(s.catalog.job_count().unwrap(), 7);
+    assert_eq!(s.catalog.job_count().unwrap(), 8);
 
     // The worker dies in the middle of a job: it stays claimed.
     let job = s.catalog.claim_job().unwrap().unwrap();
@@ -346,7 +350,7 @@ fn jobs_cut_short_run_again_and_are_given_up_after_three_tries() {
     ));
     assert_eq!(s.catalog.requeue_running().unwrap(), 1);
     run_jobs(&s.library, &s.data, &mut s.catalog, &mut report, &|| false).unwrap();
-    assert_eq!(report.indexed, 7);
+    assert_eq!(report.indexed, 8);
     assert_eq!(s.catalog.job_count().unwrap(), 0);
     assert!(s.catalog.errors().unwrap().is_empty());
 
@@ -380,7 +384,7 @@ fn a_stop_is_honoured_between_jobs() {
     })
     .unwrap();
     assert_eq!(report.indexed, 2);
-    assert_eq!(s.catalog.job_count().unwrap(), 5);
+    assert_eq!(s.catalog.job_count().unwrap(), 6);
 }
 
 #[test]
@@ -396,7 +400,7 @@ fn broken_files_are_recorded_and_skipped() {
     fs::write(s.library.join("Starfall/No pages.cbz"), w.finish()).unwrap();
 
     let report = s.scan();
-    assert_eq!((report.indexed, report.failed), (7, 2));
+    assert_eq!((report.indexed, report.failed), (8, 2));
     // Unchanged broken files are not read again.
     let report = s.scan();
     assert_eq!((report.indexed, report.failed), (0, 0));
@@ -491,7 +495,7 @@ fn hidden_files_and_symlinks_are_ignored() {
         s.library.join("Link to Lone Comet.cbz"),
     )
     .unwrap();
-    assert_eq!(s.scan().indexed, 7);
+    assert_eq!(s.scan().indexed, 8);
 }
 
 #[test]
@@ -541,7 +545,7 @@ fn photo_folders_are_books_with_the_cover_first() {
     fs::write(s.library.join("Mirelle/Set 2.zip"), w.finish()).unwrap();
 
     let report = s.scan();
-    assert_eq!((report.indexed, report.failed), (9, 0));
+    assert_eq!((report.indexed, report.failed), (10, 0));
     let mirelle = s
         .catalog
         .series()
@@ -603,4 +607,54 @@ fn photo_folders_are_books_with_the_cover_first() {
             .contains(&"Mirelle/Set 1.5/Extras".to_string())
     );
     assert!(!s.book_paths().contains(&"Mirelle/Set 1.5".to_string()));
+}
+
+fn scan_named(name: &str, bytes: Vec<u8>) -> (ScanReport, Vec<(String, String)>) {
+    let dir = std::env::temp_dir().join(format!(
+        "koma-scan-7z-{}-{}",
+        std::process::id(),
+        blake3::hash(&bytes)
+    ));
+    let library = dir.join("library");
+    fs::create_dir_all(&library).unwrap();
+    fs::write(library.join(name), bytes).unwrap();
+    let mut catalog = Catalog::open(&dir.join("koma.db")).unwrap();
+    let report = scan(&library, &dir, &mut catalog).unwrap();
+    let errors = catalog.errors().unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+    (report, errors)
+}
+
+#[test]
+fn broken_7z_books_are_recorded_not_fatal() {
+    let page = koma_fixtures::png::page(20, 30, 3);
+    let good = koma_fixtures::sevenz::write(&[("1.png", &page), ("2.png", &page)], true);
+
+    let (report, _) = scan_named("Good.cb7", good.clone());
+    assert_eq!((report.indexed, report.failed), (1, 0));
+
+    // Garbage with a 7z name, a cut-off archive, and every single-byte
+    // corruption in the packed data and headers: an error each, never a panic.
+    let (report, errors) = scan_named("Garbage.cb7", b"7z\xbc\xaf\x27\x1c not really".to_vec());
+    assert_eq!(report.failed, 1, "{errors:?}");
+    let (report, _) = scan_named("Cut.cb7", good[..good.len() / 2].to_vec());
+    assert_eq!(report.failed, 1);
+    let (mut failed, mut tried) = (0, 0);
+    for at in (32..good.len()).step_by(7) {
+        tried += 1;
+        let mut bad = good.clone();
+        bad[at] ^= 0x55;
+        let (report, _) = scan_named("Bad.cb7", bad);
+        assert_eq!(report.indexed + report.failed, 1);
+        failed += report.failed;
+    }
+    // 7z checks a CRC over its headers and over every member.
+    assert_eq!(failed, tried, "every corruption is caught");
+
+    let (report, errors) = scan_named(
+        "No pages.7z",
+        koma_fixtures::sevenz::write(&[("a.txt", b"x")], true),
+    );
+    assert_eq!(report.failed, 1);
+    assert_eq!(errors[0].1, "no pages");
 }

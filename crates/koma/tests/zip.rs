@@ -21,7 +21,7 @@ fn small_zip() -> Vec<u8> {
 fn reads_the_made_up_library_in_reading_order() {
     let root = std::env::temp_dir().join(format!("koma-zip-test-{}", std::process::id()));
     let books = koma_fixtures::library::write(&root).unwrap();
-    for book in &books {
+    for book in books.iter().filter(|b| b.path.ends_with(".cbz")) {
         let path = root.join(&book.path);
         let entries = zip::read_file_index(&path, &Limits::default())
             .unwrap_or_else(|e| panic!("{}: {e}", book.path));

@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/koma", "crates/koma-fixtures", "xtask"]
+# Fuzz targets build on nightly, with their own lock file: see docs/development.md.
+exclude = ["fuzz"]
 
 [workspace.package]
 edition = "2024"
