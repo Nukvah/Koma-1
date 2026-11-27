@@ -24,7 +24,7 @@ cold_start_ms = 200   # process start to first successful health check (median o
 name = "CSS"
 dir = "crates/koma/assets"
 suffix = ".css"
-max_kib = 10
+max_kib = 12          # 10 until M3: the library UI's design CSS is 9.6 KB before its real pages
 
 [[assets]]
 name = "Reader JS"

@@ -7,12 +7,14 @@
 <link rel="stylesheet" href="koma.css">
 </head>
 <body>
+<input type="checkbox" id="menu" class="menu" aria-label="show the menu">
 <header class="top">
 <a class="brand" href="library.html">KOMA-1</a>
 <form class="search" role="search" action="search.html">
 <label for="q">/</label>
 <input id="q" name="q" type="search" value="" placeholder="search all libraries: title, author:, tag:">
 </form>
+<label for="menu" class="menu-btn" aria-hidden="true">menu</label>
 <a class="user" href="#"><span class="avatar" aria-hidden="true">M</span><span>mirelle ▾</span></a>
 </header>
 
@@ -54,40 +56,28 @@
 </aside>
 
 <main>
-<div class="toolbar"><h1>settings · library <b>~/manga</b></h1></div>
+<div class="toolbar"><h1>settings · <b>libraries</b></h1></div>
 
-<p class="note">Saved. The worker applies it within a few seconds; this page shows the new settings once it has.</p>
+<p class="note">Read-only until accounts arrive (M5): then an admin can change a library's name, type, reading direction and colour here.</p>
 
-<form class="form" action="#" method="post">
-<label for="name">name</label>
-<input id="name" name="name" type="text" value="Manga">
-<span class="help">How the library is shown. Its folder stays <code>/library/manga</code>: every top-level folder there is a library.</span>
-
-<label for="type">type</label>
-<select id="type" name="type"><option selected>manga</option><option>comics</option><option>cosplay</option></select>
-<span class="help">Sets how file names are read (docs/naming.md) and the default reading direction.</span>
-
-<label for="dir">reading direction</label>
-<select id="dir" name="dir"><option selected>right to left</option><option>left to right</option></select>
-<span class="help">A book's own metadata (ComicInfo.xml, metadata.json) wins over this.</span>
-
-<label for="colour">colour</label>
-<select id="colour" name="colour"><option selected>amber</option><option>teal</option><option>rose</option><option>slate</option></select>
-<span class="help"><span class="swatch" style="--c:#F2A33A"></span> marks the library in the side panel and on its covers.</span>
-
-<div class="row"><button class="btn primary" type="submit">save</button><a class="btn" href="library.html">cancel</a></div>
-</form>
-
-<h2 class="section-h">other libraries</h2>
 <table class="tbl">
-<thead><tr><th scope="col">library</th><th scope="col" class="opt">folder</th><th scope="col">type</th><th scope="col" class="opt">direction</th><th scope="col" class="r">series</th></tr></thead>
+<thead><tr><th scope="col">library</th><th scope="col" class="opt">folder</th><th scope="col">type</th><th scope="col" class="opt">direction</th><th scope="col" class="opt">colour</th><th scope="col" class="r">series</th></tr></thead>
 <tbody>
-<tr><td><a href="#">Webtoons</a></td><td class="opt">/library/webtoons</td><td>manga</td><td class="opt">left to right</td><td class="r">38</td></tr>
-<tr><td><a href="#">Comics</a></td><td class="opt">/library/comics</td><td>comics</td><td class="opt">left to right</td><td class="r">61</td></tr>
-<tr><td><a href="#">Cosplay</a></td><td class="opt">/library/cosplay</td><td>cosplay</td><td class="opt">left to right</td><td class="r">12</td></tr>
+<tr><td><a href="library.html">Manga</a></td><td class="opt">/library/manga</td><td>manga</td><td class="opt">right to left</td><td class="opt"><span class="swatch" style="--c:#F2A33A"></span> amber</td><td class="r">214</td></tr>
+<tr><td><a href="#">Webtoons</a></td><td class="opt">/library/webtoons</td><td>manga</td><td class="opt">right to left</td><td class="opt"><span class="swatch" style="--c:#4FB3A9"></span> teal</td><td class="r">38</td></tr>
+<tr><td><a href="#">Comics</a></td><td class="opt">/library/comics</td><td>comics</td><td class="opt">left to right</td><td class="opt"><span class="swatch" style="--c:#D9708A"></span> rose</td><td class="r">61</td></tr>
+<tr><td><a href="#">Cosplay</a></td><td class="opt">/library/cosplay</td><td>cosplay</td><td class="opt">left to right</td><td class="opt"><span class="swatch" style="--c:#8A9BB0"></span> slate</td><td class="r">12</td></tr>
 </tbody>
 </table>
-<p class="status">A new folder in <code>/library</code> becomes a library by itself at the next scan, with default settings for its type.</p>
+
+<h2 class="section-h">where these come from</h2>
+<div class="status">
+<p>Every top-level folder in <code>/library</code> is a library, found at the next scan.</p>
+<p><b>name</b>: the folder's name, capitalised.</p>
+<p><b>type</b>: from the folder's name (manga, comics, webtoon, cosplay…); manga if it says nothing.</p>
+<p><b>direction</b>: right to left for manga, left to right otherwise. A book's own metadata (ComicInfo.xml, metadata.json) wins over it.</p>
+<p><b>colour</b>: the next one in a fixed list, in folder order.</p>
+</div>
 </main>
 </div>
 </body>

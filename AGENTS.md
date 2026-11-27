@@ -13,7 +13,7 @@ A self-hosted manga server with a web library and reader, shipped as Docker on L
 - **Content-addressed, immutable page URLs** (`/p/<hash>.<width>.<format>`, cached for a year).
 - **Zero-copy CBZ serving:** index the zip central directory, `sendfile()` byte ranges.
 - **SQLite** (WAL, FTS5 trigram search) for metadata; local disk or S3-compatible storage for blobs.
-- **Server-rendered HTML.** Library pages work without JavaScript. Reader JS < 10 KB, CSS < 5 KB, no framework.
+- **Server-rendered HTML.** Library pages work without JavaScript. Reader JS and CSS small (see budgets below), no framework.
 - **Reader:** adaptive prefetch, decode-ahead, `srcset`, RTL default, single/double/vertical modes, keyboard and touch.
 - **OPDS** feed, a small JSON API, and a download/sync API for offline clients.
 - **Library curation as journaled worker jobs:** rename to the naming standard, move, upload, trash, opt-in AVIF. Plan, dry run, apply, undo.
@@ -41,7 +41,7 @@ on ARM64 in a container capped at 2 CPUs and 1 GB. At the time of writing:
 | Cached page TTFB | p99 < 10 ms |
 | Cold start | < 200 ms |
 | Library HTML page | < 15 KiB |
-| CSS / reader JS / curator JS | 10 / 16 / 24 KiB |
+| CSS / reader JS / curator JS | 12 / 16 / 24 KiB |
 
 A budget protects speed; it does not block a feature. Raise one only with a `Budget change:` line in the pull
 request saying why. The reader-facing targets (TTFB, cold start, page size) never move.
