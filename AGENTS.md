@@ -15,7 +15,8 @@ A self-hosted manga server with a web library and reader, shipped as Docker on L
 - **SQLite** (WAL, FTS5 trigram search) for metadata; local disk or S3-compatible storage for blobs.
 - **Server-rendered HTML.** Library pages work without JavaScript. Reader JS < 10 KB, CSS < 5 KB, no framework.
 - **Reader:** adaptive prefetch, decode-ahead, `srcset`, RTL default, single/double/vertical modes, keyboard and touch.
-- **OPDS** feed and a small JSON API.
+- **OPDS** feed, a small JSON API, and a download/sync API for offline clients.
+- **Library curation as journaled worker jobs:** rename to the naming standard, move, upload, trash, opt-in AVIF. Plan, dry run, apply, undo.
 - **Hardened archive parsing:** fuzzed, size/ratio/pixel limits, no path traversal, risky decoders sandboxed.
 
 ## Do not build
@@ -24,7 +25,8 @@ A self-hosted manga server with a web library and reader, shipped as Docker on L
 - SPA frameworks (React, Vue, …), CSS frameworks, icon fonts, animations, decorative UI.
 - Redis, message brokers, microservices, Kubernetes manifests.
 - Postgres (unless multi-writer is proven necessary).
-- Recommendations, social features, comments, ratings, trackers of external sites, scrapers or downloaders.
+- Recommendations, social features, comments, ratings, trackers of external sites, scrapers or downloaders of other sites.
+- Writes to `/library` from `koma serve`, or any write that skips the journal.
 - Anything that breaks the budgets below.
 
 ## Budgets (CI-enforced)
@@ -40,5 +42,6 @@ A self-hosted manga server with a web library and reader, shipped as Docker on L
 ## Before you start
 
 1. Read MANIFESTO.md's section for the area you touch.
-2. If a change adds a dependency, a service or a UI element, justify it against the goals above — the default answer is no.
-3. Follow CLAUDE.md: no personal data, no real titles or people (use made-up names like "Starfall"), check your diff before pushing.
+2. Check [docs/ROADMAP.md](docs/ROADMAP.md) for the milestone your work belongs to.
+3. If a change adds a dependency, a service or a UI element, justify it against the goals above — the default answer is no.
+4. Follow CLAUDE.md: no personal data, no real titles or people (use made-up names like "Starfall"), check your diff before pushing.

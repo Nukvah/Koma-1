@@ -16,6 +16,7 @@ Koma-1 is one statically compiled binary that does almost nothing at request tim
 6. **Archives are hostile input.** Every parser is fuzzed, bounded and sandboxed.
 7. **The UI is a document, not an app.** If an element can be removed without loss, it is removed.
 8. **Boring technology.** SQLite before Postgres, the page cache before Redis, Compose before Kubernetes.
+9. **Your files, carefully.** Koma-1 may rename, add, move and convert files in the library, but only through worker jobs that are planned, previewed, journaled and reversible. Nothing is deleted outright: it goes to a trash with a retention period.
 
 ---
 
@@ -29,7 +30,7 @@ Koma-1 is one statically compiled binary that does almost nothing at request tim
 | Page turn felt by the reader | 0 ms (next page is already decoded) |
 | Library HTML page | < 15 KB, with or without JS |
 | Cold start | < 200 ms |
-| Smallest hardware | Raspberry Pi 4 serving 50 concurrent readers |
+| Smallest hardware | 50 concurrent readers within 2 CPUs and 1 GB of memory on ARM64 |
 | Scale-out | add nodes, change nothing else |
 
 Every pull request runs a k6 load test and an image-size check against this table.
@@ -54,7 +55,8 @@ Every pull request runs a k6 load test and an image-size check against this tabl
                           koma worker (1+ replicas)
                           scan → hash → index → transcode → write blobs
                                         ▲
-                               /library (read-only: CBZ/CBR/PDF/EPUB/folders)
+                               /library (CBZ/CB7/CBR/PDF/EPUB/folders;
+                                         read-only for serve, journaled writes by worker)
 ```
 
 ### Runtime
@@ -86,7 +88,11 @@ No cache invalidation, ever. Duplicate pages and archives are stored once.
 - Webtoon strips are sliced into ~2000 px tiles.
 - Width and height are stored for every page so the layout never shifts.
 
-**Metadata** lives in SQLite (WAL, mmap, prepared statements). Search uses FTS5 with the trigram tokenizer, so Japanese and Korean titles work without a word segmenter. Litestream streams continuous backups to S3.
+**Library writes.** Only `koma worker` writes to `/library`; `koma serve` mounts it read-only. Every rename, move, upload, conversion or delete is a job: the worker plans it, the UI shows a dry run, the worker applies it and records old and new paths and hashes in an append-only journal, and any batch can be undone from that journal. Uploads land in a separate inbox and pass the same hostile-input checks as ingest before they move in. Books and series keep stable ids through moves and renames, so progress and edits follow them.
+
+**Metadata** is read at ingest from `metadata.json`, then `ComicInfo.xml` (where both exist, `metadata.json` wins and tags are combined), then the file name. Edits made in Koma-1 are saved in SQLite at once and written into files only on request.
+
+**The database** lives in SQLite (WAL, mmap, prepared statements). Search uses FTS5 with the trigram tokenizer, so Japanese and Korean titles work without a word segmenter. Litestream streams continuous backups to S3.
 
 **Integrity.** The `scrub` mode re-hashes blobs on a schedule. A corrupt variant is regenerated from its original; a corrupt original raises an alert.
 
@@ -128,7 +134,7 @@ Ingest may be slow. Serving never is.
 - System font stack, one accent color, light/dark via `prefers-color-scheme`.
 - No icon fonts, no animations; `prefers-reduced-motion` respected regardless.
 - Under 5 KB of CSS.
-- Library: a fixed-ratio cover grid with native lazy loading, plus a list view that is a real `<table>`.
+- Library: an infinitely scrolling, fixed-ratio cover grid. Only rows near the viewport hold images; rows far away keep their height and drop their covers, so memory stays flat. Without JavaScript the same chunks are plain pages (`?page=2`). Plus a list view that is a real `<table>`.
 - Reader: the page, a black background, nothing else. Controls appear on tap or mouse move and fade after 2 seconds.
 - Semantic elements, visible focus, fully keyboard-operable.
 
@@ -140,6 +146,7 @@ Ingest may be slow. Serving never is.
 
 - OPDS 1.2 / 2.0 with page streaming: Mihon/Tachiyomi, Panels, KOReader and Chunky work out of the box.
 - A small JSON API — the same one the web UI uses.
+- A download and sync API for offline clients (including a future Android app): whole volumes, resumable with byte ranges, checksummed, with a change feed and two-way progress sync.
 - Auth: signed session cookies and passkeys (WebAuthn). For organizational SSO, OIDC/SAML via oauth2-proxy with a trusted forwarded-user header.
 
 ---
@@ -171,7 +178,7 @@ services:
     user: "65532:65532"
     cap_drop: [ALL]
     volumes:
-      - /srv/manga:/library:ro
+      - /srv/manga:/library:ro      # serve never writes
       - data:/data
     deploy: { resources: { limits: { memory: 128m } } }
 
@@ -180,7 +187,7 @@ services:
     command: ["worker", "--concurrency=auto"]
     read_only: true
     cap_drop: [ALL]
-    volumes: [/srv/manga:/library:ro, data:/data]
+    volumes: [/srv/manga:/library, data:/data]   # worker applies journaled writes
     deploy: { resources: { limits: { cpus: "2", memory: 512m } } }
 
   litestream:
@@ -203,3 +210,4 @@ More `serve` replicas → blobs on Garage or SeaweedFS → per-node read replica
 - No microservices.
 - No on-the-fly image resizing.
 - No recommendation engine, social features or animated transitions.
+- No scrapers or downloaders that fetch from other sites. Downloading your own books from Koma-1 is a feature.
