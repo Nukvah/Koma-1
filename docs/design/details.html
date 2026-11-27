@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Details · Koma-1</title>
+<link rel="stylesheet" href="koma.css">
+</head>
+<body>
+<input type="checkbox" id="menu" class="menu" aria-label="show the menu">
+<header class="top">
+<a class="brand" href="library.html">KOMA-1</a>
+<form class="search" role="search" action="search.html">
+<label for="q">/</label>
+<input id="q" name="q" type="search" value="" placeholder="search all libraries: title, author:, tag:">
+</form>
+<label for="menu" class="menu-btn" aria-hidden="true">menu</label>
+<details class="umenu">
+<summary><span class="avatar" aria-hidden="true">T</span><span>tamsin ▾</span></summary>
+<ul>
+<li><span><small>signed in as</small> tamsin <span class="role">curator</span></span></li>
+<li><hr></li>
+<li><a href="account.html">account</a></li>
+<li><a href="settings.html">libraries</a></li>
+<li><hr></li>
+<li><form method="post" action="signin.html"><button type="submit">sign out</button></form></li>
+</ul>
+</details>
+</header>
+
+<div class="layout">
+<aside class="side" aria-label="Navigation and libraries">
+<nav aria-label="Main">
+<h2>// go</h2>
+<ul>
+<li><a href="library.html" aria-current="page">&gt; library<span class="n">g l</span></a></li>
+<li><a href="#">&nbsp; recent<span class="n">g r</span></a></li>
+<li><a href="collections.html">&nbsp; collections<span class="n">g c</span></a></li>
+<li><a href="jobs.html">&nbsp; jobs<span class="n">g j</span></a></li>
+<li><a href="trash.html">&nbsp; trash<span class="n">g t</span></a></li>
+<li><a href="settings.html">&nbsp; settings<span class="n">g s</span></a></li>
+</ul>
+</nav>
+<hr>
+<section class="tree">
+<h2>// libraries</h2>
+<ul>
+<li><a class="on" href="library.html" aria-current="true">▾ ~/manga<span class="n">214</span></a></li>
+<li><a class="sub" href="#">  ├─ Starfall Saga</a></li>
+<li><a class="sub" href="#">  └─ Unsorted</a></li>
+<li><a href="#">▸ ~/webtoons<span class="n">38</span></a></li>
+<li><a href="#">▸ ~/comics<span class="n">61</span></a></li>
+</ul>
+</section>
+<hr>
+<p class="status"><span class="ok">●</span> 1 job running · <a href="jobs.html">42%</a><br>trash: 3 items · 1.9 GB</p>
+</aside>
+
+<main>
+<nav class="status" aria-label="Breadcrumb">~/<a href="library.html">manga</a>/<a href="series.html">starfall</a>/vol 07</nav>
+<div class="toolbar"><h1>details · <b>Starfall v07</b></h1><span class="hint">3 books selected: a field left as “mixed” keeps each book's own</span></div>
+
+<form method="post">
+<div class="pair">
+<section class="box form">
+<h2>book</h2>
+<label>title<input name="title" value="The Quiet Satellite"></label>
+<div class="row">
+<label>number<input name="number" value="7" size="5"></label>
+<label>kind<select name="kind"><option selected>volume</option><option>chapter</option></select></label>
+<label>year<input name="year" value="2019" size="6" inputmode="numeric"></label>
+<label>direction<select name="dir"><option>from the library</option><option selected>right to left</option><option>left to right</option></select></label>
+</div>
+<label>summary<textarea name="summary">The crew follows the map past the last beacon.</textarea></label>
+</section>
+
+<section class="box form">
+<h2>people and tags</h2>
+<label>authors<span class="chips"><span>r-tsukimo<button type="button" class="x" aria-label="remove r-tsukimo">×</button></span><input name="author" placeholder="add…" aria-label="add an author"></span></label>
+<label>publisher<span class="chips"><span>Moonforge Press<button type="button" class="x" aria-label="remove">×</button></span><input name="publisher" placeholder="add…" aria-label="add a publisher"></span></label>
+<label>genres<span class="chips"><span>sci-fi<button type="button" class="x" aria-label="remove">×</button></span><span>drama<button type="button" class="x" aria-label="remove">×</button></span><input name="genre" placeholder="add…" aria-label="add a genre"></span></label>
+<label>tags<span class="chips"><span>space<button type="button" class="x" aria-label="remove">×</button></span><span class="pending">mixed</span><input name="tag" placeholder="add…" aria-label="add a tag"></span></label>
+<small>Without JavaScript each field is one line, separated by commas.</small>
+</section>
+</div>
+
+<section class="box">
+<h2>cover</h2>
+<div class="covers">
+<label><input type="radio" name="cover" value="1" checked><div class="cover" style="--c:#1E3A6E">p 1</div></label>
+<label><input type="radio" name="cover" value="2"><div class="cover" style="--c:#2F5E4C">p 2</div></label>
+<label><input type="radio" name="cover" value="3"><div class="cover" style="--c:#6B3426">p 3</div></label>
+<label><input type="radio" name="cover" value="4"><div class="cover" style="--c:#4E3A6B">p 4</div></label>
+<label><input type="radio" name="cover" value="5"><div class="cover" style="--c:#6E5A22">p 5</div></label>
+<label><input type="radio" name="cover" value="6"><div class="cover" style="--c:#1F5468">p 6</div></label>
+<label><input type="radio" name="cover" value="7"><div class="cover" style="--c:#704622">p 7</div></label>
+<label><input type="radio" name="cover" value="8"><div class="cover" style="--c:#3F4C5C">p 8</div></label>
+</div>
+</section>
+
+<div class="actbar">
+<button class="btn primary" type="submit">save <kbd>ctrl ↵</kbd></button>
+<label class="row hint"><input type="checkbox" name="write"> also write <code>Starfall v07.metadata.json</code> next to the book</label>
+<a class="btn" href="series.html">cancel</a>
+</div>
+</form>
+
+<div class="status">
+<p>Saved in the catalogue at once: every page shows it, and the next scan keeps it over what the files say. Nothing in <code>/library</code> changes unless you ask to write <code>metadata.json</code>: it goes next to the book (in a photo folder, inside it), and the book's own bytes are never rewritten. That write is a job, with undo.</p>
+</div>
+</main>
+</div>
+</body>
+</html>

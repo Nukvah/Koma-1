@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trash · Koma-1</title>
+<link rel="stylesheet" href="koma.css">
+</head>
+<body>
+<input type="checkbox" id="menu" class="menu" aria-label="show the menu">
+<header class="top">
+<a class="brand" href="library.html">KOMA-1</a>
+<form class="search" role="search" action="search.html">
+<label for="q">/</label>
+<input id="q" name="q" type="search" value="" placeholder="search all libraries: title, author:, tag:">
+</form>
+<label for="menu" class="menu-btn" aria-hidden="true">menu</label>
+<details class="umenu">
+<summary><span class="avatar" aria-hidden="true">T</span><span>tamsin ▾</span></summary>
+<ul>
+<li><span><small>signed in as</small> tamsin <span class="role">curator</span></span></li>
+<li><hr></li>
+<li><a href="account.html">account</a></li>
+<li><a href="settings.html">libraries</a></li>
+<li><hr></li>
+<li><form method="post" action="signin.html"><button type="submit">sign out</button></form></li>
+</ul>
+</details>
+</header>
+
+<div class="layout">
+<aside class="side" aria-label="Navigation and libraries">
+<nav aria-label="Main">
+<h2>// go</h2>
+<ul>
+<li><a href="library.html">&nbsp; library<span class="n">g l</span></a></li>
+<li><a href="#">&nbsp; recent<span class="n">g r</span></a></li>
+<li><a href="collections.html">&nbsp; collections<span class="n">g c</span></a></li>
+<li><a href="jobs.html">&nbsp; jobs<span class="n">g j</span></a></li>
+<li><a href="trash.html" aria-current="page">&gt; trash<span class="n">g t</span></a></li>
+<li><a href="settings.html">&nbsp; settings<span class="n">g s</span></a></li>
+</ul>
+</nav>
+<hr>
+<section class="tree">
+<h2>// libraries</h2>
+<ul>
+<li><a class="on" href="library.html" aria-current="true">▾ ~/manga<span class="n">214</span></a></li>
+<li><a class="sub" href="#">  ├─ Starfall Saga</a></li>
+<li><a class="sub" href="#">  └─ Unsorted</a></li>
+<li><a href="#">▸ ~/webtoons<span class="n">38</span></a></li>
+<li><a href="#">▸ ~/comics<span class="n">61</span></a></li>
+</ul>
+</section>
+<hr>
+<p class="status"><span class="ok">●</span> 1 job running · <a href="jobs.html">42%</a><br>trash: 3 items · 1.9 GB</p>
+</aside>
+
+<main>
+<div class="toolbar"><h1>trash · <b>3 items · 1.9 GB</b></h1>
+<form class="row" method="post"><label class="hint">keep for <select name="keep"><option>7 days</option><option>14 days</option><option selected>30 days</option><option>90 days</option><option>until emptied</option></select></label><button class="btn" type="submit">save</button></form>
+</div>
+
+<form method="post">
+<table class="tbl">
+<thead><tr><th scope="col"><span class="hint">pick</span></th><th scope="col">what</th><th scope="col" class="opt">where it was</th><th scope="col" class="r">size</th><th scope="col" class="opt">deleted</th><th scope="col">days left</th></tr></thead>
+<tbody>
+<tr><td><input type="checkbox" name="t" value="1" aria-label="Starfall v14"></td><td>Starfall v14</td><td class="opt">manga/Starfall Saga/Starfall</td><td class="r">188 MB</td><td class="opt">tamsin · today</td><td class="left">30</td></tr>
+<tr><td><input type="checkbox" name="t" value="2" aria-label="Starfall v13"></td><td>Starfall v13</td><td class="opt">manga/Starfall Saga/Starfall</td><td class="r">192 MB</td><td class="opt">tamsin · today</td><td class="left">30</td></tr>
+<tr><td><input type="checkbox" name="t" value="3" aria-label="Quiet Orbit"></td><td>Quiet Orbit <span class="hint">series · 9 books</span></td><td class="opt">comics/Quiet Orbit <span class="pending">(folder gone)</span></td><td class="r">1.5 GB</td><td class="opt">mirelle · 27 days ago</td><td class="left soon">3</td></tr>
+</tbody>
+</table>
+
+<div class="actbar">
+<button class="btn primary" type="submit">restore</button>
+<button class="btn danger" type="submit">delete for good</button>
+<button class="btn danger" type="submit" formaction="#">empty the trash</button>
+</div>
+</form>
+
+<h2 class="section-h">how it works</h2>
+<div class="status">
+<p>A delete moves the files into <code>/library/.koma-trash</code>, on the same drive, so it is instant and nothing is copied. The books leave the library at once; their ids, reading positions and edits are kept with them.</p>
+<p>Restore puts them back where they were, making any folder that has gone since, and adds “(2)” to a name that is taken now. They come back with their progress.</p>
+<p>After the keep time they are erased by the worker. “Delete for good” and “empty the trash” ask once more, and cannot be undone.</p>
+<p>Curators and the admin see every shared library's trash; your own folder's trash is yours alone.</p>
+</div>
+</main>
+</div>
+</body>
+</html>
