@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · Koma-1</title>
+<link rel="stylesheet" href="koma.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="signin.html">KOMA-1</a></header>
+<main class="gate">
+<form class="box form" method="post" action="library.html">
+<strong>Sign in</strong>
+<label>name<input name="name" autocomplete="username webauthn" required autofocus></label>
+<label>password<input name="password" type="password" autocomplete="current-password" required></label>
+<div class="row"><button class="btn primary" type="submit">sign in <kbd>↵</kbd></button>
+<label class="check"><input type="checkbox" name="keep" checked> keep me signed in on this device</label></div>
+<p class="or">or</p>
+<button class="btn" type="button">sign in with a passkey</button>
+<small>Passkeys need the site on HTTPS (or localhost). Over plain HTTP only the password works, and this button is hidden.</small>
+<small>Forgot your password? Ask the admin for a new sign-in link.</small>
+</form>
+</main>
+</body>
+</html>

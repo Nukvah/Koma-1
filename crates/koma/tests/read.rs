@@ -40,7 +40,7 @@ fn get(addr: SocketAddr, path: &str) -> Response {
         .unwrap();
     write!(
         stream,
-        "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: localhost\r\nRemote-User: mirelle\r\nConnection: close\r\n\r\n"
     )
     .unwrap();
     let mut raw = Vec::new();
@@ -89,9 +89,16 @@ async fn made_up_library_reads_front_to_back() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (stop, stopped) = oneshot::channel::<()>();
-    let server = tokio::spawn(serve(listener, AppState::new(&paths), async {
-        let _ = stopped.await;
-    }));
+    let server = tokio::spawn(serve(
+        listener,
+        AppState::with_auth(
+            &paths,
+            koma::auth::Config::parse(Some("Remote-User"), Some("127.0.0.1")).unwrap(),
+        ),
+        async {
+            let _ = stopped.await;
+        },
+    ));
 
     let read = tokio::task::spawn_blocking(move || {
         let mut read: Vec<(String, Vec<Vec<u8>>)> = Vec::new();
@@ -203,9 +210,16 @@ async fn page_urls_answer_not_modified_to_their_etag() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (stop, stopped) = oneshot::channel::<()>();
-    let server = tokio::spawn(serve(listener, AppState::new(&paths), async {
-        let _ = stopped.await;
-    }));
+    let server = tokio::spawn(serve(
+        listener,
+        AppState::with_auth(
+            &paths,
+            koma::auth::Config::parse(Some("Remote-User"), Some("127.0.0.1")).unwrap(),
+        ),
+        async {
+            let _ = stopped.await;
+        },
+    ));
     let hex = blake3::hash(&books[0].pages[0].1).to_hex().to_string();
     let status = tokio::task::spawn_blocking(move || {
         let mut stream = TcpStream::connect(addr).unwrap();

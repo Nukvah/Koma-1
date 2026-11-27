@@ -99,7 +99,7 @@ fn series_land_in_their_library() {
         ["Harbor Lights"]
     );
 
-    let libraries = Library::all(keys);
+    let libraries = Library::all(keys, &[]);
     let comics = &libraries[2];
     assert_eq!(
         (comics.name.as_str(), comics.kind, comics.direction),
@@ -132,6 +132,7 @@ fn schema_7_is_upgraded_in_place() {
          DROP INDEX series_names;
          ALTER TABLE series DROP COLUMN collection;
          DROP TABLE search;
+         DROP TABLE library_settings;
          DROP INDEX series_library;
          ALTER TABLE series DROP COLUMN library;
          INSERT INTO variant_pages (hash, version, error) VALUES (x'00', 1, NULL);
@@ -149,7 +150,7 @@ fn schema_7_is_upgraded_in_place() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -160,7 +161,7 @@ fn get(addr: SocketAddr, path: &str) -> (u16, String) {
         .unwrap();
     write!(
         stream,
-        "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: localhost\r\nRemote-User: mirelle\r\nConnection: close\r\n\r\n"
     )
     .unwrap();
     let mut raw = Vec::new();
@@ -185,7 +186,10 @@ async fn each_library_has_its_page() {
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(koma::serve::serve(
         listener,
-        koma::serve::AppState::new(&paths),
+        koma::serve::AppState::with_auth(
+            &paths,
+            koma::auth::Config::parse(Some("Remote-User"), Some("127.0.0.1")).unwrap(),
+        ),
         async {
             let _ = stopped.await;
         },
@@ -260,18 +264,26 @@ async fn each_library_has_its_page() {
         );
         assert!(series.contains("read from the start"));
 
+        // The admin (the first account) sees every setting as a form.
         let (status, settings) = get(addr, "/settings");
         assert_eq!(status, 200);
-        assert!(
-            settings.contains("<td class=opt>/library/manga<td>manga<td class=opt>right to left")
-        );
-        assert!(
-            settings.contains("<span class=swatch style=\"--c:#4FB3A9\"></span> teal<td class=r>3")
-        );
-        assert!(
-            settings
-                .contains("<td class=opt>/library/My Comics<td>comics<td class=opt>left to right")
-        );
+        let row = |folder: &str| {
+            let at = settings
+                .find(&format!("<td class=opt>/library/{folder}<td>"))
+                .unwrap();
+            let end = settings[at..]
+                .find("<tr>")
+                .map_or(settings.len(), |e| at + e);
+            settings[at..end].to_owned()
+        };
+        let manga = row("manga");
+        assert!(manga.contains("<option selected>manga</option>"), "{manga}");
+        assert!(manga.contains("<option value=rtl selected>right to left</option>"));
+        assert!(manga.contains("--c:#4FB3A9") && manga.contains("<option selected>teal</option>"));
+        assert!(manga.contains("<td class=r>3"));
+        let comics = row("My Comics");
+        assert!(comics.contains("<option selected>comics</option>"));
+        assert!(comics.contains("<option value=ltr selected>left to right</option>"));
 
         // The stylesheet, at the URL every page names, cached for good.
         let css_url = koma::html::css_url();
@@ -310,7 +322,10 @@ async fn a_long_library_comes_a_page_at_a_time() {
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(koma::serve::serve(
         listener,
-        koma::serve::AppState::new(&paths),
+        koma::serve::AppState::with_auth(
+            &paths,
+            koma::auth::Config::parse(Some("Remote-User"), Some("127.0.0.1")).unwrap(),
+        ),
         async {
             let _ = stopped.await;
         },
@@ -400,7 +415,10 @@ async fn the_table_view_sorts_by_any_column() {
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(koma::serve::serve(
         listener,
-        koma::serve::AppState::new(&paths),
+        koma::serve::AppState::with_auth(
+            &paths,
+            koma::auth::Config::parse(Some("Remote-User"), Some("127.0.0.1")).unwrap(),
+        ),
         async {
             let _ = stopped.await;
         },

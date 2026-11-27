@@ -20,6 +20,9 @@ Commands:
   worker       Scan the library and index what changed, then rescan regularly
   scan         Scan the library once and exit
   scrub        Check stored data for corruption (nothing to check yet)
+  account link <name>
+               Print a sign-in link for an account, made if there is none
+               (the first account is the admin)
   healthcheck  Exit 0 if the local server answers GET /healthz
 
 Options:
@@ -31,6 +34,12 @@ Options:
                     Default: $KOMA_DATA, else /data
   --rescan <min>    Minutes between the worker's rescans; 0: only at start.
                     Default: $KOMA_RESCAN, else 15
+  --trust-header <name>
+                    Sign in by this header from a sign-in proxy (serve),
+                    e.g. Remote-User. Default: $KOMA_TRUST_HEADER, else off
+  --trust-proxy <addresses>
+                    The proxy's addresses or networks, comma-separated
+                    (serve). Default: $KOMA_TRUST_PROXY
   -h, --help        Show this help
   -V, --version     Show the version
 ";
@@ -40,6 +49,12 @@ pub enum Command {
     Serve {
         listen: SocketAddr,
         paths: Paths,
+        auth: crate::auth::Config,
+    },
+    /// `koma account link <name>`.
+    AccountLink {
+        data: PathBuf,
+        name: String,
     },
     Worker {
         paths: Paths,
@@ -69,6 +84,8 @@ pub struct Env {
     pub library: Option<OsString>,
     pub data: Option<OsString>,
     pub rescan: Option<OsString>,
+    pub trust_header: Option<OsString>,
+    pub trust_proxy: Option<OsString>,
 }
 
 impl Env {
@@ -78,6 +95,8 @@ impl Env {
             library: std::env::var_os("KOMA_LIBRARY"),
             data: std::env::var_os("KOMA_DATA"),
             rescan: std::env::var_os("KOMA_RESCAN"),
+            trust_header: std::env::var_os("KOMA_TRUST_HEADER"),
+            trust_proxy: std::env::var_os("KOMA_TRUST_PROXY"),
         }
     }
 }
@@ -105,12 +124,50 @@ where
         "-h" | "--help" | "help" => Ok(Command::Help),
         "-V" | "--version" => Ok(Command::Version),
         "serve" => {
-            let opts = options(rest, &["--listen", "--library", "--data"])?;
+            let opts = options(
+                rest,
+                &[
+                    "--listen",
+                    "--library",
+                    "--data",
+                    "--trust-header",
+                    "--trust-proxy",
+                ],
+            )?;
+            let text =
+                |flag: &str, var: Option<OsString>, name: &str| -> Result<Option<String>, String> {
+                    match (opts.get(flag), var) {
+                        (Some(v), _) => Ok(Some(v.clone())),
+                        (None, Some(v)) => v
+                            .into_string()
+                            .map(Some)
+                            .map_err(|_| format!("{name} is not UTF-8")),
+                        (None, None) => Ok(None),
+                    }
+                };
+            let header = text(
+                "--trust-header",
+                env.trust_header.clone(),
+                "KOMA_TRUST_HEADER",
+            )?;
+            let proxies = text("--trust-proxy", env.trust_proxy.clone(), "KOMA_TRUST_PROXY")?;
             Ok(Command::Serve {
                 listen: listen(opts.get("--listen"), env.listen.clone())?,
+                auth: crate::auth::Config::parse(header.as_deref(), proxies.as_deref())?,
                 paths: paths_from(&opts, env)?,
             })
         }
+        "account" => match rest.split_first() {
+            Some((sub, rest)) if sub == "link" => {
+                let (name, rest) = rest.split_first().ok_or("account link needs a name")?;
+                let opts = options(rest, &["--data"])?;
+                Ok(Command::AccountLink {
+                    data: pick(opts.get("--data"), env.data, "KOMA_DATA", DEFAULT_DATA)?.into(),
+                    name: name.clone(),
+                })
+            }
+            _ => Err("unknown account command (try: koma account link <name>)".into()),
+        },
         "healthcheck" => {
             let opts = options(rest, &["--listen"])?;
             Ok(Command::Healthcheck {
@@ -224,7 +281,37 @@ mod tests {
                 library: DEFAULT_LIBRARY.into(),
                 data: DEFAULT_DATA.into(),
             },
+            auth: crate::auth::Config::default(),
         }
+    }
+
+    #[test]
+    fn accounts_and_proxy() {
+        assert_eq!(
+            p(&["account", "link", "mirelle", "--data", "/d"], None),
+            Ok(Command::AccountLink {
+                data: "/d".into(),
+                name: "mirelle".into()
+            })
+        );
+        assert!(p(&["account", "link"], None).is_err());
+        assert!(p(&["account", "list"], None).is_err());
+        match p(
+            &[
+                "serve",
+                "--trust-header",
+                "Remote-User",
+                "--trust-proxy",
+                "10.0.0.2",
+            ],
+            None,
+        ) {
+            Ok(Command::Serve { auth, .. }) => {
+                assert_eq!(auth.header.as_deref(), Some("Remote-User"))
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(p(&["serve", "--trust-header", "Remote-User"], None).is_err());
     }
 
     #[test]

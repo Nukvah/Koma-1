@@ -85,9 +85,10 @@ folder, with the extension only breaking ties.
 
 Every parser of hostile input has a fuzz target in `fuzz/` (cargo-fuzz,
 nightly): `zip_index`, `sevenz`, `page_size`, `metadata`, `names`,
-`variants` (decoding, resizing and encoding a page) and `epub` (the
+`variants` (decoding, resizing and encoding a page), `epub` (the
 package, the contents, and the chapter cleaner, whose output must keep to
-its allowlist of tags and attributes). CI runs
+its allowlist of tags and attributes) and `webauthn` (what a browser sends
+to add or use a passkey: client data, CBOR, COSE keys, DER signatures). CI runs
 each for 60 seconds on every pull request, seeded with the made-up library,
 and keeps any crashing input as a build artifact. To run one locally:
 
@@ -218,7 +219,9 @@ only reads it.
   with the reason (and the file's size and time), and skipped; it never stops
   the scan, and is retried only once it changes.
 - Schema 10 adds `series.collection` (generated) and the shelf indexes;
-  9 and older from 7 on are upgraded in place.
+  schema 12 makes a library in an account's folder its first two folders
+  (`~mirelle/sketchbooks`) and adds `library_settings`; older ones from 7
+  on are upgraded in place.
 - The catalogue's schema version is in `PRAGMA user_version`. From 7 on, an
   older version is upgraded in place, one step at a time, since remaking page
   variants is costly; before 7 it is dropped and rebuilt by the next scan.
@@ -241,8 +244,21 @@ the series (`manga/Starfall Saga/Starfall`), found from the path
 Settings come from the folder name (`Library::from_folder`): name
 capitalised; type comics if it contains "comic", cosplay if "cosplay", else
 manga; direction right to left for manga, else left to right; colour from a
-fixed list in library order (the default first, then natural order). They are
-read-only until accounts (M5).
+fixed list in library order (the default first, then natural order). A change
+made on `/settings` is queued by `koma serve` in accounts.db
+(`setting_changes`); the worker copies it into the catalogue's
+`library_settings` (with the id of the last change it applied) when a pass
+starts, between jobs and every 5 seconds while idle, so the worker stays the
+catalogue's only writer. `Library::all` lays them over the folder's.
+
+**Private libraries.** A top-level folder `~name` belongs to the account
+`name`: there a library is the first two folders (`~mirelle/sketchbooks`),
+and a series straight in `~mirelle` is in the library `~mirelle`, so nothing
+in it ever lands in a shared library (`libraries::library_of`, and the same
+rule in SQL for the generated column). `Library::visible_to` decides who sees
+it; `koma serve` filters libraries, series, books, search hits and people
+counts by it, and answers 404 for anything hidden, as for something that
+does not exist.
 
 Books loose directly in a library folder (`manga/Ch. 12.cbz`) are a series
 named after that folder, in the default library: put them in a series folder.
@@ -282,11 +298,11 @@ arrows and `h`/`l` in the book's direction, space / `j` / `k` /
 PageDown / PageUp, tap thirds, swipes; `m` or Enter shows the bars, Escape
 hides them. Back past the first page it goes to the series. The direction is the
 book's own (from its metadata), else its library's, and can be switched in
-the bars for the series. That choice and the position are kept in the
-browser (`localStorage`) until accounts (M5). The tap zones are shown once,
-faintly, on the first open.
+the bars for the series. That choice and the position are kept with the
+account (see Accounts, `kept`). The tap zones are shown once, faintly, on the
+first open.
 
-Three ways to read, chosen per series in the bars and kept in the browser:
+Three ways to read, chosen per series in the bars and kept with the account:
 **single**; **double**, two pages side by side, both on screen (each at
 most half the window wide), the first on the right in right-to-left books:
 the cover alone, then pairs, a wide page (wider than 1.2 times its height,
@@ -310,7 +326,7 @@ network throttled to 1.6 Mbit/s and 150 ms round trips, reading a page every
 4 s and then every 0.6 s: at every turn the page on screen was already
 loaded and decoded (at most 3 ms waiting on `decode()`), and no page was
 fetched at the turn. That is M4's exit check for pictures; EPUB's (its
-position on another device) comes with accounts.
+position on another device) is in `tests/accounts.rs`.
 
 **Fit**, per series in the bars: the whole **page** in the window (the
 default), its **width** or its **height**. A page larger than the window
@@ -332,7 +348,7 @@ lazily as the row scrolls, the current one marked; a click turns there.
 Both need the script and stay hidden without it.
 
 **At the end** of a book, a card: the next book in the series with its
-cover, its pages, and whether it was started (read from the browser), with
+cover, its pages, and whether the account started it, with
 a button to read it from where it was left (space, or forward again) and
 one back to the series; for the last book, only the way back. Back,
 Escape or a tap outside closes it. The card's HTML comes with
@@ -385,12 +401,12 @@ script and pictures: the cleaner is the first wall, this the second.
 `assets/epub/epub.js` (budget "EPUB reader JS", loaded only here, in
 `<head>` so the text is drawn in its size from the start) adds the text's
 size (14 to 28 px), width (narrow, medium, wide) and spacing (tight,
-normal, loose), kept in the browser for every book; the bars on a tap or
+normal, loose), kept with the account for every book; the bars on a tap or
 `m`; the contents on `c`; the next and previous chapters on the arrow keys,
 and the next on space at the end of one. The position is the chapter and
-the first block of text on screen (`koma:epos:<book>`), kept in the
-browser until accounts (M5); a book opened from outside it (the series, a
-search) goes back there. Vertical writing (Japanese books) comes later;
+the first block of text on screen (`epos:<book>`), kept with the account;
+a book opened from outside it (the series, a search) goes back there, and
+`/r/<book>/1` sends an EPUB straight to that chapter. Vertical writing (Japanese books) comes later;
 every book reads horizontally for now.
 
 ## Search
@@ -412,6 +428,61 @@ then people, genres and tags named like the first plain term, with the
 matches in `<mark>`, in every library or one.
 
 Schema 8 is upgraded in place to 9 (the empty index, filled by the next scan).
+
+## Accounts
+
+`koma::accounts`, `koma::auth`, `koma::admin`, `koma::pages`; design in
+docs/design (signin, setup, join, account, users, settings).
+
+- **accounts.db** (`<data>/accounts.db`, SQLite, WAL) is the only thing
+  `koma serve` writes: accounts (name, role, argon2id password), sessions,
+  sign-in links, passkeys, passkey challenges, wrong-password counts, what
+  each account keeps (`kept`), and queued library-setting changes. Tokens
+  (sessions, links) are 32 random bytes stored only as their BLAKE3 hash.
+  Several `koma serve` can share it; the worker only reads it.
+- **The gate** (`auth::gate`, a middleware on every route) works out who is
+  asking: the sign-in proxy's header when the request comes from a trusted
+  address (`--trust-header`, `--trust-proxy`), else the `koma` cookie,
+  `<token>.<mac>` with the MAC a keyed BLAKE3 under a key kept in
+  accounts.db, so a forged cookie is refused before any lookup. Page images
+  (`/p/`), assets (`/a/`) and `/healthz` are public: a page's URL names its
+  content, and only someone who has the page can know it. The ways in
+  (`/signin`, `/setup`, `/join/…`, passkey sign-in) are open. Anything else
+  without an account goes to `/setup` (no account yet) or `/signin?next=…`;
+  data routes (`/b/`, `/kept`) and form posts get 401. A request that is
+  not a GET must come from Koma-1's own pages (`Origin`, else
+  `Sec-Fetch-Site`), and the cookie is `SameSite=Lax`.
+- **Roles.** Reader, curator, admin (`accounts::Role`). The first account is
+  the admin, and there is never a second: `create` makes the first one admin
+  and refuses to make another; `hand_over` swaps the role in one
+  transaction. The admin manages accounts and the shared libraries'
+  settings; each account the settings of its own libraries. Curators get
+  their actions from M6 on. `tests/accounts.rs` is M5's exit check: a reader
+  is refused (403) on every write, and two accounts never see each other's
+  libraries (every page, the reader, downloads, search).
+- **Passwords**: argon2id with its default settings (19 MiB, 2 passes), on a
+  blocking thread; a name that does not exist is checked against a decoy
+  hash, so it takes as long. Five wrong in a row and a name waits a minute.
+- **Passkeys** (`koma::webauthn`): ES256 and EdDSA keys, "none" attestation,
+  discoverable credentials (sign in without typing a name). The browser's
+  answer is checked for its type, a fresh challenge (stored hashed, used
+  once, 5 minutes), the origin (`https://<Host>`, or plain HTTP on
+  localhost only), the site's id hash, user presence, the signature and a
+  rising counter. CBOR, COSE and DER are read by Koma-1's own small, bounded
+  readers, fuzzed; signatures are checked with the RustCrypto `p256` and
+  `ed25519-dalek` crates (pure Rust).
+- **What an account keeps** (`koma::kept`): reading positions (`pos:<book>`,
+  `epos:<book>`), reader settings per series (`dir:`, `mode:`, `shift:`,
+  `fit:`) and the readers' own (`seen`, `esize`, `ewidth`, `espace`). The
+  reader and EPUB pages carry the account's values for that book in
+  `<html data-kept>`; the scripts send changes in a `sendBeacon` to
+  `POST /kept` (batched for 1–2 seconds, and when the page is left). Keys and
+  values are checked against that list. At sign-in, the form brings what
+  the browser kept in `localStorage` before accounts; it is added where the
+  account has nothing, and the answer clears the browser's storage
+  (`Clear-Site-Data: "storage"`).
+- `koma account link <name>` prints a sign-in link from the shell (making
+  the account, the admin if it is the first).
 
 ## Serving
 
@@ -469,10 +540,17 @@ round (`-<column>`, `aria-sort` says which).
 |---|---|
 | `GET /` | the default library, or the first one: its collections, then its series, natural order |
 | `GET /l/{folder}` | a library (folder name percent-encoded); both take `?c={collection}` (one collection's series), `?page={n}`, and `?view=table` with `&sort={column}` |
-| `GET /settings` | the libraries and their settings, read-only |
+| `GET /settings`, `POST /settings` | the libraries and their settings; a change is queued for the worker |
+| `GET /signin`, `POST /signin`, `POST /signout` | signing in and out |
+| `GET /setup`, `POST /setup` | the first account, the admin, with the setup code from the log |
+| `GET /join/{token}`, `POST /join/{token}` | a sign-in link: choose a password |
+| `GET /account`, `POST /account/{password,signout,passkey}` | one's own account |
+| `GET /users`, `POST /users/{add,role,link,remove,handover}` | accounts, the admin's |
+| `POST /passkey/{new,add}`, `POST /passkey/signin/{begin,finish}` | passkeys (JSON) |
+| `POST /kept` | what the account keeps (form fields from `sendBeacon`) |
 | `GET /search?q={query}&l={folder}` | search, in every library or one (see Search) |
 | `GET /s/{id}` | a series: its cover, facts and books, each with its cover |
-| `GET /a/koma.{hash}.css`, `/a/scroll.{hash}.js` | the stylesheet and the library script, cached for a year |
+| `GET /a/koma.{hash}.css`, `/a/scroll.{hash}.js`, `/a/account.{hash}.js` | the stylesheet and scripts, cached for a year |
 | `GET /d/{book}` | the book's original: the file as it is, or a photo folder as a stored ZIP of its images in reading order |
 | `GET /r/{book}/{n}` | the reader, page `n` (1-based): see Reader |
 | `GET /e/{book}/{n}` | an EPUB's chapter `n` (1-based): see EPUB |

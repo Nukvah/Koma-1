@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>First start · Koma-1</title>
+<link rel="stylesheet" href="koma.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="signin.html">KOMA-1</a></header>
+<main class="gate">
+<form class="box form" method="post" action="library.html">
+<span class="label">first start</span>
+<strong>Create the admin account</strong>
+<p class="hint">No account exists yet. The first one is the admin: it adds and removes the others and edits library settings. Until it exists, every page leads here.</p>
+<label>setup code<input name="code" autocomplete="one-time-code" inputmode="text" placeholder="KQ7M-4TZP" required>
+<small>Printed in the log when <code>koma serve</code> starts (<code>docker logs koma</code>), so only whoever runs the server can claim it.</small></label>
+<label>name<input name="name" autocomplete="username" required></label>
+<label>password<input name="password" type="password" autocomplete="new-password" minlength="10" required><small>At least 10 characters.</small></label>
+<label>password again<input name="again" type="password" autocomplete="new-password" required></label>
+<button class="btn primary" type="submit">create and sign in</button>
+</form>
+</main>
+</body>
+</html>

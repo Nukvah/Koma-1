@@ -5,6 +5,9 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
+/// The header the budget run signs in with.
+pub const BENCH_USER: &str = "X-Bench-User";
+
 pub struct Response {
     pub status: u16,
     /// From sending the request to the first response byte.
@@ -32,7 +35,10 @@ impl Conn {
     }
 
     pub fn get(&mut self, path: &str) -> Result<Response, String> {
-        let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        // Signed in as the made-up `bench` account through the sign-in
+        // proxy header, which the serve container trusts (see measure.rs).
+        let request =
+            format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n{BENCH_USER}: bench\r\n\r\n");
         self.buf.clear();
         let start = Instant::now();
         self.stream

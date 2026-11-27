@@ -120,10 +120,12 @@ opens to the last position on another device.
 Goal: know who is asking before anything can change the library.
 
 - Design step: sign-in, account settings, user management.
-- Signed session cookies, passkeys, per-user progress; trusted forwarded-user header for SSO.
+- Signed session cookies, passwords and passkeys, per-user progress; trusted forwarded-user header for SSO.
 - The first account is the admin; the admin adds and removes accounts and can hand the role
   over *(proven)*.
-- Each account owns a folder and its libraries are private to it *(proven)*.
+- Each account owns a folder, `/library/~name`, and its libraries are private to it *(proven)*.
+- `koma serve` writes only its own `accounts.db` (accounts, sessions, progress, settings
+  queue); the catalogue stays the worker's.
 - Roles: reader (read, download) and curator (organise, upload, convert).
 - Library settings editable by the admin (name, type, reading direction, colour): `koma serve`
   queues the change and the worker applies it, so the worker stays the catalogue's only writer.
@@ -286,9 +288,6 @@ lossless JPEG XL archival and a dedicated phone layout.
   | Idle RAM (serve) | 25 MB | 40 MB | metadata and sync state |
   | Idle RAM (worker) | none | 64 MB | rename plans and upload buffers |
 
-- **CSS per area.** One CSS budget covers the library and both readers, though
-  each page loads only its own stylesheets. Split it so each area has its own
-  number (library, page reader, EPUB reader, curation), as the scripts are.
 - **Vertical writing.** EPUB books read horizontally for now; Japanese books
   written vertically (`writing-mode: vertical-rl`) want their own reading.
 - **ffmpeg.** Video thumbnails need ffmpeg, which alone is bigger than the image budget.

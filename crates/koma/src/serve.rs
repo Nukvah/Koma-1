@@ -1,12 +1,22 @@
-//! `koma serve`: the HTTP server. It only reads: the catalogue (read-only)
-//! and the bytes of pages, straight from their archive or the blob store.
-//! Nothing is decompressed, resized or written at request time.
+//! `koma serve`: the HTTP server. It reads the catalogue (read-only) and the
+//! bytes of pages, straight from their archive or the blob store: nothing
+//! is decompressed or resized at request time. The only thing it writes is
+//! its own accounts.db ([`crate::accounts`]). Every request but page
+//! images, assets, the health check and the ways in needs an account
+//! ([`crate::auth`]), and sees only the libraries it may.
 //!
 //! | Route | |
 //! |---|---|
 //! | `GET /` | the default library (or the first): its series and collections |
 //! | `GET /l/{folder}` | a library: its series and collections |
-//! | `GET /settings` | the libraries and their settings, read-only |
+//! | `GET /settings`, `POST /settings` | the libraries and their settings; a change is queued for the worker |
+//! | `GET /signin`, `POST /signin`, `POST /signout` | signing in and out |
+//! | `GET /setup`, `POST /setup` | the first account, the admin |
+//! | `GET /join/{token}`, `POST /join/{token}` | a sign-in link: choose a password |
+//! | `GET /account`, `POST /account/…` | one's own account: password, devices, passkeys |
+//! | `GET /users`, `POST /users/…` | accounts (the admin's) |
+//! | `POST /passkey/…` | adding a passkey, signing in with one |
+//! | `POST /kept` | what an account keeps: reading positions, reader settings |
 //! | `GET /search?q=…&l=…` | search, in every library or one |
 //! | `GET /a/koma.{hash}.css`, `/a/scroll.{hash}.js` | the stylesheet and the library script, cached for a year |
 //! | `GET /s/{id}` | a series: its books |
@@ -23,24 +33,26 @@ use std::net::SocketAddr;
 use std::os::unix::fs::FileExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use axum::Router;
 use axum::extract::{Path as UrlPath, RawQuery, State};
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_SECURITY_POLICY, CONTENT_TYPE, ETAG, IF_NONE_MATCH,
-    LOCATION,
 };
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
+use axum::routing::post;
+use axum::{Extension, Router};
 use tokio::net::TcpListener;
 
+use crate::accounts::Accounts;
+use crate::auth::Viewer;
 use crate::blobs::BlobStore;
 use crate::catalog::{self, Catalog};
 use crate::cli::Paths;
 use crate::libraries::{self, Library};
-use crate::{download, html, log, signal, variants};
+use crate::{admin, auth, download, html, kept, log, signal, variants};
 
 /// What every request handler shares. Cheap to clone.
 #[derive(Clone)]
@@ -54,22 +66,79 @@ struct Inner {
     db: PathBuf,
     /// Idle read-only connections; one is opened whenever none is free.
     idle: Mutex<Vec<Catalog>>,
+    /// accounts.db, and idle connections to it.
+    accounts: PathBuf,
+    accounts_idle: Mutex<Vec<Accounts>>,
+    auth: auth::Config,
+    setup_code: OnceLock<String>,
 }
 
 impl AppState {
     pub fn new(paths: &Paths) -> Self {
+        Self::with_auth(paths, auth::Config::default())
+    }
+
+    /// With sign-in through a proxy as `auth` says.
+    pub fn with_auth(paths: &Paths, auth: auth::Config) -> Self {
         Self {
             inner: Arc::new(Inner {
                 library: paths.library.clone(),
                 blobs: BlobStore::new(&paths.data),
                 db: paths.data.join("koma.db"),
                 idle: Mutex::new(Vec::new()),
+                accounts: paths.data.join("accounts.db"),
+                accounts_idle: Mutex::new(Vec::new()),
+                auth,
+                setup_code: OnceLock::new(),
             }),
         }
     }
 
+    pub(crate) fn auth(&self) -> &auth::Config {
+        &self.inner.auth
+    }
+
+    pub(crate) fn setup_code(&self, make: impl FnOnce() -> String) -> String {
+        self.inner.setup_code.get_or_init(make).clone()
+    }
+
+    /// Runs `f` with an accounts.db connection on a blocking thread.
+    pub(crate) async fn accounts<T, F>(&self, f: F) -> Result<T, Failure>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Accounts) -> Result<T, Failure> + Send + 'static,
+    {
+        let state = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let inner = &state.inner;
+            let conn = inner
+                .accounts_idle
+                .lock()
+                .ok()
+                .and_then(|mut idle| idle.pop());
+            let conn = match conn {
+                Some(c) => c,
+                None => {
+                    if let Some(dir) = inner.accounts.parent() {
+                        std::fs::create_dir_all(dir)
+                            .map_err(|e| Failure::Internal(format!("data folder: {e}")))?;
+                    }
+                    Accounts::open(&inner.accounts)
+                        .map_err(|e| Failure::Internal(format!("accounts.db: {e}")))?
+                }
+            };
+            let result = f(&conn);
+            if let Ok(mut idle) = inner.accounts_idle.lock() {
+                idle.push(conn);
+            }
+            result
+        })
+        .await
+        .map_err(|_| Failure::Internal("task failed".into()))?
+    }
+
     /// Runs `f` with a catalogue connection on a blocking thread.
-    async fn query<T, F>(&self, f: F) -> Result<T, Failure>
+    pub(crate) async fn query<T, F>(&self, f: F) -> Result<T, Failure>
     where
         T: Send + 'static,
         F: FnOnce(&Catalog) -> Result<T, Failure> + Send + 'static,
@@ -95,9 +164,11 @@ impl AppState {
 }
 
 /// Why a request could not be answered.
-enum Failure {
+pub enum Failure {
     NotFound,
     NotScanned,
+    /// Signed in, but not allowed: why, for the refusal page.
+    Forbidden(String),
     Internal(String),
 }
 
@@ -116,6 +187,9 @@ impl IntoResponse for Failure {
                 "The library has not been scanned yet. Start koma worker.\n",
             )
                 .into_response(),
+            Failure::Forbidden(why) => {
+                (StatusCode::FORBIDDEN, Html(crate::pages::refusal(&why))).into_response()
+            }
             Failure::Internal(e) => {
                 log::error("serve: request failed", &[("error", &e)]);
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal error\n").into_response()
@@ -128,7 +202,29 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(library))
         .route("/l/{folder}", get(named_library))
-        .route("/settings", get(settings))
+        .route(
+            "/settings",
+            get(admin::settings_page).post(admin::settings_save),
+        )
+        .route("/signin", get(auth::signin_page).post(auth::signin))
+        .route("/signout", post(auth::signout))
+        .route("/setup", get(auth::setup_page).post(auth::setup))
+        .route("/join/{token}", get(auth::join_page).post(auth::join))
+        .route("/account", get(admin::account_page))
+        .route("/account/password", post(admin::account_password))
+        .route("/account/signout", post(admin::account_signout))
+        .route("/account/passkey", post(admin::account_passkey))
+        .route("/users", get(admin::users_page))
+        .route("/users/add", post(admin::users_add))
+        .route("/users/role", post(admin::users_role))
+        .route("/users/link", post(admin::users_link))
+        .route("/users/remove", post(admin::users_remove))
+        .route("/users/handover", post(admin::users_handover))
+        .route("/passkey/new", post(auth::passkey_new))
+        .route("/passkey/add", post(auth::passkey_add))
+        .route("/passkey/signin/begin", post(auth::passkey_signin_begin))
+        .route("/passkey/signin/finish", post(auth::passkey_signin_finish))
+        .route("/kept", post(admin::kept_save))
         .route("/search", get(search))
         .route("/a/{file}", get(stylesheet))
         .route("/s/{id}", get(series))
@@ -138,7 +234,37 @@ pub fn router(state: AppState) -> Router {
         .route("/b/{book}", get(book_json))
         .route("/p/{file}", get(page_bytes))
         .route("/healthz", get(healthz))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::gate,
+        ))
         .with_state(state)
+}
+
+/// Every library the viewer may see, with the settings changed in the UI.
+fn libraries_for(c: &Catalog, me: &Viewer) -> Result<Vec<Library>, Failure> {
+    Ok(Library::all(c.library_keys()?, &c.library_settings()?)
+        .into_iter()
+        .filter(|l| l.visible_to(&me.name))
+        .collect())
+}
+
+/// A series, if the viewer may see it.
+fn series_for(c: &Catalog, me: &Viewer, id: i64) -> Result<catalog::Series, Failure> {
+    c.series_by_id(id)?
+        .filter(|s| me.sees(&s.path))
+        .ok_or(Failure::NotFound)
+}
+
+/// A book and its series, if the viewer may see them.
+fn book_for(
+    c: &Catalog,
+    me: &Viewer,
+    id: i64,
+) -> Result<(catalog::Book, catalog::Series), Failure> {
+    let book = c.book(id)?.ok_or(Failure::NotFound)?;
+    let series = series_for(c, me, book.series_id)?;
+    Ok((book, series))
 }
 
 async fn healthz() -> impl IntoResponse {
@@ -149,15 +275,16 @@ async fn healthz() -> impl IntoResponse {
 /// library folder. `?c=<collection>` and `?page=<n>` as for [`named_library`].
 async fn library(
     State(state): State<AppState>,
+    Extension(me): Extension<Viewer>,
     RawQuery(query): RawQuery,
 ) -> Result<Html<String>, Failure> {
     state
         .query(move |c| {
-            let libraries = Library::all(c.library_keys()?);
+            let libraries = libraries_for(c, &me)?;
             if libraries.is_empty() {
-                return Ok(Html(html::empty()));
+                return Ok(Html(html::empty(&me.me())));
             }
-            shelf(c, &libraries, 0, query.as_deref())
+            shelf(c, &me, &libraries, 0, query.as_deref())
         })
         .await
 }
@@ -167,17 +294,18 @@ async fn library(
 /// `n`th page of cards.
 async fn named_library(
     State(state): State<AppState>,
+    Extension(me): Extension<Viewer>,
     UrlPath(folder): UrlPath<String>,
     RawQuery(query): RawQuery,
 ) -> Result<Html<String>, Failure> {
     state
         .query(move |c| {
-            let libraries = Library::all(c.library_keys()?);
+            let libraries = libraries_for(c, &me)?;
             let at = libraries
                 .iter()
                 .position(|l| !l.folder.is_empty() && l.folder == folder)
                 .ok_or(Failure::NotFound)?;
-            shelf(c, &libraries, at, query.as_deref())
+            shelf(c, &me, &libraries, at, query.as_deref())
         })
         .await
 }
@@ -186,6 +314,7 @@ async fn named_library(
 /// on that page.
 fn shelf(
     c: &Catalog,
+    me: &Viewer,
     libraries: &[Library],
     at: usize,
     query: Option<&str>,
@@ -204,7 +333,15 @@ fn shelf(
         if view != "table" {
             return Err(Failure::NotFound);
         }
-        return table(c, libraries, library, collection.as_deref(), page, query);
+        return table(
+            c,
+            me,
+            libraries,
+            library,
+            collection.as_deref(),
+            page,
+            query,
+        );
     }
     let collections = c.collections(&library.folder)?;
     let names: Vec<String> = collections.iter().map(|(n, ..)| n.clone()).collect();
@@ -261,6 +398,7 @@ fn shelf(
         items: &items,
         page,
         total,
+        me: &me.me(),
     })))
 }
 
@@ -268,6 +406,7 @@ fn shelf(
 /// `&sort=<column>` (`-<column>` reversed), `&page=<n>`.
 fn table(
     c: &Catalog,
+    me: &Viewer,
     libraries: &[Library],
     library: &Library,
     collection: Option<&str>,
@@ -330,6 +469,7 @@ fn table(
         sort,
         page,
         total: rows.len(),
+        me: &me.me(),
     })))
 }
 
@@ -350,13 +490,14 @@ const SEARCH_TERMS: usize = 20;
 /// genres and tags that match. See [`crate::search`].
 async fn search(
     State(state): State<AppState>,
+    Extension(me): Extension<Viewer>,
     RawQuery(query): RawQuery,
 ) -> Result<Html<String>, Failure> {
     let q = query_value(query.as_deref(), "q").unwrap_or_default();
     let library = query_value(query.as_deref(), "l");
     state
         .query(move |c| {
-            let libraries = Library::all(c.library_keys()?);
+            let libraries = libraries_for(c, &me)?;
             let library = match &library {
                 Some(folder) => Some(
                     libraries
@@ -378,6 +519,7 @@ async fn search(
                     plan.fts.as_deref(),
                     &likes,
                     library.map(|l| l.folder.as_str()),
+                    &me.name,
                     SEARCH_SERIES + SEARCH_BOOKS,
                 )?;
                 let name_of = |folder: &str| {
@@ -407,8 +549,11 @@ async fn search(
                 if library.is_none()
                     && let Some(t) = terms.iter().find(|t| t.field == crate::search::Field::Any)
                 {
-                    people =
-                        c.matching_terms(&crate::search::like_pattern(&t.text), SEARCH_TERMS)?;
+                    people = c.matching_terms(
+                        &crate::search::like_pattern(&t.text),
+                        &me.name,
+                        SEARCH_TERMS,
+                    )?;
                 }
             }
             Ok(Html(html::search(&html::Found {
@@ -419,6 +564,7 @@ async fn search(
                 series: &series,
                 books: &books,
                 terms: &people,
+                me: &me.me(),
             })))
         })
         .await
@@ -426,14 +572,14 @@ async fn search(
 
 /// The value of `key` in a URL query string, percent-decoded (`+` as a
 /// space). `None` if absent or not valid UTF-8 once decoded.
-fn query_value(query: Option<&str>, key: &str) -> Option<String> {
+pub(crate) fn query_value(query: Option<&str>, key: &str) -> Option<String> {
     query?.split('&').find_map(|pair| {
         let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
         (k == key).then(|| percent_decode(v)).flatten()
     })
 }
 
-fn percent_decode(s: &str) -> Option<String> {
+pub(crate) fn percent_decode(s: &str) -> Option<String> {
     let mut out = Vec::with_capacity(s.len());
     let bytes = s.as_bytes();
     let mut i = 0;
@@ -457,13 +603,6 @@ fn percent_decode(s: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// `GET /settings`: the libraries and their settings, read-only.
-async fn settings(State(state): State<AppState>) -> Result<Html<String>, Failure> {
-    state
-        .query(|c| Ok(Html(html::settings(&Library::all(c.library_keys()?)))))
-        .await
-}
-
 /// `GET /a/koma.<hash>.css` and `/a/scroll.<hash>.js`: the stylesheet and
 /// the library pages' script, cached for good (their URLs change with their
 /// content).
@@ -481,6 +620,8 @@ async fn stylesheet(UrlPath(file): UrlPath<String>) -> Result<Response, Failure>
         ("text/css; charset=utf-8", html::EPUB_CSS)
     } else if url == html::epub_js_url() {
         ("text/javascript; charset=utf-8", html::EPUB_JS)
+    } else if url == crate::pages::account_js_url() {
+        ("text/javascript; charset=utf-8", crate::pages::ACCOUNT_JS)
     } else {
         return Err(Failure::NotFound);
     };
@@ -497,11 +638,12 @@ async fn stylesheet(UrlPath(file): UrlPath<String>) -> Result<Response, Failure>
 /// `GET /s/<id>`: a series and its books.
 async fn series(
     State(state): State<AppState>,
+    Extension(me): Extension<Viewer>,
     UrlPath(id): UrlPath<i64>,
 ) -> Result<Html<String>, Failure> {
     state
         .query(move |c| {
-            let series = c.series_by_id(id)?.ok_or(Failure::NotFound)?;
+            let series = series_for(c, &me, id)?;
             let mut books = Vec::new();
             for book in c.books(id)? {
                 let cover = c.book_cover(book.id, html::COVER_WIDTH, variants::VERSION)?;
@@ -510,7 +652,7 @@ async fn series(
             if books.is_empty() {
                 return Err(Failure::NotFound);
             }
-            let libraries = Library::all(c.library_keys()?);
+            let libraries = libraries_for(c, &me)?;
             let folder = libraries::library_of(&series.path);
             let library = libraries
                 .iter()
@@ -518,6 +660,7 @@ async fn series(
                 .ok_or(Failure::NotFound)?;
             let collections = collections_of(c, &library.folder)?;
             Ok(Html(html::series(
+                &me.me(),
                 &libraries,
                 library,
                 &collections,
@@ -538,17 +681,17 @@ fn collections_of(c: &Catalog, library: &str) -> Result<Vec<String>, Failure> {
 
 async fn reader(
     State(state): State<AppState>,
+    Extension(me): Extension<Viewer>,
     UrlPath((book_id, number)): UrlPath<(i64, usize)>,
 ) -> Result<Response, Failure> {
-    state
+    let viewer = me.clone();
+    let found = state
         .query(move |c| {
             // Only what the page shows: this page and its variants (the
             // script gets them all once, from /b/<book>).
-            let book = c.book(book_id)?.ok_or(Failure::NotFound)?;
+            let (book, series) = book_for(c, &viewer, book_id)?;
             if crate::scan::is_epub(&book.path) {
-                // An EPUB is read as text.
-                let to = format!("/e/{book_id}/1");
-                return Ok((StatusCode::SEE_OTHER, [(LOCATION, to)]).into_response());
+                return Ok(Err(book.page_count));
             }
             let total = usize::try_from(book.page_count).unwrap_or(0);
             if number == 0 || number > total {
@@ -566,27 +709,47 @@ async fn reader(
                 }
             }
             let page = html::ReaderPage::new(&page, made);
-            let series = c.series_by_id(book.series_id)?.ok_or(Failure::NotFound)?;
             // The book's own direction, else its library's.
             let rtl = match c.book_direction(book_id)? {
                 Some(d) => d == "rtl",
                 None => {
                     let folder = libraries::library_of(&series.path);
-                    Library::from_folder(folder, 0, 0).direction
+                    Library::from_folder(folder, 0, 0)
+                        .with(c.library_setting(folder)?.as_ref())
+                        .direction
                         == libraries::Direction::RightToLeft
                 }
             };
-            Ok(Html(html::reader(&html::Reader {
-                series: &series,
-                book: &book,
-                page: &page,
-                number,
-                total,
-                rtl,
-            }))
-            .into_response())
+            Ok(Ok((book, series, page, total, rtl)))
         })
-        .await
+        .await?;
+    let id = me.id;
+    let (book, series, page, total, rtl) = match found {
+        Ok(found) => found,
+        // An EPUB is read as text, from where the account left it.
+        Err(chapters) => {
+            let keys = vec![format!("epos:{book_id}")];
+            let kept = state.accounts(move |a| Ok(a.kept(id, &keys)?)).await?;
+            let at = kept
+                .first()
+                .and_then(|(_, v)| v.split(':').next()?.parse::<i64>().ok())
+                .filter(|&c| c >= 1 && c <= chapters)
+                .unwrap_or(1);
+            return Ok(auth::see_other(&format!("/e/{book_id}/{at}")));
+        }
+    };
+    let keys = kept::reader_keys(book.id, series.id);
+    let kept = state.accounts(move |a| Ok(a.kept(id, &keys)?)).await?;
+    Ok(Html(html::reader(&html::Reader {
+        series: &series,
+        book: &book,
+        page: &page,
+        number,
+        total,
+        rtl,
+        kept: &kept::to_json(&kept),
+    }))
+    .into_response())
 }
 
 /// What an EPUB chapter page may load: its own stylesheets, script and
@@ -599,12 +762,15 @@ const EPUB_CSP: &str = "default-src 'none'; img-src 'self'; style-src 'self'; \
 /// `GET /e/<book>/<n>`: chapter `n` (1-based) of an EPUB.
 async fn epub_chapter(
     State(state): State<AppState>,
+    Extension(me): Extension<Viewer>,
     UrlPath((book_id, number)): UrlPath<(i64, usize)>,
 ) -> Result<Response, Failure> {
     let blobs = state.inner.blobs.clone();
+    let (id, keys) = (me.id, kept::epub_keys(book_id));
+    let kept = kept::to_json(&state.accounts(move |a| Ok(a.kept(id, &keys)?)).await?);
     let page = state
         .query(move |c| {
-            let book = c.book(book_id)?.ok_or(Failure::NotFound)?;
+            let (book, series) = book_for(c, &me, book_id)?;
             let total = usize::try_from(book.page_count).unwrap_or(0);
             if !crate::scan::is_epub(&book.path) || number == 0 || number > total {
                 return Err(Failure::NotFound);
@@ -614,7 +780,6 @@ async fn epub_chapter(
                 .ok_or(Failure::NotFound)?;
             let html = std::fs::read_to_string(blobs.path(&chapter.hash, "html"))
                 .map_err(|e| Failure::Internal(format!("chapter: {e}")))?;
-            let series = c.series_by_id(book.series_id)?.ok_or(Failure::NotFound)?;
             let toc = c.toc(book_id)?;
             let language = c.book_language(book_id)?;
             // Only on the last chapter: the book after it.
@@ -633,6 +798,7 @@ async fn epub_chapter(
                 toc: &toc,
                 language: &language,
                 next_book: next_book.as_ref(),
+                kept: &kept,
             }))
         })
         .await?;
@@ -667,13 +833,14 @@ fn reader_pages(c: &Catalog, book_id: i64) -> Result<Vec<html::ReaderPage>, Fail
 /// script (see [`html::reader_json`]).
 async fn book_json(
     State(state): State<AppState>,
+    Extension(me): Extension<Viewer>,
     UrlPath(book_id): UrlPath<i64>,
 ) -> Result<Response, Failure> {
-    let json = state
+    let id = me.id;
+    let (book, series, pages, next) = state
         .query(move |c| {
-            let book = c.book(book_id)?.ok_or(Failure::NotFound)?;
+            let (book, series) = book_for(c, &me, book_id)?;
             // The book after this one in its series, for the end card.
-            let series = c.series_by_id(book.series_id)?.ok_or(Failure::NotFound)?;
             let books = c.books(book.series_id)?;
             let next = books
                 .iter()
@@ -684,14 +851,22 @@ async fn book_json(
                     Ok((b.clone(), cover))
                 })
                 .transpose()?;
-            Ok(html::reader_json(
-                &reader_pages(c, book_id)?,
-                &series,
-                &book,
-                next.as_ref(),
-            ))
+            Ok((book, series, reader_pages(c, book_id)?, next))
         })
         .await?;
+    // Where the account left the next book.
+    let next_at = match &next {
+        Some((b, _)) => {
+            let keys = vec![format!("pos:{}", b.id)];
+            state
+                .accounts(move |a| Ok(a.kept(id, &keys)?))
+                .await?
+                .first()
+                .and_then(|(_, v)| v.parse().ok())
+        }
+        None => None,
+    };
+    let json = html::reader_json(&pages, &series, &book, next.as_ref(), next_at);
     Ok((
         [
             (CONTENT_TYPE, "application/json"),
@@ -706,12 +881,13 @@ async fn book_json(
 /// as a stored ZIP of its images, made while it is sent.
 async fn download(
     State(state): State<AppState>,
+    Extension(me): Extension<Viewer>,
     UrlPath(book_id): UrlPath<i64>,
 ) -> Result<Response, Failure> {
     let inner = Arc::clone(&state.inner);
     let (body, name, media_type) = state
         .query(move |c| {
-            let book = c.book(book_id)?.ok_or(Failure::NotFound)?;
+            let (book, _) = book_for(c, &me, book_id)?;
             if book.photos {
                 let mut entries = Vec::new();
                 for page in c.pages(book_id)? {
@@ -878,12 +1054,15 @@ pub async fn serve<F>(listener: TcpListener, state: AppState, shutdown: F) -> io
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown)
-        .await
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
 }
 
-pub fn run(listen: SocketAddr, paths: &Paths) -> ExitCode {
+pub fn run(listen: SocketAddr, paths: &Paths, auth_config: auth::Config) -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -894,9 +1073,13 @@ pub fn run(listen: SocketAddr, paths: &Paths) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let state = AppState::new(paths);
+    let state = AppState::with_auth(paths, auth_config);
     let result = runtime.block_on(async {
         let listener = TcpListener::bind(listen).await?;
+        // No account yet: the code to make the admin, in the log from the start.
+        if let Ok(0) = state.accounts(|a| Ok(a.count()?)).await {
+            auth::setup_code(&state);
+        }
         log::info(
             "serve: listening",
             &[

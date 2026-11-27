@@ -15,7 +15,18 @@
 <input id="q" name="q" type="search" value="" placeholder="search all libraries: title, author:, tag:">
 </form>
 <label for="menu" class="menu-btn" aria-hidden="true">menu</label>
-<a class="user" href="#"><span class="avatar" aria-hidden="true">M</span><span>mirelle ▾</span></a>
+<details class="umenu">
+<summary><span class="avatar" aria-hidden="true">M</span><span>mirelle ▾</span></summary>
+<ul>
+<li><span><small>signed in as</small> mirelle <span class="role admin">admin</span></span></li>
+<li><hr></li>
+<li><a href="account.html">account</a></li>
+<li><a href="users.html">users</a></li>
+<li><a href="settings.html">libraries</a></li>
+<li><hr></li>
+<li><form method="post" action="signin.html"><button type="submit">sign out</button></form></li>
+</ul>
+</details>
 </header>
 
 <div class="layout">
@@ -34,49 +45,62 @@
 <section class="tree">
 <h2>// libraries</h2>
 <ul>
-<li><a class="on" href="library.html" aria-current="true">▾ ~/manga<span class="n">214</span></a></li>
-<li><a class="sub" href="#">  ├─ reading<span class="n">6</span></a></li>
-<li><a class="sub" href="#">  ├─ unread<span class="n">41</span></a></li>
-<li><a class="sub" href="#">  └─ finished<span class="n">88</span></a></li>
+<li><a href="library.html">▸ ~/manga<span class="n">214</span></a></li>
 <li><a href="#">▸ ~/webtoons<span class="n">38</span></a></li>
 <li><a href="#">▸ ~/comics<span class="n">61</span></a></li>
 <li><a href="#">▸ ~/cosplay<span class="n">12</span></a></li>
 </ul>
 </section>
 <hr>
-<section>
-<h2>// collections</h2>
+<section class="tree">
+<h2>// only yours</h2>
 <ul>
-<li><a href="collections.html">Starfall Saga<span class="n">4</span></a></li>
-<li><a href="collections.html">Harbor Stories<span class="n">3</span></a></li>
+<li><a href="#">▸ ~mirelle/sketchbooks<span class="n">9</span></a></li>
 </ul>
 </section>
 <hr>
-<p class="status"><span class="ok">●</span> ingest idle · 4m ago<br>2,251 vols · <a href="#">rescan</a></p>
+<p class="status"><span class="ok">●</span> ingest idle · 4m ago<br>2,260 vols · <a href="#">rescan</a></p>
 </aside>
 
 <main>
-<div class="toolbar"><h1>settings · <b>libraries</b></h1></div>
+<div class="toolbar"><h1>settings · <b>libraries</b></h1>
+<nav class="seg" aria-label="Settings">
+<a href="settings.html" aria-current="page">libraries</a>
+<a href="users.html">users</a>
+<a href="account.html">account</a>
+</nav>
+</div>
 
-<p class="note">Read-only until accounts arrive (M5): then an admin can change a library's name, type, reading direction and colour here.</p>
+<p class="note"><b>Webtoons</b>: name changed to Webtoon. <span class="pending">Queued</span>; the worker applies it within a minute, then every page shows it. <a href="#">undo</a></p>
 
+<form method="post" class="scroll">
 <table class="tbl">
-<thead><tr><th scope="col">library</th><th scope="col" class="opt">folder</th><th scope="col">type</th><th scope="col" class="opt">direction</th><th scope="col" class="opt">colour</th><th scope="col" class="r">series</th></tr></thead>
+<thead><tr><th scope="col">library</th><th scope="col" class="opt">folder</th><th scope="col">type</th><th scope="col" class="opt">direction</th><th scope="col" class="opt">colour</th><th scope="col" class="r">series</th><th scope="col" class="r"><span class="hint">actions</span></th></tr></thead>
 <tbody>
-<tr><td><a href="library.html">Manga</a></td><td class="opt">/library/manga</td><td>manga</td><td class="opt">right to left</td><td class="opt"><span class="swatch" style="--c:#F2A33A"></span> amber</td><td class="r">214</td></tr>
-<tr><td><a href="#">Webtoons</a></td><td class="opt">/library/webtoons</td><td>manga</td><td class="opt">right to left</td><td class="opt"><span class="swatch" style="--c:#4FB3A9"></span> teal</td><td class="r">38</td></tr>
-<tr><td><a href="#">Comics</a></td><td class="opt">/library/comics</td><td>comics</td><td class="opt">left to right</td><td class="opt"><span class="swatch" style="--c:#D9708A"></span> rose</td><td class="r">61</td></tr>
-<tr><td><a href="#">Cosplay</a></td><td class="opt">/library/cosplay</td><td>cosplay</td><td class="opt">left to right</td><td class="opt"><span class="swatch" style="--c:#8A9BB0"></span> slate</td><td class="r">12</td></tr>
+<tr><td><input name="name" value="Manga" size="12" aria-label="name of /library/manga"></td><td class="opt">/library/manga</td><td><select name="type" aria-label="type of /library/manga"><option selected>manga</option><option>comics</option><option>cosplay</option></select></td><td class="opt"><select name="dir" aria-label="direction of /library/manga"><option selected>right to left</option><option>left to right</option></select></td><td class="opt"><span class="swatch" style="--c:#F2A33A"></span> <select name="colour" aria-label="colour of /library/manga"><option selected>amber</option><option>teal</option><option>rose</option><option>slate</option><option>moss</option><option>violet</option></select></td><td class="r">214</td><td><div class="acts"><button type="submit">save</button></div></td></tr>
+<tr><td><input name="name" value="Webtoon" size="12" aria-label="name of /library/webtoons"></td><td class="opt">/library/webtoons</td><td><select name="type" aria-label="type of /library/webtoons"><option selected>manga</option><option>comics</option><option>cosplay</option></select></td><td class="opt"><select name="dir" aria-label="direction of /library/webtoons"><option selected>right to left</option><option>left to right</option></select></td><td class="opt"><span class="swatch" style="--c:#4FB3A9"></span> <select name="colour" aria-label="colour of /library/webtoons"><option>amber</option><option selected>teal</option><option>rose</option><option>slate</option><option>moss</option><option>violet</option></select></td><td class="r">38</td><td><span class="pending">queued</span></td></tr>
+<tr><td><input name="name" value="Comics" size="12" aria-label="name of /library/comics"></td><td class="opt">/library/comics</td><td><select name="type" aria-label="type of /library/comics"><option>manga</option><option selected>comics</option><option>cosplay</option></select></td><td class="opt"><select name="dir" aria-label="direction of /library/comics"><option>right to left</option><option selected>left to right</option></select></td><td class="opt"><span class="swatch" style="--c:#D9708A"></span> <select name="colour" aria-label="colour of /library/comics"><option>amber</option><option>teal</option><option selected>rose</option><option>slate</option><option>moss</option><option>violet</option></select></td><td class="r">61</td><td><div class="acts"><button type="submit">save</button></div></td></tr>
+<tr><td><input name="name" value="Cosplay" size="12" aria-label="name of /library/cosplay"></td><td class="opt">/library/cosplay</td><td><select name="type" aria-label="type of /library/cosplay"><option>manga</option><option>comics</option><option selected>cosplay</option></select></td><td class="opt"><select name="dir" aria-label="direction of /library/cosplay"><option>right to left</option><option selected>left to right</option></select></td><td class="opt"><span class="swatch" style="--c:#8A9BB0"></span> <select name="colour" aria-label="colour of /library/cosplay"><option>amber</option><option>teal</option><option>rose</option><option selected>slate</option><option>moss</option><option>violet</option></select></td><td class="r">12</td><td><div class="acts"><button type="submit">save</button></div></td></tr>
 </tbody>
 </table>
+</form>
+
+<h2 class="section-h">only yours · /library/~mirelle</h2>
+<form method="post" class="scroll">
+<table class="tbl">
+<thead><tr><th scope="col">library</th><th scope="col" class="opt">folder</th><th scope="col">type</th><th scope="col" class="opt">direction</th><th scope="col" class="opt">colour</th><th scope="col" class="r">series</th><th scope="col" class="r"><span class="hint">actions</span></th></tr></thead>
+<tbody>
+<tr><td><input name="name" value="Sketchbooks" size="12" aria-label="name of /library/~mirelle/sketchbooks"></td><td class="opt">/library/~mirelle/sketchbooks</td><td><select name="type" aria-label="type of /library/~mirelle/sketchbooks"><option>manga</option><option selected>comics</option><option>cosplay</option></select></td><td class="opt"><select name="dir" aria-label="direction of /library/~mirelle/sketchbooks"><option>right to left</option><option selected>left to right</option></select></td><td class="opt"><span class="swatch" style="--c:#7FA05A"></span> <select name="colour" aria-label="colour of /library/~mirelle/sketchbooks"><option>amber</option><option>teal</option><option>rose</option><option>slate</option><option selected>moss</option><option>violet</option></select></td><td class="r">9</td><td><div class="acts"><button type="submit">save</button></div></td></tr>
+</tbody>
+</table>
+</form>
 
 <h2 class="section-h">where these come from</h2>
 <div class="status">
-<p>Every top-level folder in <code>/library</code> is a library, found at the next scan.</p>
-<p><b>name</b>: the folder's name, capitalised.</p>
-<p><b>type</b>: from the folder's name (manga, comics, webtoon, cosplay…); manga if it says nothing.</p>
-<p><b>direction</b>: right to left for manga, left to right otherwise. A book's own metadata (ComicInfo.xml, metadata.json) wins over it.</p>
-<p><b>colour</b>: the next one in a fixed list, in folder order.</p>
+<p>Every top-level folder in <code>/library</code> is a library, found at the next scan. A folder named <code>~name</code> is that account's own: the libraries in it are seen by that account alone, which also edits their settings.</p>
+<p>Until changed here, a library's settings come from its folder: <b>name</b> capitalised; <b>type</b> from the name (manga if it says nothing); <b>direction</b> right to left for manga, left to right otherwise; <b>colour</b> the next in a fixed list. A book's own metadata still wins over the direction.</p>
+<p>Changes are kept in the catalogue, not in <code>/library</code>: no file or folder is renamed. <code>koma serve</code> queues them and the worker writes them, so the worker stays the catalogue's only writer.</p>
+<p>Only the admin edits the shared libraries; readers and curators see this page read-only, as it is today.</p>
 </div>
 </main>
 </div>

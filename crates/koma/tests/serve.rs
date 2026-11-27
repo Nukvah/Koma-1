@@ -28,14 +28,19 @@ async fn answers_health_check_and_stops_on_signal() {
         blocking(move || koma::health::probe(addr, TIMEOUT)).await,
         Ok(())
     );
+    // Anything but the health check, pages and assets needs an account first.
     assert_eq!(
         blocking(move || koma::health::status(addr, "/nothing-here", TIMEOUT)).await,
+        Ok(303)
+    );
+    assert_eq!(
+        blocking(move || koma::health::status(addr, "/a/nothing-here", TIMEOUT)).await,
         Ok(404)
     );
-    // Nothing scanned yet: the library says so instead of failing.
+    // No account yet: every page leads to making the admin.
     assert_eq!(
         blocking(move || koma::health::status(addr, "/", TIMEOUT)).await,
-        Ok(503)
+        Ok(303)
     );
 
     stop.send(()).unwrap();
