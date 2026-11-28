@@ -26,6 +26,9 @@ http-body = "1.1"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
 jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
 koma-webp = { path = "../koma-webp" }
+# AVIF through rav1e, pure Rust. Its assembly (feature `asm`, needs nasm on
+# x86_64) is on in the image; tests run without it.
+ravif = { version = "0.13", default-features = false }
 rusqlite = { version = "0.43", features = ["bundled", "collation"] }
 # EPUB: container, package, contents and chapters are XML (tokenized only;
 # what the reader shows is written by Koma-1 from an allowlist).
@@ -34,6 +37,10 @@ serde_json = "1"
 # 7z (CB7) in pure Rust; LZMA and LZMA2 only (no encryption, no extra codecs).
 sevenz-rust2 = { version = "0.27", default-features = false }
 tokio = { version = "1.54", features = ["rt", "rt-multi-thread", "net", "signal", "macros", "sync"] }
+
+[features]
+# rav1e's assembly: several times faster AVIF encoding. The Dockerfile builds with it.
+asm = ["ravif/asm"]
 
 [dev-dependencies]
 blake3 = "1.8"

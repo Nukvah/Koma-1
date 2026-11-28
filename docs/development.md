@@ -119,10 +119,12 @@ serving never resizes or transcodes (`koma::variants`):
 
 - Widths 720, 1080 and 1440, only those narrower than the page: the original
   is always served as it is, and a page no wider than 720 has none. Each width
-  in JPEG (quality 82, through `jpeg-encoder`, pure Rust) and WebP (quality 80,
-  through `koma-webp`: libwebp 1.6 built from its vendored C source). AVIF
-  variants come in M9. WebP stops at 16,383 pixels, so a very long strip's
-  720 variant may be JPEG only. A variant that comes out no smaller than the
+  in JPEG (quality 82, through `jpeg-encoder`, pure Rust), WebP (quality 80,
+  through `koma-webp`: libwebp 1.6 built from its vendored C source) and AVIF
+  (quality 70, speed 10, through `ravif` on rav1e, pure Rust; the image is
+  built with rav1e's assembly, feature `asm`, which needs `nasm` on x86_64).
+  WebP stops at 16,383 pixels, so a very long strip's
+  720 variant may have no WebP. A variant that comes out no smaller than the
   original is dropped: clean line art saved as PNG is often smaller than any
   lossy copy of it, and the original serves instead.
 - A page that gets those also gets a 240-wide thumbnail, for the reader's
@@ -134,6 +136,20 @@ serving never resizes or transcodes (`koma::variants`):
   size, and all six variants together about 1.7 times the originals' space.
   On the 2-CPU, 1 GB budget container: about 0.9 s a page, at most 35 MiB of
   memory, back to 3.4 MiB idle.
+- AVIF speed: on a made-up line-art page 1440 wide, one thread, speed 10
+  took 0.8 s and speed 6 4.1 s, for a file 13% bigger (318 KB) that is
+  still smaller than the WebP one (384 KB). Variants are made for every page, so speed 10;
+  the optimize presets (converting books) use speed 6.
+- `variant_pages.formats` records which formats a page's variants were
+  tried in (bits: 1 JPEG, 2 WebP, 4 AVIF). Pages made before AVIF get their
+  AVIF variants on the worker's next pass, from the original, at the widths
+  they already have; their JPEG and WebP ones stay as they are, at the same
+  URLs.
+- The reader offers AVIF, then WebP, then JPEG through `<picture>`. Covers
+  stay WebP and JPEG: at 240 wide AVIF saves little, and another `<source>`
+  on every card costs the library page's 15 KiB. Its
+  script turns pages with the format the browser chose for the first page:
+  AVIF if it took AVIF, else WebP where the browser can, else JPEG.
 - Pages are decoded in pure Rust (`image`: JPEG, PNG, WebP, GIF's first frame,
   BMP) and resized with Lanczos3 (`fast_image_resize`). AVIF and JPEG XL pages
   get no variants yet; they are served as they are.

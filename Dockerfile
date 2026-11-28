@@ -9,9 +9,11 @@ WORKDIR /src
 COPY . .
 # The rust:alpine image ships musl-dev and gcc. On Alpine the native target is
 # musl, and Rust links musl statically, so the binary needs nothing at runtime.
+# nasm: rav1e's x86_64 assembly (AVIF encoding several times faster).
+RUN apk add --no-cache nasm
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --locked --release --package koma \
+    cargo build --locked --release --package koma --features asm \
  && cp target/release/koma /koma \
  && mkdir /data
 

@@ -799,7 +799,7 @@ async fn reader(
                 .ok_or(Failure::NotFound)?;
             let mut made: Vec<(u32, u8)> = Vec::new();
             for (width, format) in c.page_variants(&page.hash, variants::VERSION)? {
-                let bit = if format == "jpg" { 1 } else { 2 };
+                let bit = variants::Format::from_ext(&format).map_or(0, variants::Format::bit);
                 match made.iter_mut().find(|(w, _)| *w == width) {
                     Some((_, m)) => *m |= bit,
                     None => made.push((width, bit)),
@@ -913,7 +913,7 @@ async fn epub_chapter(
 fn reader_pages(c: &Catalog, book_id: i64) -> Result<Vec<html::ReaderPage>, Failure> {
     let mut made: std::collections::HashMap<i64, Vec<(u32, u8)>> = Default::default();
     for (number, width, format) in c.book_variants(book_id, variants::VERSION)? {
-        let bit = if format == "jpg" { 1 } else { 2 };
+        let bit = variants::Format::from_ext(&format).map_or(0, variants::Format::bit);
         let list = made.entry(number).or_default();
         match list.iter_mut().find(|(w, _)| *w == width) {
             Some((_, m)) => *m |= bit,

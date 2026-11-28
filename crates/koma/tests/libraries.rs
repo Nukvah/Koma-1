@@ -135,6 +135,7 @@ fn schema_7_is_upgraded_in_place() {
          DROP TABLE library_settings;
          DROP INDEX series_library;
          ALTER TABLE series DROP COLUMN library;
+         ALTER TABLE variant_pages DROP COLUMN formats;
          INSERT INTO variant_pages (hash, version, error) VALUES (x'00', 1, NULL);
          PRAGMA user_version = 7;",
     )
@@ -150,7 +151,12 @@ fn schema_7_is_upgraded_in_place() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 14);
+    assert_eq!(version, 15);
+    let formats: i64 = conn
+        .query_row("SELECT formats FROM variant_pages", [], |r| r.get(0))
+        .unwrap();
+    // Made before AVIF: JPEG and WebP.
+    assert_eq!(formats, 3);
     let _ = fs::remove_dir_all(&root);
 }
 

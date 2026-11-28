@@ -256,6 +256,8 @@ pub(crate) fn cover_with(
             (false, false) => format!("/p/{}.{}", c.hash.to_hex(), c.format),
         };
         out.push_str("<picture>");
+        // No AVIF source: a 240-wide WebP is a few KB already, and a source
+        // more on every card costs the library page's 15 KiB.
         if has(Format::Webp) && has(Format::Jpeg) {
             let _ = write!(
                 out,
@@ -1097,7 +1099,7 @@ pub fn reader_js_url() -> &'static str {
 }
 
 /// One page of a book for the reader: its size as displayed and the widths
-/// of its variants, with which formats (bit 1: JPEG, bit 2: WebP).
+/// of its variants, with which formats ([`Format::bit`]: 1 JPEG, 2 WebP, 4 AVIF).
 pub struct ReaderPage {
     pub hash: blake3::Hash,
     pub format: String,
@@ -1249,10 +1251,22 @@ pub fn reader(r: &Reader<'_>) -> String {
         let _ = write!(head, "<link rel=prev href=\"{prev}\">");
     }
     let p = r.page;
+    // Only with AVIF variants: a page made before them would otherwise load
+    // its original there.
+    let avif = if p.variants.iter().any(|(_, m)| m & Format::Avif.bit() != 0) {
+        format!(
+            "<source type=image/avif srcset=\"{}\" sizes=\"{}\">",
+            p.srcset(Format::Avif.bit(), Format::Avif),
+            p.sizes()
+        )
+    } else {
+        String::new()
+    };
     let mut b = format!(
-        "<main class=stage><picture><source id=pgw type=image/webp srcset=\"{}\" sizes=\"{}\">\
+        "<main class=stage><picture>{}<source type=image/webp srcset=\"{}\" sizes=\"{}\">\
          <img id=pg src=\"{}\" srcset=\"{}\" sizes=\"{}\" width={} height={} alt=\"Page {number}\" \
          fetchpriority=high></picture></main>",
+        avif,
         p.srcset(2, Format::Webp),
         p.sizes(),
         p.url(),
