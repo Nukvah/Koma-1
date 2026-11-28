@@ -13,16 +13,19 @@ pub mod b64;
 pub mod blobs;
 pub mod catalog;
 pub mod cli;
+pub mod curate;
 pub mod download;
 pub mod epub;
 pub mod health;
 pub mod html;
+pub mod journal;
 pub mod kept;
 pub mod libraries;
 pub mod log;
 pub mod meta;
 pub mod names;
 pub mod natsort;
+pub mod organise;
 pub mod pages;
 pub mod password;
 pub mod scan;
@@ -150,8 +153,27 @@ fn apply_settings(data: &std::path::Path, catalog: &catalog::Catalog) {
     }
 }
 
-/// How often the worker looks for library settings changed in the UI.
-const SETTINGS_EVERY: Duration = Duration::from_secs(5);
+/// How often the worker looks for library settings and changes queued in
+/// the UI: often, so a quick change (a move, a delete) shows at once.
+const TICK: Duration = Duration::from_millis(250);
+
+/// How often the trash is checked for things past their keep time.
+const EXPIRE_EVERY: Duration = Duration::from_secs(60);
+
+/// What the worker looks at between jobs and while idle: library settings
+/// and changes queued in the UI, and now and then the trash's keep time.
+fn tick(
+    paths: &cli::Paths,
+    catalog: &mut catalog::Catalog,
+    expired: &std::cell::Cell<std::time::Instant>,
+) {
+    apply_settings(&paths.data, catalog);
+    organise::run(&paths.library, &paths.data, catalog);
+    if expired.get().elapsed() >= EXPIRE_EVERY {
+        expired.set(std::time::Instant::now());
+        organise::expire_trash(&paths.library, &paths.data, catalog);
+    }
+}
 
 /// Opens the catalogue under `paths.data` for writing, holding the worker
 /// lock so that only one process indexes into it. Errors are logged.
@@ -250,6 +272,7 @@ fn pass(
     should_stop: &dyn Fn() -> bool,
 ) -> Result<(), ()> {
     apply_settings(&paths.data, catalog);
+    organise::run(&paths.library, &paths.data, catalog);
     let started = std::time::Instant::now();
     log::info(
         "scan: started",
@@ -307,20 +330,25 @@ fn worker(paths: cli::Paths, rescan: Option<Duration>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // A second connection applies library settings between jobs, while the
-    // first is busy with a scan.
-    let settings = catalog::Catalog::open(&paths.data.join("koma.db")).ok();
+    // A second connection applies settings and changes between jobs, while
+    // the first is busy with a scan.
+    let side = std::cell::RefCell::new(catalog::Catalog::open(&paths.data.join("koma.db")).ok());
     let (stop, stopped) = std::sync::mpsc::channel::<()>();
     let work = move || {
         let _lock = lock;
         let stop_seen = std::cell::Cell::new(false);
-        let settings_checked = std::cell::Cell::new(std::time::Instant::now());
+        let checked = std::cell::Cell::new(std::time::Instant::now());
+        let expired = std::cell::Cell::new(
+            std::time::Instant::now()
+                .checked_sub(EXPIRE_EVERY)
+                .unwrap_or_else(std::time::Instant::now),
+        );
         let should_stop = || {
-            if let Some(c) = &settings
-                && settings_checked.get().elapsed() >= SETTINGS_EVERY
+            if checked.get().elapsed() >= TICK
+                && let Some(c) = side.borrow_mut().as_mut()
             {
-                settings_checked.set(std::time::Instant::now());
-                apply_settings(&paths.data, c);
+                checked.set(std::time::Instant::now());
+                tick(&paths, c, &expired);
             }
             if !stop_seen.get() {
                 stop_seen.set(!matches!(
@@ -346,20 +374,20 @@ fn worker(paths: cli::Paths, rescan: Option<Duration>) -> ExitCode {
                 return;
             }
             log::info("worker: idle", &[]);
-            // Until the next rescan, a look for changed library settings
-            // every few seconds.
+            // Until the next rescan, a look for settings and changes from
+            // the UI every quarter second.
             let idle_since = std::time::Instant::now();
             loop {
                 let wait = match rescan {
                     Some(every) => every.saturating_sub(idle_since.elapsed()),
-                    None => SETTINGS_EVERY,
+                    None => TICK,
                 };
                 if wait.is_zero() {
                     break;
                 }
-                match stopped.recv_timeout(wait.min(SETTINGS_EVERY)) {
+                match stopped.recv_timeout(wait.min(TICK)) {
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        apply_settings(&paths.data, &catalog);
+                        tick(&paths, &mut catalog, &expired);
                     }
                     _ => return,
                 }

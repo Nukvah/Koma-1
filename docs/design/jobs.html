@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jobs · Koma-1</title>
+<link rel="stylesheet" href="koma.css">
+</head>
+<body>
+<input type="checkbox" id="menu" class="menu" aria-label="show the menu">
+<header class="top">
+<a class="brand" href="library.html">KOMA-1</a>
+<form class="search" role="search" action="search.html">
+<label for="q">/</label>
+<input id="q" name="q" type="search" value="" placeholder="search all libraries: title, author:, tag:">
+</form>
+<label for="menu" class="menu-btn" aria-hidden="true">menu</label>
+<details class="umenu">
+<summary><span class="avatar" aria-hidden="true">T</span><span>tamsin ▾</span></summary>
+<ul>
+<li><span><small>signed in as</small> tamsin <span class="role">curator</span></span></li>
+<li><hr></li>
+<li><a href="account.html">account</a></li>
+<li><a href="settings.html">libraries</a></li>
+<li><hr></li>
+<li><form method="post" action="signin.html"><button type="submit">sign out</button></form></li>
+</ul>
+</details>
+</header>
+
+<div class="layout">
+<aside class="side" aria-label="Navigation and libraries">
+<nav aria-label="Main">
+<h2>// go</h2>
+<ul>
+<li><a href="library.html">&nbsp; library<span class="n">g l</span></a></li>
+<li><a href="#">&nbsp; recent<span class="n">g r</span></a></li>
+<li><a href="collections.html">&nbsp; collections<span class="n">g c</span></a></li>
+<li><a href="jobs.html" aria-current="page">&gt; jobs<span class="n">g j</span></a></li>
+<li><a href="trash.html">&nbsp; trash<span class="n">g t</span></a></li>
+<li><a href="settings.html">&nbsp; settings<span class="n">g s</span></a></li>
+</ul>
+</nav>
+<hr>
+<section class="tree">
+<h2>// libraries</h2>
+<ul>
+<li><a class="on" href="library.html" aria-current="true">▾ ~/manga<span class="n">214</span></a></li>
+<li><a class="sub" href="#">  ├─ Starfall Saga</a></li>
+<li><a class="sub" href="#">  └─ Unsorted</a></li>
+<li><a href="#">▸ ~/webtoons<span class="n">38</span></a></li>
+<li><a href="#">▸ ~/comics<span class="n">61</span></a></li>
+</ul>
+</section>
+<hr>
+<p class="status"><span class="ok">●</span> 1 job running · <a href="jobs.html">42%</a><br>trash: 3 items · 1.9 GB</p>
+</aside>
+
+<main>
+<div class="toolbar"><h1>jobs · <b>1 running, 1 waiting</b></h1>
+<div class="seg"><a href="#" aria-current="page">now</a><a href="#">journal</a></div></div>
+
+<section class="job">
+<div><b>Merge Moonforge Extras into Moonforge</b><br><small>by tamsin · started 14:02 · 61 of 146 files · 1.2 of 2.9 GB</small></div>
+<div class="row"><button class="btn" type="button">pause</button><button class="btn danger" type="button">cancel</button></div>
+<div class="meter" role="progressbar" aria-valuenow="42" aria-valuemin="0" aria-valuemax="100"><i style="--p:42%"></i></div>
+<small>now: Moonforge Extras/Moonforge 3.5.cbz → Moonforge/Moonforge 3.5.cbz</small>
+</section>
+
+<section class="job">
+<div><b>Write metadata.json for Harbor Lights (12 books)</b><br><small>by mirelle · waiting for the job above</small></div>
+<div class="row"><button class="btn danger" type="button">cancel</button></div>
+</section>
+
+<h2 class="section-h">done · undo stays possible while the files are as the job left them</h2>
+<section class="job done">
+<div><b>Trash Starfall v13, v14</b><br><small>by tamsin · 13:58 · 2 files · 380 MB</small></div>
+<div class="row"><button class="btn" type="button">undo</button><a href="#">journal</a></div>
+</section>
+<section class="job done">
+<div><b>Move 3 volumes of Starfall to Starfall Zero</b><br><small>by tamsin · 13:51 · 3 files</small></div>
+<div class="row"><button class="btn" type="button">undo</button><a href="#">journal</a></div>
+</section>
+<section class="job done">
+<div><b>Rename series Starfal → Starfall</b><br><small>by mirelle · yesterday · 1 folder · <span class="pending">undo not possible: the folder changed since</span></small></div>
+<div class="row"><a href="#">journal</a></div>
+</section>
+
+<h2 class="section-h">journal · append-only, one line per file</h2>
+<table class="tbl">
+<thead><tr><th scope="col">when</th><th scope="col">job</th><th scope="col">did</th><th scope="col" class="opt">from → to</th></tr></thead>
+<tbody>
+<tr><td>13:58:04</td><td>#212</td><td>trash</td><td class="opt">manga/Starfall Saga/Starfall/Starfall v14.cbz → .koma-trash/212/…</td></tr>
+<tr><td>13:58:04</td><td>#212</td><td>trash</td><td class="opt">manga/Starfall Saga/Starfall/Starfall v13.cbz → .koma-trash/212/…</td></tr>
+<tr><td>13:51:40</td><td>#211</td><td>move</td><td class="opt">…/Starfall/Starfall v09.cbz → …/Starfall Zero/Starfall v09 (2).cbz</td></tr>
+</tbody>
+</table>
+<p class="hint">Live: one event stream for the whole page (server-sent events); without JavaScript the page shows where things stood when it was loaded. Jobs carry on after a restart. Marking read, editing details and moving a few files are quick changes: they apply at once and show only in the journal.</p>
+</main>
+</div>
+</body>
+</html>

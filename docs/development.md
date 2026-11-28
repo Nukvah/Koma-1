@@ -484,6 +484,67 @@ docs/design (signin, setup, join, account, users, settings).
 - `koma account link <name>` prints a sign-in link from the shell (making
   the account, the admin if it is the first).
 
+## Organising
+
+`koma::organise` (plans, the worker's side), `koma::journal` (the
+catalogue's side), `koma::curate` (pages and requests); design in
+docs/design (select, move, jobs, trash, details).
+
+- **One write path.** `koma serve` checks who may make a change
+  (`curate::may_organise`: curators and the admin in shared libraries, the
+  owner in a `~name` folder), shows its plan, and queues it in accounts.db
+  (`ops`: kind, JSON payload, title, and a `control` the pages set to pause
+  or cancel). The worker looks every 250 ms (between scan jobs too, on a
+  second connection) and carries out each change in order
+  (`organise::run`), recording its state and progress in the catalogue
+  (`ops`), so serve still never writes the catalogue. A request waits up to
+  3 seconds for its change, so quick ones show at once; then it redirects
+  with `?done=<change>` for the undo note.
+- **Kinds**: `move` (books to a series, or a new series folder), `series`
+  (move or rename a series folder), `merge`, `trash`, `restore`, `erase`,
+  `details` (with `write`), `write` (`metadata.json`) and `undo`.
+- **Plans** (`organise::plan`) only look: every step's old and new path,
+  numbered “(2)” where the disk or an earlier step has the name. The worker
+  makes the plan again when it applies it, and each step first checks
+  whether it is already done, so a change cut short by a stop or a kill is
+  finished on the next start.
+- **The catalogue follows the disk.** After each rename the worker moves
+  the book (`Catalog::move_book`, through `relink`, so its id, progress,
+  edits and date added stay) or the folder (`Catalog::move_folder`: every
+  series and book under it), marks the folders involved to be read again,
+  and appends a journal line (`journal`: change, action, book, series,
+  from, to, and the size and time left at `to`). Folders it makes are
+  journaled too.
+- **Undo** (`undo` change) checks every line first: each file still at
+  `to` with the same size and time, each old place free, each trash item
+  still there; then replays the journal backwards. An erase cannot be
+  undone.
+- **The trash** is `/library/.koma-trash/<change>/<old path>`, hidden from
+  scans. A trashed book stays in the catalogue, gone and marked with its
+  trash item (`books.trash`), so it is never forgotten by the 30-day rule
+  for vanished books nor matched by another file's stamp; restoring moves
+  it back keeping its id. The worker erases items past the keep time
+  (accounts.db `meta` `trash-days`, 30 by default, 0 for never) once a
+  minute.
+- **Edits** are `edits (book, field, JSON value)`, written over the
+  details after every index (`journal::apply_edits`), so a rescan keeps
+  them. `metadata.json` is written next to an archive as
+  `<name>.metadata.json` (a temporary file, then a rename; one already
+  there is kept in the trash folder for undo) and read at index as the
+  strongest layer.
+- **Jobs**: `/jobs` lists changes (the admin sees everyone's, others their
+  own), and `GET /jobs/events` streams their state as server-sent events
+  every half second; `assets/curator/curator.js` (budget "Curator pages
+  JS") updates the page from it, and gives select mode shift-click runs.
+- **Progress** on series pages comes from what the account keeps
+  (`pos:`, `epos:`): the edge strip and corner tag of each book, “read on”
+  to the first one started, and read or unread from select mode.
+- Schema 13 adds `books.trash`, `ops`, `journal`, `trash` and `edits`;
+  accounts.db schema 2 adds `ops`. `tests/organise.rs` is M6's exit check:
+  a series moved and renamed keeps its id, progress and edits through a
+  rescan, and comes back from the trash with its progress after its
+  folder's parent was removed.
+
 ## Serving
 
 `koma serve` (`koma::serve`) opens the catalogue read-only and renders HTML
@@ -548,6 +609,11 @@ round (`-<column>`, `aria-sort` says which).
 | `GET /users`, `POST /users/{add,role,link,remove,handover}` | accounts, the admin's |
 | `POST /passkey/{new,add}`, `POST /passkey/signin/{begin,finish}` | passkeys (JSON) |
 | `POST /kept` | what the account keeps (form fields from `sendBeacon`) |
+| `GET /s/{id}?select`, `POST /organise` | select mode: mark read or unread, move, details, delete |
+| `GET /move`, `POST /move` | where to move books or a series, the plan, and applying it |
+| `GET /details`, `POST /details` | editing one or several books' details |
+| `GET /trash`, `POST /trash` | the trash: restore, delete for good, keep time |
+| `GET /jobs`, `GET /jobs/events`, `POST /jobs/{id}/{pause,resume,cancel,undo}` | changes, live |
 | `GET /search?q={query}&l={folder}` | search, in every library or one (see Search) |
 | `GET /s/{id}` | a series: its cover, facts and books, each with its cover |
 | `GET /a/koma.{hash}.css`, `/a/scroll.{hash}.js`, `/a/account.{hash}.js` | the stylesheet and scripts, cached for a year |

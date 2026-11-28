@@ -4,7 +4,7 @@ Koma-1 is one image with two long-running modes that share two folders:
 
 | Folder | Mount | Holds |
 |---|---|---|
-| `/library` | read-only | your books: CBZ, ZIP, CB7 (7z) and EPUB files, and folders of images. Koma-1 never writes here. |
+| `/library` | read-write for the worker, read-only for serve | your books: CBZ, ZIP, CB7 (7z) and EPUB files, and folders of images. Only the worker writes here, and only the changes you make in the UI (moves, renames, the trash, `metadata.json`), each journaled and undoable. |
 | `/data` | read-write | the catalogue (`koma.db`), the blob store (`blobs/`) and the accounts (`accounts.db`) |
 
 `koma worker` scans `/library` into `/data`. `koma serve` reads both and
@@ -68,7 +68,7 @@ services:
     healthcheck:
       disable: true   # the image's check probes HTTP, which only serve answers
     volumes:
-      - /path/to/library:/library:ro
+      - /path/to/library:/library   # read-write: moves, renames and the trash
       - koma-data:/data
     read_only: true
     cap_drop: [ALL]
@@ -157,6 +157,39 @@ Reading positions and reader settings belong to the account and follow it to
 every device. What a browser kept before accounts (M4 kept them in the
 browser) is added to the account at its first sign-in there, where the
 account has nothing for that book or series, then cleared from the browser.
+
+## Organising and the trash
+
+Curators and the admin organise the shared libraries; everyone organises
+their own `~name` folder. On a series page, **select** picks books to mark
+read or unread (anyone, for their own reading), move to another series or
+a new one, edit, or delete; **move or rename** moves the series' folder to
+another library or collection, renames it, or merges it into another
+series.
+
+- Every move is shown first as a plan: each file's old and new place, and
+  “(2)” where a name is taken (or skip that one). Nothing changes until it
+  is applied.
+- `koma serve` only queues the change; `koma worker` carries it out within
+  a moment, so it needs `/library` read-write. A short change shows at once;
+  a long one runs on `/jobs`, live, with pause, resume and cancel, and goes
+  on after a restart. Without a running worker, nothing is changed.
+- Books and series keep their ids, reading positions, edits and dates
+  through every move. Every file touched is written in an append-only
+  journal; **undo** puts it all back, as long as the files are as the change
+  left them.
+- **Delete** moves the files to `/library/.koma-trash` (same drive, so it
+  is instant), and the books leave the library at once. `/trash` restores
+  them (making any folder that has gone since, and adding “(2)” if the name
+  is taken) or deletes them for good. The worker erases what is older than
+  the keep time: 30 days unless the admin chooses 7, 14, 90 or “until
+  emptied”. Moving between two drives (a `~name` folder mounted apart, say)
+  is refused.
+- **Details** (title, number, year, people, genres, tags, summary,
+  direction, cover) are kept in the catalogue and win over the files at
+  every scan. On request they are written as `metadata.json` next to the
+  book (`Starfall v07.metadata.json`; inside a photo folder), which Koma-1
+  reads at the next index too; an archive's own bytes are never rewritten.
 
 ## Scanning
 

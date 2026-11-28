@@ -537,7 +537,13 @@ fn index_job(
         Source::Photos(listing) => plain(index_photos(library, listing)),
     };
     match read {
-        Ok((pages, meta_files, epub)) => {
+        Ok((pages, mut meta_files, epub)) => {
+            // Written next to an archive by Koma-1: over what is inside it.
+            if matches!(source, Source::Archive)
+                && let Some(side) = sidecar_meta(library, rel)
+            {
+                meta_files.push(side);
+            }
             // An EPUB's own metadata is the weakest layer.
             let meta = crate::meta::merge(epub.meta, crate::meta::read(&meta_files));
             let details = details(name, &meta);
@@ -569,6 +575,48 @@ fn index_job(
     Ok(())
 }
 
+/// Where a book at `rel` belongs, as the scan would place it: its folder,
+/// name, and series `(key, name)`. `photos`: a photo folder.
+pub(crate) fn place_of(rel: &str, photos: bool) -> (String, String, (String, String)) {
+    if photos {
+        (
+            rel.to_owned(),
+            last_part(rel).to_owned(),
+            series_of_folder(rel),
+        )
+    } else {
+        (
+            folder_of(rel).to_owned(),
+            stem(rel).to_owned(),
+            series_of(rel),
+        )
+    }
+}
+
+/// The `metadata.json` Koma-1 writes for a book, relative to the library:
+/// next to an archive (`Starfall v07.metadata.json`), inside a photo folder.
+pub fn sidecar_of(rel: &str, photos: bool) -> String {
+    if photos {
+        format!("{rel}/metadata.json")
+    } else {
+        match folder_of(rel) {
+            "" => format!("{}.metadata.json", stem(rel)),
+            dir => format!("{dir}/{}.metadata.json", stem(rel)),
+        }
+    }
+}
+
+/// An archive's `metadata.json` next to it, as the strongest layer.
+fn sidecar_meta(library: &Path, rel: &str) -> Option<(usize, Vec<u8>)> {
+    let path = library.join(sidecar_of(rel, false));
+    let meta = fs::symlink_metadata(&path).ok()?;
+    if !meta.is_file() || meta.len() > crate::meta::MAX_META_BYTES {
+        return None;
+    }
+    let layer = crate::meta::layer_of("metadata.json")?;
+    Some((layer, fs::read(path).ok()?))
+}
+
 /// What only an EPUB has: its chapters, contents and package metadata.
 #[derive(Default)]
 struct Epub {
@@ -581,6 +629,11 @@ enum Source {
     Archive,
     /// A photo folder, with its images and metadata files.
     Photos(Listing),
+}
+
+/// The folder a file is in, relative to the library; `""` for the root.
+pub(crate) fn folder_of_path(rel: &str) -> &str {
+    folder_of(rel)
 }
 
 /// The folder a file is in, relative to the library; `""` for the root.
@@ -718,7 +771,7 @@ fn unix_now() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-fn mtime_ns(meta: &Metadata) -> i64 {
+pub(crate) fn mtime_ns(meta: &Metadata) -> i64 {
     meta.modified()
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())

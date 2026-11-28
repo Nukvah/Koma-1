@@ -16,7 +16,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA: &str = "
 CREATE TABLE meta (
@@ -90,6 +90,20 @@ CREATE TABLE setting_changes (
     at        INTEGER NOT NULL
 );
 ";
+
+/// Schema 1 to 2: the queue of changes to the library (organising), which
+/// the worker carries out; `koma serve` writes them and their pause or
+/// cancel, the worker records how each goes in the catalogue.
+const OPS: &str = "CREATE TABLE ops (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    account   INTEGER,
+    by        TEXT NOT NULL,          -- the account's name, kept if it is removed
+    kind      TEXT NOT NULL,          -- see crate::organise
+    payload   TEXT NOT NULL,          -- JSON
+    title     TEXT NOT NULL,          -- 'Move 3 books of Starfall to Starfall Zero'
+    control   TEXT NOT NULL DEFAULT '',  -- '', 'pause' or 'cancel'
+    created   INTEGER NOT NULL
+);";
 
 /// A session kept with 'keep me signed in' lasts this long after it was
 /// last used.
@@ -170,6 +184,19 @@ pub struct Passkey {
     pub used: Option<i64>,
 }
 
+/// A change to the library, queued.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Op {
+    pub id: i64,
+    pub account: Option<i64>,
+    pub by: String,
+    pub kind: String,
+    pub payload: String,
+    pub title: String,
+    pub control: String,
+    pub created: i64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SettingChange {
     pub id: i64,
@@ -239,7 +266,10 @@ impl Accounts {
         let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
         match version {
             0 => conn.execute_batch(&format!(
-                "BEGIN; {SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                "BEGIN; {SCHEMA} {OPS} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+            ))?,
+            1 => conn.execute_batch(&format!(
+                "BEGIN; {OPS} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))?,
             SCHEMA_VERSION => {}
             _ => return Err(Error::InvalidQuery),
@@ -790,6 +820,104 @@ impl Accounts {
             [account],
             |r| r.get(0),
         )
+    }
+
+    /// Forgets `keys` for `account` (marking a book unread).
+    pub fn unkeep(&self, account: i64, keys: &[String]) -> Result<(), Error> {
+        for k in keys {
+            self.conn.execute(
+                "DELETE FROM kept WHERE account = ?1 AND key = ?2",
+                params![account, k],
+            )?;
+        }
+        Ok(())
+    }
+
+    // Changes to the library.
+
+    pub fn queue_op(
+        &self,
+        account: i64,
+        by: &str,
+        kind: &str,
+        payload: &str,
+        title: &str,
+    ) -> Result<i64, Error> {
+        self.conn.execute(
+            "INSERT INTO ops (account, by, kind, payload, title, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![account, by, kind, payload, title, now()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    fn op_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Op> {
+        Ok(Op {
+            id: r.get(0)?,
+            account: r.get(1)?,
+            by: r.get(2)?,
+            kind: r.get(3)?,
+            payload: r.get(4)?,
+            title: r.get(5)?,
+            control: r.get(6)?,
+            created: r.get(7)?,
+        })
+    }
+
+    pub fn op(&self, id: i64) -> Result<Option<Op>, Error> {
+        self.conn
+            .query_row(
+                "SELECT id, account, by, kind, payload, title, control, created FROM ops WHERE id = ?1",
+                [id],
+                Self::op_row,
+            )
+            .optional()
+    }
+
+    /// Changes queued after `id`, oldest first.
+    pub fn ops_after(&self, id: i64) -> Result<Vec<Op>, Error> {
+        let mut st = self.conn.prepare_cached(
+            "SELECT id, account, by, kind, payload, title, control, created FROM ops
+             WHERE id > ?1 ORDER BY id LIMIT 100",
+        )?;
+        st.query_map([id], Self::op_row)?.collect()
+    }
+
+    /// The most recent changes, newest first.
+    pub fn recent_ops(&self, limit: usize) -> Result<Vec<Op>, Error> {
+        let mut st = self.conn.prepare_cached(
+            "SELECT id, account, by, kind, payload, title, control, created FROM ops
+             ORDER BY id DESC LIMIT ?1",
+        )?;
+        st.query_map([limit as i64], Self::op_row)?.collect()
+    }
+
+    /// Asks the worker to pause (`pause`), go on (``) or cancel (`cancel`).
+    pub fn set_control(&self, id: i64, control: &str) -> Result<bool, Error> {
+        Ok(self.conn.execute(
+            "UPDATE ops SET control = ?2 WHERE id = ?1",
+            params![id, control],
+        )? == 1)
+    }
+
+    /// Days the trash keeps things; 0: until emptied. 30 unless set.
+    pub fn trash_days(&self) -> Result<i64, Error> {
+        let v: Option<Vec<u8>> = self
+            .conn
+            .query_row("SELECT value FROM meta WHERE key = 'trash-days'", [], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        Ok(v.and_then(|v| String::from_utf8(v).ok()?.parse().ok())
+            .unwrap_or(30))
+    }
+
+    pub fn set_trash_days(&self, days: i64) -> Result<(), Error> {
+        self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('trash-days', ?1)
+             ON CONFLICT (key) DO UPDATE SET value = ?1",
+            [days.to_string().into_bytes()],
+        )?;
+        Ok(())
     }
 
     // Library settings.

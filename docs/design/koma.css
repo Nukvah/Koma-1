@@ -167,3 +167,36 @@ button:focus-visible,select:focus-visible,summary:focus-visible{outline:2px soli
 .umenu li>hr{padding:0}
 .scroll{overflow-x:auto}
 @media (max-width:760px){.umenu summary{padding:0 12px}.umenu summary span+span{display:none}}
+
+/* Organising (M6): selection, plans, jobs, trash, details */
+.pick{position:relative;display:flex;flex-direction:column;gap:5px;cursor:pointer}
+.pick input{position:absolute;top:6px;left:6px;z-index:2;width:22px;height:22px;accent-color:var(--accent)}
+.pick:has(input:checked) .cover{outline:3px solid var(--accent);outline-offset:3px}
+.pick span{font-size:12px;color:var(--dim)}
+.actbar{position:sticky;bottom:0;z-index:3;display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:12px 16px;background:var(--raised);border:2px solid var(--accent)}
+.actbar b{color:var(--bright)}
+.actbar .btn{min-height:36px}
+.toast{display:flex;align-items:center;gap:16px;padding:10px 14px;border:2px solid var(--line2);border-left:4px solid var(--ok);background:var(--raised)}
+.toast .btn{min-height:32px;margin-left:auto}
+.plan{width:100%;border-collapse:collapse;font-size:13px}
+.plan td{padding:5px 10px;border-bottom:1px dashed var(--line);vertical-align:top;overflow-wrap:anywhere}
+.plan .from{color:var(--dim);text-decoration:line-through}
+.plan .to{color:var(--bright)}
+.plan .warn td{background:color-mix(in srgb,#E5534B 12%,transparent)}
+.meter{height:10px;background:var(--bg);border:1px solid var(--line2)}
+.meter i{display:block;height:100%;width:var(--p);background:var(--accent)}
+.job{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 16px;padding:14px 16px;border:2px solid var(--line2)}
+.job .meter{grid-column:1/-1}
+.job small{color:var(--dim)}
+.job.done{border-style:dashed}
+.chips input{border:0;background:none;color:var(--text);font:inherit;min-width:8ch}
+.chips .x{margin-left:6px;color:var(--dim)}
+textarea{font:inherit;padding:7px 10px;background:var(--panel);border:1px solid var(--line2);color:var(--text);min-height:7em}
+.covers{display:grid;grid-template-columns:repeat(auto-fill,minmax(70px,1fr));gap:10px}
+.covers label{position:relative;cursor:pointer}
+.covers input{position:absolute;opacity:0}
+.covers .cover{font-size:11px;padding:4px}
+.covers input:checked+.cover{outline:3px solid var(--accent);outline-offset:2px}
+.covers input:focus-visible+.cover{outline:2px dashed var(--accent);outline-offset:4px}
+.left{color:var(--accent)}
+.left.soon{color:#E5534B}

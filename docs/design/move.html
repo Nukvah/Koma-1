@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Move · Koma-1</title>
+<link rel="stylesheet" href="koma.css">
+</head>
+<body>
+<input type="checkbox" id="menu" class="menu" aria-label="show the menu">
+<header class="top">
+<a class="brand" href="library.html">KOMA-1</a>
+<form class="search" role="search" action="search.html">
+<label for="q">/</label>
+<input id="q" name="q" type="search" value="" placeholder="search all libraries: title, author:, tag:">
+</form>
+<label for="menu" class="menu-btn" aria-hidden="true">menu</label>
+<details class="umenu">
+<summary><span class="avatar" aria-hidden="true">T</span><span>tamsin ▾</span></summary>
+<ul>
+<li><span><small>signed in as</small> tamsin <span class="role">curator</span></span></li>
+<li><hr></li>
+<li><a href="account.html">account</a></li>
+<li><a href="settings.html">libraries</a></li>
+<li><hr></li>
+<li><form method="post" action="signin.html"><button type="submit">sign out</button></form></li>
+</ul>
+</details>
+</header>
+
+<div class="layout">
+<aside class="side" aria-label="Navigation and libraries">
+<nav aria-label="Main">
+<h2>// go</h2>
+<ul>
+<li><a href="library.html" aria-current="page">&gt; library<span class="n">g l</span></a></li>
+<li><a href="#">&nbsp; recent<span class="n">g r</span></a></li>
+<li><a href="collections.html">&nbsp; collections<span class="n">g c</span></a></li>
+<li><a href="jobs.html">&nbsp; jobs<span class="n">g j</span></a></li>
+<li><a href="trash.html">&nbsp; trash<span class="n">g t</span></a></li>
+<li><a href="settings.html">&nbsp; settings<span class="n">g s</span></a></li>
+</ul>
+</nav>
+<hr>
+<section class="tree">
+<h2>// libraries</h2>
+<ul>
+<li><a class="on" href="library.html" aria-current="true">▾ ~/manga<span class="n">214</span></a></li>
+<li><a class="sub" href="#">  ├─ Starfall Saga</a></li>
+<li><a class="sub" href="#">  └─ Unsorted</a></li>
+<li><a href="#">▸ ~/webtoons<span class="n">38</span></a></li>
+<li><a href="#">▸ ~/comics<span class="n">61</span></a></li>
+</ul>
+</section>
+<hr>
+<p class="status"><span class="ok">●</span> 1 job running · <a href="jobs.html">42%</a><br>trash: 3 items · 1.9 GB</p>
+</aside>
+
+<main>
+<div class="toolbar"><h1>move · <b>3 volumes of Starfall</b></h1></div>
+
+<div class="pair">
+<form class="box form" method="get">
+<h2>to</h2>
+<label>library<select name="l"><option selected>Manga</option><option>Webtoons</option><option>Comics</option><option>Sketchbooks (only yours)</option></select></label>
+<label>series<select name="s"><option>Starfall</option><option selected>Starfall Zero</option><option>Starfall Tales</option><option>Moonforge</option><option>Unsorted</option><option>a new series…</option></select></label>
+<label>new series name<input name="name" placeholder="only for a new series"></label>
+<button class="btn" type="submit">show the plan</button>
+<small>Moving a whole series instead (from its page) picks a library and a collection, or another series to merge into.</small>
+</form>
+
+<section class="box">
+<h2>what changes</h2>
+<div class="status">
+<p>3 files move, 0 are renamed. 1 needs a choice.</p>
+<p>Each book keeps its id, reading positions, edits and date added; covers and page variants are kept, nothing is read again.</p>
+<p>The plan is a dry run: nothing has changed yet. Applying it is one job, journaled, with undo.</p>
+</div>
+</section>
+</div>
+
+<h2 class="section-h">plan · dry run</h2>
+<table class="plan">
+<tbody>
+<tr><td>1</td><td><div class="from">manga/Starfall Saga/Starfall/Starfall v07.cbz</div><div class="to">manga/Starfall Saga/Starfall Zero/Starfall v07.cbz</div></td><td>move</td></tr>
+<tr><td>2</td><td><div class="from">manga/Starfall Saga/Starfall/Starfall v08.cbz</div><div class="to">manga/Starfall Saga/Starfall Zero/Starfall v08.cbz</div></td><td>move</td></tr>
+<tr class="warn"><td>3</td><td><div class="from">manga/Starfall Saga/Starfall/Starfall v09.cbz</div><div class="to">manga/Starfall Saga/Starfall Zero/Starfall v09 (2).cbz</div>
+<div class="hint">Starfall Zero already has a file of that name (same size: maybe the same book).</div></td>
+<td><select aria-label="for v09"><option>keep both</option><option>skip</option><option>trash the other</option></select></td></tr>
+</tbody>
+</table>
+
+<div class="actbar">
+<b>3 moves</b>
+<button class="btn primary" type="submit">apply <kbd>↵</kbd></button>
+<a class="btn" href="select.html">cancel</a>
+<span class="hint">a small plan applies at once; a large one runs as a job you can pause</span>
+</div>
+</main>
+</div>
+</body>
+</html>

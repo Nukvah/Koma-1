@@ -144,11 +144,13 @@ Goal: every change to the library is safe, visible and undoable.
 - Move chapters and series between series, collections and libraries; merge series;
   multi-select with mark read and delete; an Unsorted series for chapters with a number but
   no series name *(proven)*.
-- Trash for deletes: gone from the library at once with Undo; a trash page with size, days
+- Trash for deletes, in `/library/.koma-trash` (the worker mounts `/library` read-write):
+  gone from the library at once with Undo; a trash page with size, days
   left and where it was; restore that recreates missing folders and renames on a clash; keep
   time of 7, 14, 30 or 90 days or until emptied *(proven)*.
 - Edit details: author, publisher, genres, tags, summary, year, direction and cover, saved in
-  SQLite at once and written into the files as `metadata.json` only on request *(proven)*.
+  SQLite at once and written next to the book as `metadata.json` only on request *(proven)*.
+- Curators and the admin organise; readers only read.
 
 Exit: moving and renaming a series keeps its id, progress and edits; a deleted series comes
 back with its progress after its folder was removed.

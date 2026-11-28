@@ -16,6 +16,11 @@ Open any `.html` file here in a browser; they share `koma.css` and use no JavaSc
 | `join.html` | a one-time sign-in link: the new account chooses its password |
 | `account.html` | your account: password, passkeys, devices signed in, where your progress is |
 | `users.html` | user management (admin): roles, sign-in links, removing, handing over the admin role |
+| `select.html` | a series in select mode: pick volumes, then mark read, move, edit details or delete (with undo) |
+| `move.html` | where to move them, and the plan as a dry run: old and new paths, clashes to decide |
+| `jobs.html` | jobs: live progress, pause and cancel, undo of finished ones, the journal |
+| `trash.html` | the trash: where each thing was, size, days left; restore, delete for good, keep time |
+| `details.html` | editing a book's (or several books') details and cover; writing `metadata.json` on request |
 | `states.html` | empty and error states, one block per screen |
 | `reader.html` | reading: the page only, with the tap zones shown once on the first open |
 | `reader-bars.html` | the bars a tap shows: title and back; scrubber with page preview, thumbnails, mode, fit, direction |
@@ -231,3 +236,43 @@ Also chosen with the owner (built in M5 as proposed here):
   cached for a year by any cache; only someone who already has the page can
   know its hash. Every HTML page, `/b/`, `/e/` and `/d/` need a signed-in
   account that may see the book.
+
+## Organising (M6)
+
+Chosen with the owner, and built:
+
+- **Curators and the admin organise** (move, merge, rename, delete, edit
+  details, empty the trash); readers only read, and mark their own reading.
+  In your own `~name` folder you organise whatever your role.
+- **The trash is `/library/.koma-trash`**, on the same drive as the books:
+  a delete or a restore is a rename, instant even for a large volume. Scans
+  never look inside it. The worker needs `/library` read-write; `koma serve`
+  keeps it read-only.
+- **`metadata.json` is written next to the book** (`Starfall v07.metadata.json`
+  beside the archive; inside a photo folder), only on request. An archive's
+  own bytes are never rewritten, so page hashes and variants stay valid.
+  Ingest reads that file too, over the one inside the archive.
+- **Select mode** on a series page: checkboxes on the cards, the actions in
+  a bar at the bottom (shift-click picks a run). Without JavaScript it is a
+  plain form. A series' own page also offers “move or rename” and “delete
+  series”.
+- **Every move is a plan first**: each file's old and new path, and “(2)”
+  where a name is taken (or skip that file). Applying it is one journaled
+  change.
+- **Quick changes show at once** (the request waits a moment for the
+  worker) with an undo note; long ones run on `/jobs`, live over one
+  server-sent events stream, with pause, resume and cancel, and continue
+  after a restart.
+- **Undo** replays the journal backwards, and only while each file is still
+  as the change left it; otherwise it says why not.
+- **Trash**: kept 30 days by default (7, 14, 90 or until emptied, set by
+  the admin). Restore recreates missing folders and adds “(2)” on a clash;
+  ids, progress and edits come back with the books.
+- **Details** are saved in the catalogue and win over the files at every
+  scan. With several books, a field shown as “mixed” keeps each book's own
+  value unless you type in it.
+- **Progress on the cover**: series pages now show each book's edge strip
+  and corner tag from what the account keeps, and “read on” goes to the
+  book started.
+- Not built yet: select mode on library pages (whole series at once), and
+  the mockup's keys (`x`, `m`, `e`, `u`).
