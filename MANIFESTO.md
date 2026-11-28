@@ -111,7 +111,7 @@ upload or import job
   → page order (natural sort), spread detection (aspect > 1.2 = double page)
   → job queue (SQLite table)
   → variants: decode, resize, encode; pages in parallel, one per core the worker
-    is given (--concurrency, default: all of them), nice 19, ionice idle
+    is given (--concurrency, default: all of them), nice 19 (lowest I/O priority too)
 ```
 
 Ingest may be slow. Serving never is.

@@ -468,8 +468,17 @@ pub fn run_jobs(
         match job.kind {
             JobKind::Index => index_job(library, &blobs, catalog, &job.path, report)?,
             JobKind::Variants => {
-                let (end, pages) =
-                    variants::run_job(library, &blobs, catalog, &job.path, should_stop)?;
+                // A job the worker died on runs one page at a time, so that
+                // the page that kills it is found (`variants::give_up_page`).
+                let one_at_a_time = job.attempts > 1;
+                let (end, pages) = variants::run_job(
+                    library,
+                    &blobs,
+                    catalog,
+                    &job.path,
+                    should_stop,
+                    one_at_a_time,
+                )?;
                 report.variant_pages += pages;
                 if end == variants::JobEnd::Stopped {
                     catalog.release_job(job.id)?;

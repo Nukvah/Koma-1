@@ -183,11 +183,11 @@ serving never resizes or transcodes (`koma::variants`):
   that leaves the library stay on disk until `koma scrub` removes them.
 - Once the job queue is empty, every present book with a page lacking
   variants gets a `variants` job. Index jobs always go first, so a new book is
-  readable before its variants exist. A job makes one page at a time and
-  records each before the next, so a stop (checked between pages; the job
-  goes back in the queue without counting the attempt) or a kill redoes at
-  most one page. If the worker dies on the same page three times, that page
-  alone is given up. The test `tests/variants.rs` kills `koma worker` with
+  readable before its variants exist. A job records each page as soon as it
+  is made, so a stop (checked before each page is started; those under way
+  are finished, and the job goes back in the queue without counting the
+  attempt) or a kill redoes at most the pages that were under way. If the
+  worker dies on the same page three times, that page alone is given up. The test `tests/variants.rs` kills `koma worker` with
   SIGKILL mid-book and checks that a restart finishes, redoing nothing else.
 - `variants::VERSION` names the settings (widths, formats, qualities) and is
   part of every variant's file name and URL. Raising it makes the worker redo
@@ -195,10 +195,14 @@ serving never resizes or transcodes (`koma::variants`):
   a year under the old URLs are never wrong, only old. A page's files of an
   older version are removed when it is made again. Version 2: JPEG through
   jpegli.
-- Today: one page at a time on one thread, so that on 2 CPUs the other one
-  stays free for `koma serve`. To change (manifesto, principle 10; plan in
-  [m9-progress.md](m9-progress.md#threading)): pages in parallel, one per core
-  the worker is given, the worker at low priority so `serve` comes first.
+- Pages in parallel (manifesto, principle 10): `variants::run_job` makes
+  `--concurrency` pages at once (by default one per CPU the process may
+  use), as many as fit in half its memory, counting twice a page's decoded
+  pixels each. Each page is made on one thread, AVIF in one tile, so the
+  bytes are the same whatever the number (`tests/parallel.rs`). Only the
+  job's thread writes the catalogue; the others read pages and write blobs.
+  A job the worker died on runs one page at a time, so the page that kills
+  it is the one given up. The worker runs at nice 19.
 
 ## Catalogue and scan
 

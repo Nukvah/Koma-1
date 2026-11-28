@@ -34,6 +34,9 @@ Options:
                     Default: $KOMA_DATA, else /data
   --rescan <min>    Minutes between the worker's rescans; 0: only at start.
                     Default: $KOMA_RESCAN, else 15
+  --concurrency <n> Pages made at once (worker, scan): a number, or auto for
+                    one per CPU koma may use. Default: $KOMA_CONCURRENCY,
+                    else auto
   --trust-header <name>
                     Sign in by this header from a sign-in proxy (serve),
                     e.g. Remote-User. Default: $KOMA_TRUST_HEADER, else off
@@ -60,8 +63,14 @@ pub enum Command {
         paths: Paths,
         /// Time between rescans; `None`: only when the worker starts.
         rescan: Option<Duration>,
+        /// Pages made at once; 0: one per CPU (`variants::set_workers`).
+        concurrency: usize,
     },
-    Scan(Paths),
+    Scan {
+        paths: Paths,
+        /// As for the worker.
+        concurrency: usize,
+    },
     Scrub,
     Healthcheck {
         listen: SocketAddr,
@@ -84,6 +93,7 @@ pub struct Env {
     pub library: Option<OsString>,
     pub data: Option<OsString>,
     pub rescan: Option<OsString>,
+    pub concurrency: Option<OsString>,
     pub trust_header: Option<OsString>,
     pub trust_proxy: Option<OsString>,
 }
@@ -95,6 +105,7 @@ impl Env {
             library: std::env::var_os("KOMA_LIBRARY"),
             data: std::env::var_os("KOMA_DATA"),
             rescan: std::env::var_os("KOMA_RESCAN"),
+            concurrency: std::env::var_os("KOMA_CONCURRENCY"),
             trust_header: std::env::var_os("KOMA_TRUST_HEADER"),
             trust_proxy: std::env::var_os("KOMA_TRUST_PROXY"),
         }
@@ -175,14 +186,23 @@ where
             })
         }
         "worker" => {
-            let opts = options(rest, &["--library", "--data", "--rescan"])?;
+            let opts = options(rest, &["--library", "--data", "--rescan", "--concurrency"])?;
             let rescan = rescan(opts.get("--rescan"), env.rescan.clone())?;
+            let concurrency = concurrency(opts.get("--concurrency"), env.concurrency.clone())?;
             Ok(Command::Worker {
                 paths: paths_from(&opts, env)?,
                 rescan,
+                concurrency,
             })
         }
-        "scan" => paths(rest, env).map(Command::Scan),
+        "scan" => {
+            let opts = options(rest, &["--library", "--data", "--concurrency"])?;
+            let concurrency = concurrency(opts.get("--concurrency"), env.concurrency.clone())?;
+            Ok(Command::Scan {
+                paths: paths_from(&opts, env)?,
+                concurrency,
+            })
+        }
         "scrub" => options(rest, &[]).map(|_| Command::Scrub),
         other => Err(format!("unknown command: {other}")),
     }
@@ -228,8 +248,19 @@ fn rescan(flag: Option<&String>, env: Option<OsString>) -> Result<Option<Duratio
     Ok((minutes > 0).then(|| Duration::from_secs(u64::from(minutes) * 60)))
 }
 
-fn paths(rest: &[String], env: Env) -> Result<Paths, String> {
-    paths_from(&options(rest, &["--library", "--data"])?, env)
+/// `--concurrency` wins over `KOMA_CONCURRENCY`, which wins over `auto`:
+/// a number of pages from 1 to 1024, or 0 for `auto`.
+fn concurrency(flag: Option<&String>, env: Option<OsString>) -> Result<usize, String> {
+    let raw = pick(flag, env, "KOMA_CONCURRENCY", "auto")?;
+    if raw == "auto" {
+        return Ok(0);
+    }
+    match raw.parse::<usize>() {
+        Ok(n @ 1..=1024) => Ok(n),
+        _ => Err(format!(
+            "not a number of pages from 1 to 1024, or auto: {raw}"
+        )),
+    }
 }
 
 fn paths_from(opts: &HashMap<&'static str, String>, env: Env) -> Result<Paths, String> {
@@ -324,6 +355,7 @@ mod tests {
                     data: DEFAULT_DATA.into()
                 },
                 rescan: Some(Duration::from_secs(15 * 60)),
+                concurrency: 0,
             })
         );
         assert_eq!(p(&["scrub"], None), Ok(Command::Scrub));
@@ -361,12 +393,40 @@ mod tests {
         };
         assert_eq!(
             parse(["scan", "--data=/d"].map(OsString::from), env),
-            Ok(Command::Scan(Paths {
-                library: "/env/lib".into(),
-                data: "/d".into()
-            }))
+            Ok(Command::Scan {
+                paths: Paths {
+                    library: "/env/lib".into(),
+                    data: "/d".into()
+                },
+                concurrency: 0,
+            })
         );
         assert!(p(&["healthcheck", "--library", "/x"], None).is_err());
+    }
+
+    #[test]
+    fn concurrency() {
+        let pages = |args: &[&str], env: Option<&str>| match parse(
+            args.iter().map(OsString::from),
+            Env {
+                concurrency: env.map(OsString::from),
+                ..Env::default()
+            },
+        ) {
+            Ok(Command::Worker { concurrency, .. } | Command::Scan { concurrency, .. }) => {
+                Ok(concurrency)
+            }
+            other => Err(format!("{other:?}")),
+        };
+        assert_eq!(pages(&["worker"], None), Ok(0));
+        assert_eq!(pages(&["worker"], Some("3")), Ok(3));
+        assert_eq!(pages(&["worker", "--concurrency=8"], Some("3")), Ok(8));
+        assert_eq!(pages(&["scan", "--concurrency", "auto"], Some("3")), Ok(0));
+        assert_eq!(pages(&["scan", "--concurrency", "1"], None), Ok(1));
+        assert!(pages(&["worker", "--concurrency", "0"], None).is_err());
+        assert!(pages(&["worker", "--concurrency", "many"], None).is_err());
+        assert!(pages(&["worker", "--concurrency", "2000"], None).is_err());
+        assert!(p(&["serve", "--concurrency", "2"], None).is_err());
     }
 
     #[test]

@@ -75,6 +75,8 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
+    # Readers first: when both are busy, serve gets four times the CPU.
+    cpu_shares: 256
 
 volumes:
   koma-data:
@@ -221,6 +223,14 @@ or rename them, also with a file manager. A book that disappears is kept out
 of sight for 30 days, so a drive mounted late or a folder put back brings its
 books back as they were, without reading them again.
 
+The worker makes page copies on every CPU it may use (`--concurrency`), as
+many pages at once as fit in half its memory, and at the lowest priority
+(nice 19), so that it takes what is left over. Nice only orders the threads
+of one container, though: between containers the kernel shares CPU by
+weight, which is why the Compose file gives the worker `cpu_shares: 256`
+(serve keeps the default 1024). A CPU limit (`cpus:`) caps the worker too;
+`--concurrency` follows it.
+
 Only one worker or `koma scan` can use a data folder at a time; a second one
 exits with an error. A worker that is stopped or killed in the middle of a
 book picks that book up again when it restarts. A book that stops the worker
@@ -247,6 +257,7 @@ Until the first scan has finished, `/` answers 503.
 | `--library <dir>` | `KOMA_LIBRARY` | `/library` |
 | `--data <dir>` | `KOMA_DATA` | `/data` |
 | `--rescan <minutes>` (worker) | `KOMA_RESCAN` | `15`; `0` scans only at start |
+| `--concurrency <pages>` (worker, scan) | `KOMA_CONCURRENCY` | `auto`: one page per CPU koma may use |
 | `--trust-header <name>` (serve) | `KOMA_TRUST_HEADER` | off |
 | `--trust-proxy <addresses>` (serve) | `KOMA_TRUST_PROXY` | none |
 

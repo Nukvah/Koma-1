@@ -437,8 +437,10 @@ fn a_stop_between_pages_keeps_what_is_done() {
     let mut catalog = Catalog::open(&db(&data)).unwrap();
 
     // Index only, then queue v01's variants alone (two big pages) and stop
-    // after its first: the order books are found in depends on the file
-    // system, so the test picks the book itself.
+    // once one is done: the order books are found in depends on the file
+    // system, so the test picks the book itself. Pages are made several at
+    // once, so its second may be under way by then: it is finished, and
+    // kept, before the job stops.
     let mut report = discover(&lib, &mut catalog, Check::Files).unwrap();
     let db_path = db(&data);
     run_jobs(&lib, &data, &mut catalog, &mut report, &|| {
@@ -454,21 +456,24 @@ fn a_stop_between_pages_keeps_what_is_done() {
         variant_pages_done(&db_path) >= 1
     })
     .unwrap();
-    assert_eq!(report.variant_pages, 1);
-    assert_eq!(catalog.variant_page_count(VERSION).unwrap(), 1);
-    // v01's job is back in the queue, its attempt not counted.
-    assert_eq!(catalog.job_count().unwrap(), 1);
-    let job = catalog.claim_job().unwrap().unwrap();
-    assert_eq!(job.kind, JobKind::Variants);
-    assert_eq!(job.path, "Starfall/Starfall v01.cbz");
-    assert_eq!(job.attempts, 1);
-    catalog.requeue_running().unwrap();
+    let first = report.variant_pages;
+    assert!((1..=2).contains(&first), "{first}");
+    assert_eq!(catalog.variant_page_count(VERSION).unwrap(), first as i64);
+    if first == 1 {
+        // v01's job is back in the queue, its attempt not counted.
+        assert_eq!(catalog.job_count().unwrap(), 1);
+        let job = catalog.claim_job().unwrap().unwrap();
+        assert_eq!(job.kind, JobKind::Variants);
+        assert_eq!(job.path, "Starfall/Starfall v01.cbz");
+        assert_eq!(job.attempts, 1);
+        catalog.requeue_running().unwrap();
+    }
 
     let mut rest = discover(&lib, &mut catalog, Check::Files).unwrap();
     run_jobs(&lib, &data, &mut catalog, &mut rest, &|| false).unwrap();
-    // v01's second page first, then Mirelle Set's page and v02's JPEG; the
-    // page v02 shares with v01 is done by then.
-    assert_eq!(rest.variant_pages, 3);
+    // What v01 had left, then Mirelle Set's page and v02's JPEG; the page
+    // v02 shares with v01 is done by then. Nothing is made twice.
+    assert_eq!(first + rest.variant_pages, 4);
     assert_eq!(catalog.variant_page_count(VERSION).unwrap(), 4);
     assert_eq!(catalog.job_count().unwrap(), 0);
     let _ = fs::remove_dir_all(&root);
