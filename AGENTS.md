@@ -32,7 +32,8 @@ A self-hosted manga server with a web library and reader, shipped as Docker on L
 ## Budgets (CI-enforced)
 
 The numbers live in [budgets.toml](budgets.toml); `cargo xtask budgets` checks them on every pull request,
-on ARM64 in a container capped at 2 CPUs and 1 GB. At the time of writing:
+on ARM64 in a container capped at 2 CPUs and 1 GB: the floor every release must meet, not the
+machine to tune for (manifesto, principle 10). At the time of writing:
 
 | | Limit |
 |---|---|

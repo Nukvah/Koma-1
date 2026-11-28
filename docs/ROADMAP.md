@@ -198,6 +198,8 @@ Goal: save disk space when you decide to, and see where it went.
 - Presets: Default (AVIF, quality 70, speed 6, full colour, grayscale for black-and-white
   pages), Lossless (lossless WebP for PNG, BMP and TIFF books), and custom ones *(proven)*.
 - AVIF page variants next to the WebP and JPEG ones, with the same encoder.
+- The worker in parallel: pages on every core it is given, at low priority so serving comes
+  first; 2 CPUs and 1 GB stay the floor (manifesto, principle 10).
 - Variant widths as a library setting (today 720, 1080 and 1440): fewer widths for less disk.
 - JPEG variants: measure jpegli (through its own small crate, `koma-jpegli`, built like
   `koma-webp`) against `jpeg-encoder` on made-up pages: size at equal visual quality, encode

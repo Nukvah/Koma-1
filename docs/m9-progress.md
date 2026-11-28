@@ -12,7 +12,8 @@ Each wave is a few small pull requests, each green before the next starts.
 | 1a | AVIF page variants next to WebP and JPEG | done (PR 35) |
 | 1b | Variant widths as a library setting | done (PR 35) |
 | 1c | jpegli (`koma-jpegli`) against `jpeg-encoder`, measured on made-up pages; switch only if it wins | done: switched (variants version 2) |
-| 2a | Presets and the book converter, with kept originals and Undo | next |
+| 1d | The worker in parallel: pages on every core it is given, at low priority (see [Threading](#threading)) | next |
+| 2a | Presets and the book converter, with kept originals and Undo | to do |
 | 2b | Auto-convert new uploads; a night window with Run now | to do |
 | 3a | The optimize sheet: per series, collection, selection or library; estimates per preset from sample pages; a before-and-after compare | to do |
 | 3b | The storage page; README, roadmap and docs | to do |
@@ -22,7 +23,8 @@ Each wave is a few small pull requests, each green before the next starts.
 - **AVIF encoder:** `ravif` on rav1e, pure Rust. The image builds rav1e's
   assembly (`--features asm`, `nasm` in the Dockerfile for x86_64); tests
   run without it. BSD-2-Clause is allowed in `deny.toml` for it.
-- **AVIF variants:** quality 70, speed 10, one thread. On a made-up
+- **AVIF variants:** quality 70, speed 10, one thread per encode (pages run
+  in parallel from wave 1d). On a made-up
   1440-wide line-art page speed 10 took 0.8 s against 4.1 s for speed 6,
   for a file 13% bigger that is still smaller than the WebP one. The
   converter (wave 2) uses the presets' speed 6.
@@ -118,6 +120,56 @@ JPEGs: the 720 copy, to add thumbnails to pages made before thumbnails were
 every thumbnail row so the worker makes them again, and stale thumbnail
 files are replaced. Thumbnails a browser already cached keep their old URL
 for a year (the URL changes only with `VERSION`).
+
+## Threading
+
+Owner's decision (manifesto, principle 10): work that can run in parallel
+does, on every core the worker is given; 2 CPUs and 1 GB is the floor every
+release must still meet, not the target. Until now the worker did one book,
+one page and one encode at a time, and the `nice 19, ionice idle` the
+manifesto promised was not done.
+
+What changes, in order:
+
+1. **Pages in parallel (wave 1d).** The variants job runs up to N pages at
+   once, N from `--concurrency` / `KOMA_CONCURRENCY`, by default
+   `std::thread::available_parallelism()` (which follows the container's CPU
+   quota). Each page is still encoded on one thread, so every copy comes out
+   byte for byte as now: no `VERSION` change, nothing made again. The
+   catalogue keeps one writer: encoder threads hand finished pages to the
+   thread holding the connection, which writes blobs' rows as now (blobs can
+   be written by the encoder threads). A page's decoded pixels are its
+   biggest cost, so N is also capped by memory: a page starts only while the
+   decoded sizes of the pages in flight (from each page's stored width and
+   height) fit a memory budget for the worker. A manga page (about 8 MP,
+   24 MB as RGB) runs many at once; a 64 MP photo (`Limits::max_pixels`,
+   about 190 MB) may run alone on the 1 GB floor. Capping by
+   `Limits::max_alloc` (512 MiB a page) instead would allow only one page on
+   the floor.
+2. **The worker yields to `serve`.** Lower the worker's CPU and I/O priority
+   at start (nice 19, idle I/O class), so more worker threads never slow a
+   reader down. Needs a safe wrapper for `setpriority` and `ioprio_set`
+   (the workspace forbids `unsafe` outside `koma-webp`); `rustix` has both.
+3. **Budgets.** The 2 CPU / 1 GB checks stay as they are, as the floor. Add
+   a measure of worker throughput (pages a minute on a made-up library) at 2
+   CPUs and at all the runner's cores, and a budget that it grows with them.
+4. **Within one encode (converter, wave 2, and M10 photo sets).** Not for
+   variants: ravif sets as many AVIF tiles as threads, so the bytes would
+   depend on the machine and files grow a little. Where one huge page is
+   the whole job (a 50 MP photo converted at speed 6), use threads inside
+   the encode with a fixed tile count, and the owner's `rav1e-fae` patch,
+   whose parallel loop filters give the same bytes as one thread. Measure
+   then; it needs rav1e's threading on and a tile count ravif does not take
+   from its thread count.
+
+Consequences: step 1 changes no output, so the library is not made again for
+it. `VERSION` 2 (wave 1c) makes every page again anyway: landing 1d before
+that is deployed lets that remake run on every core.
+
+Code that says "one thread" today, to update with step 1: `variants::run_job`
+(the page loop), the `AVIF_QUALITY` / `AVIF_SPEED` comment in
+`crates/koma/src/variants.rs`, `scan::run_jobs` (one job at a time), and
+docs/development.md (page variants).
 
 ## Notes for wave 2
 
