@@ -32,9 +32,13 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use crate::auth::Viewer;
+use crate::catalog::{Catalog, Series};
 use crate::curate::may_organise;
+use crate::drops::{self, Known, Place, Target};
+use crate::libraries::{Kind as LibraryKind, Library, library_of};
 use crate::serve::{AppState, Failure};
 use crate::staging::{Error, Kind, Staging, Upload};
+use crate::{names, naming};
 
 /// Uploads being written right now, by id.
 #[derive(Clone, Default)]
@@ -369,4 +373,242 @@ pub async fn member(
         Ok(v) => reply(StatusCode::OK, v),
         Err(e) => error_reply(state.staging(), None, e),
     })
+}
+
+// ---- planning a drop, and handing it to the worker
+
+/// The library `folder`, if the viewer sees it and may add to it.
+async fn library_for(state: &AppState, me: &Viewer, folder: &str) -> Result<Library, Failure> {
+    let (viewer, f) = (me.clone(), folder.to_owned());
+    let lib = state
+        .query(move |c| {
+            Ok(crate::curate::libraries(c, &viewer)?
+                .into_iter()
+                .find(|l| l.folder == f))
+        })
+        .await?
+        .ok_or(Failure::NotFound)?;
+    if !may_organise(me, &lib.folder) {
+        return Err(crate::curate::refuse(me));
+    }
+    Ok(lib)
+}
+
+fn join(parts: &[&str]) -> String {
+    parts
+        .iter()
+        .filter(|p| !p.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// What the library knows about the series at `path` (or with `id`).
+fn known(c: &Catalog, series: Option<&Series>, cosplay: bool) -> Result<Known, Failure> {
+    let Some(s) = series else {
+        return Ok(Known::default());
+    };
+    let books = c.books(s.id)?;
+    let mut details = Vec::new();
+    for b in &books {
+        if let Some(d) = c.details(&b.path)? {
+            details.push(d);
+        }
+    }
+    let kind = |k: &Option<String>| match k.as_deref() {
+        Some("volume") => Some(names::Kind::Volume),
+        Some("chapter") => Some(names::Kind::Chapter),
+        _ => None,
+    };
+    let mut k = Known {
+        series: Some(s.name.clone()),
+        author: naming::most_common(details.iter().filter_map(|d| d.authors.first().cloned())),
+        circle: naming::most_common(details.iter().filter_map(|d| d.publishers.first().cloned())),
+        language: naming::most_common(
+            details
+                .iter()
+                .filter_map(|d| naming::language_code(&d.language)),
+        ),
+        numbers: details
+            .iter()
+            .filter_map(|d| Some((kind(&d.kind), d.number?)))
+            .collect(),
+        books: books.len(),
+    };
+    if cosplay {
+        // A set's cosplayer is the folder it is in.
+        let mut parts = s.path.rsplit('/');
+        k.series = parts.next().map(str::to_owned);
+        k.author = parts.next().map(str::to_owned);
+        k.circle = None;
+    }
+    Ok(k)
+}
+
+/// `POST /up/plan`: what a drop becomes, with the names it lands with.
+/// `{library, series?, collection?, items, meta, today}`.
+pub async fn plan(
+    State(state): State<AppState>,
+    Extension(me): Extension<Viewer>,
+    body: Bytes,
+) -> Result<Response, Failure> {
+    let Ok(v) = serde_json::from_slice::<Value>(&body) else {
+        return Ok(refused("not JSON"));
+    };
+    let folder = v
+        .get("library")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let lib = library_for(&state, &me, &folder).await?;
+    let cosplay = lib.kind == LibraryKind::Cosplay;
+    let target = match (
+        v.get("series").and_then(Value::as_i64),
+        v.get("collection").and_then(Value::as_str),
+    ) {
+        (Some(id), _) => Target::Series(id),
+        (None, Some(c)) if !c.is_empty() => Target::Collection(c.to_owned()),
+        _ => Target::Library,
+    };
+    let drop = match drops::Drop::from_json(&v, target.clone(), cosplay) {
+        Ok(d) => d,
+        Err(why) => return Ok(refused(&why)),
+    };
+    let viewer = me.clone();
+    let out = state
+        .query(move |c| {
+            if let Target::Series(id) = target {
+                let s = c.series_by_id(id)?.filter(|s| viewer.sees(&s.path));
+                if s.is_none_or(|s| library_of(&s.path) != lib.folder || s.path.starts_with('\0')) {
+                    return Err(Failure::NotFound);
+                }
+            }
+            let mut plan = drops::plan(&drop);
+            let in_library: Vec<(Series, i64)> = c.series_in_library(&lib.folder)?;
+            let series_at = |path: &str| {
+                in_library
+                    .iter()
+                    .find(|(s, _)| s.path == path)
+                    .map(|(s, _)| s.clone())
+            };
+            let mut where_to: Vec<(String, Option<Series>)> = Vec::new();
+            for j in &plan.jobs {
+                let (rel, s) = match &j.place {
+                    Place::Series(id) => {
+                        let s = c.series_by_id(*id)?;
+                        (s.as_ref().map(|s| s.path.clone()).unwrap_or_default(), s)
+                    }
+                    Place::Folder { collection, folder } => {
+                        let rel = join(&[
+                            &lib.folder,
+                            collection.as_deref().unwrap_or_default(),
+                            folder.as_deref().unwrap_or_default(),
+                        ]);
+                        let s = series_at(&rel);
+                        (rel, s)
+                    }
+                };
+                where_to.push((rel, s));
+            }
+            let knowns: Vec<(Place, Known)> = plan
+                .jobs
+                .iter()
+                .zip(&where_to)
+                .map(|(j, (_, s))| Ok((j.place.clone(), known(c, s.as_ref(), cosplay)?)))
+                .collect::<Result<_, Failure>>()?;
+            drops::name_to_standard(&mut plan, &drop, &|p| {
+                knowns
+                    .iter()
+                    .find(|(q, _)| q == p)
+                    .map(|(_, k)| k.clone())
+                    .unwrap_or_default()
+            });
+            let mut out = plan.to_json();
+            if let Some(jobs) = out.get_mut("jobs").and_then(Value::as_array_mut) {
+                for (j, (rel, s)) in jobs.iter_mut().zip(&where_to) {
+                    j["path"] = json!(rel);
+                    j["new"] = json!(s.is_none());
+                }
+            }
+            out["library"] = json!(lib.folder);
+            out["cosplay"] = json!(cosplay);
+            Ok(out)
+        })
+        .await?;
+    Ok(reply(StatusCode::OK, out))
+}
+
+/// `POST /up/commit`: hands finished uploads to the worker, as one change.
+/// `{library, batch, jobs: [{upload, path, name}], failed: [{name, why}],
+/// cancelled, ignored}`: `path` is the folder each lands in, `name` the name
+/// it lands with.
+pub async fn commit(
+    State(state): State<AppState>,
+    Extension(me): Extension<Viewer>,
+    body: Bytes,
+) -> Result<Response, Failure> {
+    let Ok(v) = serde_json::from_slice::<Value>(&body) else {
+        return Ok(refused("not JSON"));
+    };
+    let folder = v
+        .get("library")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let lib = library_for(&state, &me, &folder).await?;
+    let jobs = v
+        .get("jobs")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for j in &jobs {
+        let s = |k: &str| {
+            j.get(k)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        };
+        let (id, path, name) = (s("upload"), s("path"), s("name"));
+        let in_library = if lib.folder.is_empty() {
+            crate::libraries::library_of(&format!("{path}/x")).is_empty()
+        } else {
+            path.starts_with(&format!("{}/", lib.folder))
+        };
+        if !crate::organise::safe_path(&path) || !crate::organise::safe_name(&name) || !in_library {
+            return Ok(refused(&format!("{name}: not a place in this library")));
+        }
+        let staging = state.staging().clone();
+        let owner = me.id;
+        let up = blocking(move || staging.get(&id, owner)).await?;
+        match up {
+            Ok(u) if u.library == lib.folder => out.push(json!({
+                "upload": u.id, "folder": path, "name": name, "dropped": u.name,
+            })),
+            _ => return Ok(refused(&format!("{name}: no such upload"))),
+        }
+    }
+    let n = out.len();
+    let payload = json!({
+        "library": lib.folder,
+        "batch": v.get("batch").cloned().unwrap_or(Value::Null),
+        "jobs": out,
+        "failed": v.get("failed").cloned().unwrap_or(json!([])),
+        "cancelled": v.get("cancelled").and_then(Value::as_u64).unwrap_or(0),
+        "ignored": v.get("ignored").and_then(Value::as_u64).unwrap_or(0),
+    });
+    let title = format!(
+        "Add {n} {} to {}",
+        if n == 1 { "file" } else { "files" },
+        lib.name
+    );
+    let (op, done) = crate::curate::queue(&state, &me, "upload", payload, title).await?;
+    Ok(reply(
+        StatusCode::OK,
+        json!({
+            "op": op,
+            "state": done.as_ref().map(|s| s.state.clone()),
+            "message": done.map(|s| s.message),
+        }),
+    ))
 }

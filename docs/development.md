@@ -600,9 +600,25 @@ from the disk, so the plan the browser shows is the one the worker carries out.
 - `koma::upload` is the JSON API over it (`/up`, see the module). Only the account that started an upload
   sees it; adding needs a library the viewer may organise. Bytes are written by a task of their own, so a
   dropped request leaves the upload whole; until it ends the upload answers 409 “busy”.
+- `POST /up/plan` answers the plan for a drop with, for each file, the folder it lands in (`path`), whether
+  that series is new, and its standard name (`to`) from what the catalogue knows there (`Known`: the
+  series' name, its most common author, circle and language, its numbers). `POST /up/commit` hands
+  finished uploads to the worker as one `upload` change (`{upload, path, name}` each, checked: a safe place
+  in the library, an upload of the viewer's for that library), with what failed in the browser.
+- The worker files a drop (`organise`, kind `upload`; `koma::filing`): each upload checked as ingest reads
+  a book (the ZIP index, every page's size and CRC; an EPUB's container), a CB7 rewritten as a stored CBZ
+  first, skipped when a file with the same bytes is in the folder already (sizes, then BLAKE3), numbered
+  `(2)` on a clash of names, moved in (a rename, or a copy synced to disk across drives), indexed at once
+  (`scan::index_now`) and journaled as `add`. Undo sends each added book to the trash. A damaged archive
+  says what is wrong: an index that points to the wrong places, a page cut off, or a page whose bytes
+  differ from its checksum.
+- `koma::uplog` writes the upload log, `<data>/logs/uploads-YYYY-MM.log`: one entry per drop, files that
+  went in fine only counted, every failure (the worker's and the browser's) on a line with its reason.
+  The change's message on `/jobs` is the same summary.
 - `tests/upload.rs` is the other half of M8's exit check: a 2 GB upload cut twice (at 700 MB and 1.5 GB)
   and resumed arrives byte for byte (`koma_fixtures::bulk` makes bytes from their offset, so nothing is
-  kept in memory); also packs, refusals and privacy.
+  kept in memory); also packs, refusals and privacy, and a drop planned, sent, filed (CB7 converted, a
+  duplicate skipped, a damaged archive refused, the log written) and undone.
 - `tests/drops.rs` is half of M8's exit check: the golden set `tests/drops_golden.json` (25 made-up drops)
   gives exactly the expected plans; it also checks the standard names.
 

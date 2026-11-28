@@ -5,7 +5,7 @@ Koma-1 is one image with two long-running modes that share two folders:
 | Folder | Mount | Holds |
 |---|---|---|
 | `/library` | read-write for the worker, read-only for serve | your books: CBZ, ZIP, CB7 (7z) and EPUB files, and folders of images. Only the worker writes here, and only the changes you make in the UI (moves, renames, the trash, `metadata.json`), each journaled and undoable. |
-| `/data` | read-write | the catalogue (`koma.db`), the blob store (`blobs/`), the accounts (`accounts.db`) and uploads waiting to be filed (`uploads/`) |
+| `/data` | read-write | the catalogue (`koma.db`), the blob store (`blobs/`), the accounts (`accounts.db`), uploads waiting to be filed (`uploads/`) and the monthly upload log (`logs/uploads-YYYY-MM.log`) |
 
 `koma worker` scans `/library` into `/data`. `koma serve` reads both and
 answers HTTP on port 8080; the only things it writes are `accounts.db` and uploads in `/data/uploads`.

@@ -31,16 +31,25 @@ use crate::log;
 pub const TRASH: &str = ".koma-trash";
 
 /// Kinds of change.
-pub const KINDS: [&str; 12] = [
+pub const KINDS: [&str; 13] = [
     "move", "series", "merge", "trash", "restore", "erase", "empty", "details", "write", "undo",
-    "rename", "tidy",
+    "rename", "tidy", "upload",
 ];
 
 /// Changes that can be undone.
 pub fn undoable(kind: &str) -> bool {
     matches!(
         kind,
-        "move" | "series" | "merge" | "trash" | "restore" | "details" | "write" | "rename" | "tidy"
+        "move"
+            | "series"
+            | "merge"
+            | "trash"
+            | "restore"
+            | "details"
+            | "write"
+            | "rename"
+            | "tidy"
+            | "upload"
     )
 }
 
@@ -306,12 +315,16 @@ pub fn plan(c: &Catalog, library: &Path, kind: &str, p: &Value) -> Result<Plan, 
 /// A change the worker is carrying out.
 struct Run<'a> {
     library: &'a Path,
+    /// The data folder: uploads wait in it, the upload log is in it.
+    data: &'a Path,
     catalog: &'a mut Catalog,
     /// To look for a pause or a cancel; none for the worker's own changes.
     accounts: Option<&'a Accounts>,
     op: &'a Op,
     done: i64,
     total: i64,
+    /// What a change that went through has to say (an upload's summary).
+    note: String,
 }
 
 /// Why a change stopped early.
@@ -780,8 +793,167 @@ impl Run<'_> {
             "backup" => {
                 self.rename(&e.to, &e.from)?;
             }
+            "add" => match e.book {
+                // An uploaded book goes to the trash, where it can be had back.
+                Some(b) => self.trash_book(b, crate::accounts::now())?,
+                // A video of a cosplay set is not a book: it goes for good
+                // (the original is still where it was uploaded from).
+                None => fs::remove_file(self.abs(&e.to))?,
+            },
             _ => {}
         }
+        Ok(())
+    }
+
+    /// Files a drop: each finished upload checked, converted, skipped if
+    /// already there, then moved into place, indexed and journaled.
+    fn upload(&mut self, p: &Value) -> Result<(), Stop> {
+        let staging = crate::staging::Staging::new(self.data);
+        let library = p
+            .get("library")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let jobs = p
+            .get("jobs")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut outcome = crate::uplog::Outcome {
+            by: self.op.by.clone(),
+            library: library.clone(),
+            cancelled: p.get("cancelled").and_then(Value::as_u64).unwrap_or(0) as usize,
+            ignored: p.get("ignored").and_then(Value::as_u64).unwrap_or(0) as usize,
+            ..Default::default()
+        };
+        for f in p
+            .get("failed")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let s = |k: &str| {
+                f.get(k)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            outcome
+                .failed
+                .push((s("name"), format!("{} (in the browser)", s("why"))));
+        }
+        // Taken up again after a stop: what was filed already stays filed.
+        let filed: Vec<String> = self
+            .catalog
+            .journal_of(self.op.id)?
+            .iter()
+            .filter(|e| e.action == "add")
+            .filter_map(|e| {
+                let d: Value = serde_json::from_str(e.data.as_deref()?).ok()?;
+                d.get("upload")?.as_str().map(str::to_owned)
+            })
+            .collect();
+        self.total = jobs.len() as i64;
+        for j in &jobs {
+            let s = |k: &str| {
+                j.get(k)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            let (id, folder, name, dropped) = (s("upload"), s("folder"), s("name"), s("dropped"));
+            self.step(&format!("adding {name}"))?;
+            self.done += 1;
+            if filed.contains(&id) {
+                outcome.added += 1;
+                continue;
+            }
+            let shown = if dropped.is_empty() {
+                name.clone()
+            } else {
+                dropped.clone()
+            };
+            if !safe_path(&folder)
+                || !safe_name(&name)
+                || crate::libraries::library_of(&format!("{folder}/x")) != library
+            {
+                outcome
+                    .failed
+                    .push((shown, "not a place in this library".into()));
+                continue;
+            }
+            let Some(owner) = self.op.account else {
+                outcome.failed.push((shown, "no one sent it".into()));
+                continue;
+            };
+            let u = match staging.get(&id, owner) {
+                Ok(u) if u.done => u,
+                Ok(u) => {
+                    staging.remove(&u);
+                    outcome
+                        .failed
+                        .push((shown, "it never arrived whole".into()));
+                    continue;
+                }
+                Err(_) => {
+                    outcome
+                        .failed
+                        .push((shown, "it is no longer waiting to be filed".into()));
+                    continue;
+                }
+            };
+            let staged = staging.bytes_of(&u);
+            let checked = crate::filing::check(&staged, &u.name);
+            let video = matches!(checked, Ok(crate::filing::Checked::Video));
+            let ready = match checked {
+                Ok(crate::filing::Checked::Ready(path)) => path,
+                Ok(crate::filing::Checked::Video) => staged.clone(),
+                Err(why) => {
+                    let _ = fs::remove_file(staged.with_extension("cbz"));
+                    staging.remove(&u);
+                    outcome.failed.push((shown, why));
+                    continue;
+                }
+            };
+            self.make_dirs(&folder)?;
+            if crate::filing::same_file_in(&self.abs(&folder), &ready).is_some() {
+                if ready != staged {
+                    let _ = fs::remove_file(&ready);
+                }
+                staging.remove(&u);
+                outcome.already += 1;
+                continue;
+            }
+            let (to, _) = free(self.library, &join(&[&folder, &name]), false, &[]);
+            crate::filing::put(&ready, &self.abs(&to))?;
+            staging.remove(&u);
+            let data = Some(json!({ "upload": id, "name": u.name }).to_string());
+            if video {
+                self.journal("add", None, None, "", &to, data)?;
+                outcome.added += 1;
+                continue;
+            }
+            match crate::scan::index_now(self.library, self.data, self.catalog, &to) {
+                Ok(book) => {
+                    let series = self.catalog.book(book)?.map(|b| b.series_id);
+                    self.journal("add", Some(book), series, "", &to, data)?;
+                    outcome.added += 1;
+                }
+                Err(why) => {
+                    // It passed the checks but cannot be read: not left behind.
+                    let _ = fs::remove_file(self.abs(&to));
+                    outcome.failed.push((shown, why));
+                }
+            }
+        }
+        self.catalog.rebuild_search()?;
+        if let Err(e) = crate::uplog::write(self.data, crate::accounts::now(), &outcome) {
+            log::error(
+                "worker: cannot write the upload log",
+                &[("error", &e.to_string())],
+            );
+        }
+        self.note = outcome.summary();
         Ok(())
     }
 }
@@ -805,7 +977,7 @@ fn can_undo(library: &Path, c: &Catalog, e: &Entry) -> Result<(), String> {
                 return Err(format!("{} is taken now", e.from));
             }
         }
-        "write" | "backup" => unchanged(&e.to)?,
+        "write" | "backup" | "add" => unchanged(&e.to)?,
         "trash" => {
             let item = e
                 .data
@@ -885,7 +1057,7 @@ fn metadata_json(c: &Catalog, book: &crate::catalog::Book) -> Result<String, Sto
 }
 
 /// Carries out one change, recording how it went.
-fn run_op(library: &Path, catalog: &mut Catalog, accounts: &Accounts, op: &Op) {
+fn run_op(library: &Path, data: &Path, catalog: &mut Catalog, accounts: &Accounts, op: &Op) {
     if op.control == "pause" {
         if catalog.op_state(op.id).ok().flatten().is_none() {
             let _ = catalog.set_op(op.id, "paused", 0, 0, "paused before it started");
@@ -895,11 +1067,13 @@ fn run_op(library: &Path, catalog: &mut Catalog, accounts: &Accounts, op: &Op) {
     let p: Value = serde_json::from_str(&op.payload).unwrap_or_default();
     let mut run = Run {
         library,
+        data,
         catalog,
         accounts: Some(accounts),
         op,
         done: 0,
         total: 0,
+        note: String::new(),
     };
     let result = (|| -> Result<(), Stop> {
         run.step("starting")?;
@@ -918,12 +1092,13 @@ fn run_op(library: &Path, catalog: &mut Catalog, accounts: &Accounts, op: &Op) {
             "details" => run.details(&p),
             "write" => run.write(&ids(&p, "books")),
             "undo" => run.undo(p.get("op").and_then(Value::as_i64).unwrap_or(0)),
+            "upload" => run.upload(&p),
             other => Err(Stop::Failed(format!("unknown change: {other}"))),
         }
     })();
-    let (done, total) = (run.done, run.total);
+    let (done, total, note) = (run.done, run.total, std::mem::take(&mut run.note));
     let (state, message) = match result {
-        Ok(()) => ("done", String::new()),
+        Ok(()) => ("done", note),
         Err(Stop::Paused) => ("paused", "paused".to_owned()),
         Err(Stop::Cancelled) => (
             "cancelled",
@@ -978,7 +1153,7 @@ pub fn run(library: &Path, data: &Path, catalog: &mut Catalog) {
             let _ = catalog.set_op(id, "cancelled", 0, 0, "cancelled");
             continue;
         }
-        run_op(library, catalog, &accounts, &op);
+        run_op(library, data, catalog, &accounts, &op);
     }
     // A set renamed in the fix-up queue (or moved) is placed at once.
     if ran {
@@ -1042,11 +1217,13 @@ pub fn tidy(library: &Path, data: &Path, catalog: &mut Catalog) {
         };
         let mut run = Run {
             library,
+            data,
             catalog: &mut *catalog,
             accounts: None,
             op: &op,
             done: 0,
             total: 0,
+            note: String::new(),
         };
         let result = run.moves(&Plan {
             steps,

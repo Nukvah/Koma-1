@@ -17,6 +17,7 @@ pub mod curate;
 pub mod download;
 pub mod drops;
 pub mod epub;
+pub mod filing;
 pub mod health;
 pub mod html;
 pub mod journal;
@@ -37,6 +38,7 @@ pub mod serve;
 mod signal;
 pub mod staging;
 pub mod upload;
+pub mod uplog;
 pub mod variants;
 pub mod webauthn;
 

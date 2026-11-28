@@ -262,6 +262,8 @@ pub fn router(state: AppState) -> Router {
         .route("/jobs/events", get(curate::job_events))
         .route("/jobs/{id}/{action}", post(curate::job_action))
         .route("/up", post(crate::upload::start))
+        .route("/up/plan", post(crate::upload::plan))
+        .route("/up/commit", post(crate::upload::commit))
         .route(
             "/up/{id}",
             get(crate::upload::status)
