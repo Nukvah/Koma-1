@@ -339,7 +339,7 @@ until they answer):
   folder on the library's drive and filing is a rename.
 - **Resumable.** Large files go in pieces; after a dropped connection the
   browser asks where the server got to and carries on from there.
-- **Names to the standard** (proposed), shown on each row before anything is
+- **Names to the standard** (chosen with the owner), shown on each row before anything is
   sent, with a switch to keep the dropped names.
 - **Duplicates** (the same bytes already in the series) are skipped and
   counted as already there; a different file with a taken name gets `(2)`.
