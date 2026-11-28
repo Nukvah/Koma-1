@@ -103,6 +103,20 @@ fn size_of(bytes: &[u8]) -> (u32, u32) {
     (s.width, s.height)
 }
 
+/// An image's average of each channel, as Koma decodes it.
+fn mean(bytes: &[u8]) -> Vec<f64> {
+    let p = variants::decode(bytes, &variants::Limits::default()).unwrap();
+    let n = if p.gray { 1 } else { 3 };
+    let mut sum = vec![0f64; n];
+    for px in p.data.chunks_exact(n) {
+        for (s, v) in sum.iter_mut().zip(px) {
+            *s += f64::from(*v);
+        }
+    }
+    let count = (p.data.len() / n) as f64;
+    sum.into_iter().map(|s| s / count).collect()
+}
+
 fn db(data: &Path) -> PathBuf {
     data.join("koma.db")
 }
@@ -167,14 +181,15 @@ fn every_big_page_gets_its_variants_once() {
 }
 
 #[test]
-fn pages_made_before_thumbnails_get_theirs_from_the_720_copy() {
+fn pages_made_before_thumbnails_get_theirs_from_the_720_webp() {
     let root = temp_root("thumbs");
     let lib = library(&root);
     let data = root.join("data");
     let mut catalog = Catalog::open(&db(&data)).unwrap();
     scan(&lib, &data, &mut catalog).unwrap();
 
-    // As a catalogue made before thumbnails: every page's variants without them.
+    // As a catalogue made before thumbnails, or upgraded to schema 17: every
+    // page's variants without them, and maybe a wrong thumbnail file left.
     let blobs = BlobStore::new(&data);
     let mut before = Vec::new();
     for (_, page) in all_pages(&catalog) {
@@ -206,6 +221,12 @@ fn pages_made_before_thumbnails_get_theirs_from_the_720_copy() {
                 None,
             )
             .unwrap();
+        for f in ["jpg", "webp"] {
+            let left = blobs.variant_path(&page.hash, variants::THUMB, VERSION, f);
+            if left.exists() {
+                fs::write(left, b"a thumbnail made wrong").unwrap();
+            }
+        }
         before.push(page);
     }
     before.dedup_by_key(|p| p.hash);
@@ -225,6 +246,14 @@ fn pages_made_before_thumbnails_get_theirs_from_the_720_copy() {
                 .expect("a thumbnail");
             let bytes = fs::read(blobs.variant_path(&page.hash, *w, VERSION, format)).unwrap();
             assert_eq!(size_of(&bytes), (*w, *h));
+        }
+        // The same picture, colour pages too. (Only the WebP one is looked
+        // at: `image` misreads the colour JPEGs `jpeg-encoder` writes.)
+        let thumb = blobs.variant_path(&page.hash, variants::THUMB, VERSION, "webp");
+        let from = blobs.variant_path(&page.hash, 720, VERSION, "webp");
+        let (thumb, from) = (fs::read(thumb).unwrap(), fs::read(from).unwrap());
+        for (t, f) in mean(&thumb).iter().zip(mean(&from)) {
+            assert!((t - f).abs() < 4.0, "thumbnail: {t} against {f}");
         }
     }
     assert_eq!(scan(&lib, &data, &mut catalog).unwrap().variant_pages, 0);
@@ -270,6 +299,12 @@ fn pages_made_before_avif_get_avif_ones_from_the_original() {
                 None,
             )
             .unwrap();
+        for f in ["jpg", "webp"] {
+            let left = blobs.variant_path(&page.hash, variants::THUMB, VERSION, f);
+            if left.exists() {
+                fs::write(left, b"a thumbnail made wrong").unwrap();
+            }
+        }
         before.push(page);
     }
     before.dedup_by_key(|p| p.hash);

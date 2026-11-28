@@ -14,7 +14,7 @@ pub use crate::archive::size::Size;
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 16;
+const SCHEMA_VERSION: i64 = 17;
 
 /// How long a book whose file vanished is remembered, so that a folder that
 /// comes back (a drive mounted late, a move noticed in two steps) keeps its
@@ -201,10 +201,10 @@ const LACKING_FORMAT: &str = "FROM books JOIN pages ON pages.book_id = books.id
        AND (pages.width IS NULL OR pages.width > ?2)";
 
 /// Pages of present books whose variants, made with version ?1, include a
-/// JPEG ?2 wide but nothing ?3 wide.
+/// WebP ?2 wide but nothing ?3 wide.
 const LACKING_WIDTH: &str = "FROM books JOIN pages ON pages.book_id = books.id
      JOIN variant_pages v ON v.hash = pages.hash AND v.version = ?1
-     JOIN variants a ON a.hash = pages.hash AND a.width = ?2 AND a.format = 'jpg'
+     JOIN variants a ON a.hash = pages.hash AND a.width = ?2 AND a.format = 'webp'
      LEFT JOIN variants t ON t.hash = pages.hash AND t.width = ?3
      WHERE books.gone IS NULL AND t.hash IS NULL";
 
@@ -345,6 +345,11 @@ const MIGRATE_15_TO_16: &str =
     "ALTER TABLE variant_pages ADD COLUMN widths INTEGER NOT NULL DEFAULT 7;";
 const MIGRATE_15_TO_16_SETTINGS: &str =
     "ALTER TABLE library_settings ADD COLUMN widths INTEGER NOT NULL DEFAULT 7;";
+
+/// Schema 16 to 17: thumbnails made again. Those added to older pages were
+/// made from their 720 JPEG, which `image` decodes wrong when in colour
+/// (see `variants::add_thumb`); the worker makes them again from the WebP.
+const MIGRATE_16_TO_17: &str = "DELETE FROM variants WHERE width = 240;";
 
 /// Names to keep as they are (a tidy undone).
 const NAMING: &str = "CREATE TABLE IF NOT EXISTS name_keep (
@@ -594,7 +599,7 @@ impl Catalog {
         match version {
             // From 7 on the catalogue is upgraded in place, one step at a
             // time: remaking page variants is too costly to start over.
-            7..=15 => {
+            7..=16 => {
                 let mut steps = String::new();
                 if version == 7 {
                     steps.push_str(&migrate_7_to_8());
@@ -652,6 +657,9 @@ impl Catalog {
                 )?;
                 if version >= 12 && !settings_widths {
                     steps.push_str(MIGRATE_15_TO_16_SETTINGS);
+                }
+                if version <= 16 {
+                    steps.push_str(MIGRATE_16_TO_17);
                 }
                 steps.push_str(ORGANISE);
                 steps.push_str(NAMING);

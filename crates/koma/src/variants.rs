@@ -365,14 +365,17 @@ pub fn make_some(
 }
 
 /// The thumbnail of a page whose variants were made before thumbnails
-/// were, from `bytes`, its narrowest variant: a small picture to decode,
-/// where the original may be a 50-megapixel photo.
+/// were, from `bytes`, its narrowest WebP variant: a small picture to
+/// decode, where the original may be a 50-megapixel photo.
 pub fn thumb_from(bytes: &[u8], limits: &Limits) -> Result<Vec<Variant>, Error> {
     let pixels = decode(bytes, limits)?;
     if pixels.width <= THUMB {
         return Ok(Vec::new());
     }
-    resized(pixels, &[THUMB], &[Format::Jpeg, Format::Webp], bytes.len())
+    // No size limit: without a thumbnail the reader loads a 720 copy, which
+    // is bigger, and the WebP decoded here can be smaller than a JPEG
+    // thumbnail.
+    resized(pixels, &[THUMB], &[Format::Jpeg, Format::Webp], usize::MAX)
 }
 
 /// `pixels` at each of `widths`, in each of `formats`, but for those no
@@ -677,15 +680,28 @@ fn other_widths(
 }
 
 /// Adds the thumbnail of a page made before thumbnails were, from its 720
-/// JPEG. A page whose JPEG cannot be read or decoded stays without one (the
+/// WebP. A page whose WebP cannot be read or decoded stays without one (the
 /// reader uses the 720 copy instead) and is tried again on the next pass.
+///
+/// Not from the 720 JPEG: `image`'s JPEG decoder misreads the colour JPEGs
+/// `jpeg-encoder` writes (optimised Huffman tables, 4:2:0), where browsers
+/// and libjpeg read them right. Schema 17 dropped the thumbnails made from
+/// them; any thumbnail file found here is such a leftover, and replaced.
 fn add_thumb(
     blobs: &BlobStore,
     catalog: &mut Catalog,
     hash: &blake3::Hash,
     limits: &Limits,
 ) -> Result<(), ScanError> {
-    let from = blobs.variant_path(hash, WIDTHS[0], VERSION, Format::Jpeg.ext());
+    for f in Format::ALL {
+        let path = blobs.variant_path(hash, THUMB, VERSION, f.ext());
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(ScanError::Io(path, e)),
+        }
+    }
+    let from = blobs.variant_path(hash, WIDTHS[0], VERSION, Format::Webp.ext());
     let made = fs::read(&from)
         .map_err(|e| e.to_string())
         .and_then(|b| thumb_from(&b, limits).map_err(|e| e.to_string()));
@@ -851,6 +867,19 @@ mod tests {
         }
         e.encode(&rgb, w, h, jpeg_encoder::ColorType::Rgb).unwrap();
         out
+    }
+
+    /// The average red, green and blue of a picture, as Koma decodes it.
+    fn mean_rgb(bytes: &[u8]) -> [f64; 3] {
+        let p = decode(bytes, &Limits::default()).unwrap();
+        let mut sum = [0f64; 3];
+        for px in p.data.chunks_exact(3) {
+            for c in 0..3 {
+                sum[c] += f64::from(px[c]);
+            }
+        }
+        let n = (p.data.len() / 3) as f64;
+        sum.map(|s| s / n)
     }
 
     fn components_of_jpeg(j: &[u8]) -> u8 {
@@ -1084,10 +1113,10 @@ mod tests {
         let vs = make(&page, &Limits::default()).unwrap();
         let from = vs
             .iter()
-            .find(|v| v.width == 720 && v.format == Format::Jpeg)
+            .find(|v| v.width == 720 && v.format == Format::Webp)
             .unwrap();
-        let got: Vec<_> = thumb_from(&from.bytes, &Limits::default())
-            .unwrap()
+        let thumbs = thumb_from(&from.bytes, &Limits::default()).unwrap();
+        let got: Vec<_> = thumbs
             .iter()
             .map(|v| (v.width, v.height, v.format))
             .collect();
@@ -1095,6 +1124,15 @@ mod tests {
             got,
             [(THUMB, 360, Format::Jpeg), (THUMB, 360, Format::Webp)]
         );
+        // And it is the same picture. Only WebP is decoded here: `image`
+        // misreads the colour JPEGs `jpeg-encoder` writes (see `add_thumb`).
+        let page_mean = mean_rgb(&page);
+        for t in [&from.bytes, &thumbs[1].bytes] {
+            let m = mean_rgb(t);
+            for c in 0..3 {
+                assert!((m[c] - page_mean[c]).abs() < 4.0, "{m:?} != {page_mean:?}");
+            }
+        }
         // Nothing to make from a picture no wider than a thumbnail.
         let small = jpeg(200, 300, None, |_, _| [9; 3]);
         assert!(thumb_from(&small, &Limits::default()).unwrap().is_empty());
