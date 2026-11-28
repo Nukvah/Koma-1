@@ -32,6 +32,30 @@ impl Report {
         });
     }
 
+    /// A floor: passes when `measured >= min`.
+    pub fn at_least(&mut self, name: &str, measured: f64, min: f64, unit: &str, note: &str) {
+        let mut shown = format!("{measured:.2}{unit}");
+        if !note.is_empty() {
+            let _ = write!(shown, " ({note})");
+        }
+        self.rows.push(Row {
+            name: name.to_owned(),
+            measured: shown,
+            limit: format!("at least {min}{unit}"),
+            ok: measured >= min,
+        });
+    }
+
+    /// A number that is shown, not judged.
+    pub fn info(&mut self, name: &str, detail: impl Into<String>) {
+        self.rows.push(Row {
+            name: name.to_owned(),
+            measured: detail.into(),
+            limit: "shown".to_owned(),
+            ok: true,
+        });
+    }
+
     /// A rule that has no number, such as "runs as non-root".
     pub fn check(&mut self, name: &str, ok: bool, detail: impl Into<String>) {
         self.rows.push(Row {

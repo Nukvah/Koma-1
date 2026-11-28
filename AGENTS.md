@@ -41,6 +41,7 @@ machine to tune for (manifesto, principle 10). At the time of writing:
 | Idle RAM | serve 40 MiB, worker 64 MiB |
 | Cached page TTFB | p99 < 10 ms |
 | Cold start | < 200 ms |
+| Share of its CPUs the worker keeps busy making page copies | at least 0.75 |
 | Library HTML page | < 15 KiB |
 | CSS / reader JS / library JS / curator JS | 14 / 18 / 4 / 24 KiB |
 

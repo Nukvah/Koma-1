@@ -3,8 +3,9 @@
 //! `fixtures` writes a made-up test library of CBZ and CB7 files.
 //!
 //! `budgets` checks the numbers in `budgets.toml`: static asset sizes always,
-//! and with `--image` the container image size, cold start, idle memory and
-//! page latency of the real image. CI fails when any budget is exceeded.
+//! and with `--image` the container image size, cold start, idle memory,
+//! page latency and the worker's speed on more CPUs of the real image. CI
+//! fails when any budget is exceeded.
 
 mod budgets;
 mod docker;
@@ -72,6 +73,7 @@ fn budgets_task(args: &[String]) -> Result<bool, String> {
     measure::assets(&root, &budgets, &mut report)?;
     if let Some(image) = image {
         measure::image(image, &budgets, &mut report)?;
+        measure::throughput(image, &budgets, &mut report)?;
     }
 
     print!("\n{}", report.text());

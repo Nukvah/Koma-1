@@ -10,6 +10,7 @@ pub struct Budgets {
     pub image: Image,
     pub memory: Memory,
     pub latency: Latency,
+    pub worker: Worker,
     #[serde(default)]
     pub assets: Vec<AssetGroup>,
     #[serde(default)]
@@ -34,6 +35,15 @@ pub struct Memory {
 pub struct Latency {
     pub ttfb_p99_ms: f64,
     pub cold_start_ms: f64,
+}
+
+/// How well the worker uses the CPUs it is given.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Worker {
+    /// The share of the runner's CPUs it keeps busy making page copies: 1 is
+    /// all of them all the time.
+    pub busy_min: f64,
 }
 
 /// All files under `dir` whose names end in `suffix`, summed (raw bytes).
@@ -75,6 +85,7 @@ mod tests {
         let b = Budgets::load(&path).unwrap();
         assert!(b.image.max_mib > 0.0);
         assert!(b.latency.ttfb_p99_ms > 0.0);
+        assert!((0.0..=1.0).contains(&b.worker.busy_min));
         assert!(b.assets.iter().any(|a| a.suffix == ".css"));
     }
 

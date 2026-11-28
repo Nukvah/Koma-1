@@ -245,7 +245,8 @@ Until the first scan has finished, `/` answers 503.
   answers no HTTP, so turn the check off for it, as the Compose file does.
 - Logs are JSON lines on stderr (`docker logs koma`). A scan ends with a
   `scan: done` line that counts the books indexed, unchanged, failed and
-  removed, and the folders read and skipped.
+  removed, the folders read and skipped and the pages given copies, with the
+  time it took (`ms`) and the CPU time it used (`cpu_ms`).
 - `SIGTERM` (`docker stop`) stops `serve` cleanly within a second, and the
   worker after the book it is indexing.
 

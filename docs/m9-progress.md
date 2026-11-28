@@ -13,7 +13,7 @@ Each wave is a few small pull requests, each green before the next starts.
 | 1b | Variant widths as a library setting | done (PR 35) |
 | 1c | jpegli (`koma-jpegli`) against `jpeg-encoder`, measured on made-up pages; switch only if it wins | done: switched (variants version 2) |
 | 1d | The worker in parallel: `--concurrency`, low priority, pages on every core with the same bytes (see [Threading](#threading)) | done |
-| 1e | A worker throughput budget: pages a minute at 2 CPUs and at all of them | next |
+| 1e | A worker throughput budget: pages a minute at 2 CPUs and at all of them | done |
 | 2a | Roles: admin, user, guest (see [Libraries](#managed-storage)) | to do |
 | 2b | Koma-1 owns the library folder: under `/data`, nothing else writes there; the import job (dry run; hard links or copies); no more following outside changes | to do |
 | 2c | Explicit libraries: catalogue rows, setup's second step, library pages; taking libraries away (trash, notice) | to do |
@@ -324,9 +324,15 @@ order. Each screen that is new or changed gets its design page in
 `docs/design/` first, in the same pull request (the roadmap's "design
 before build").
 
-1. **1d, parallel worker (done)** and **1e, its throughput budget**: a
-   measure in `cargo xtask budgets`, pages a minute on a made-up library at
-   2 CPUs and at all of the runner's, and a budget that it grows with them.
+1. **1d, parallel worker** and **1e, its throughput budget** (both done):
+   `cargo xtask budgets` times `koma scan` on two books of 16 made-up pages
+   at 2 CPUs and at all of the runner's; with all of them it must keep at
+   least 0.75 of them busy (0.87 on a 4-CPU machine, where it made 47 pages
+   a minute at 2 CPUs and 84 at 4). A first version held the speed-up per
+   CPU to 0.7, and failed at 0.68 on GitHub's x86_64 runner, whose 4 CPUs
+   are 2 cores with hyperthreads: the share of CPUs kept busy does not
+   depend on that. `scan: done` now logs `cpu_ms`. Books still run one after another, so small books scale less well:
+   to look at if photo sets of a few images (M10) turn out slow.
 2. **2a, roles.** `Role` becomes admin, user, guest; a new account is a
    guest; the admin hands the role to any account and becomes a user;
    `may_organise`: shared is the admin's, private its owner's (while
