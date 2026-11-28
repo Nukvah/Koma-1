@@ -1,4 +1,4 @@
-//! Page variants: smaller copies of a page in JPEG and WebP, made once by the
+//! Page variants: smaller copies of a page in JPEG, WebP and AVIF, made once by the
 //! worker so that serving never resizes or transcodes anything.
 //!
 //! - Widths [`WIDTHS`], only those narrower than the page. The original is
@@ -7,8 +7,10 @@
 //!   reader's thumbnails and scrubber. Pages made before thumbnails get
 //!   theirs from their 720 JPEG ([`run_job`]), not from the original again.
 //! - A variant no smaller than the original is dropped: the original serves.
-//! - Each width in JPEG (quality [`JPEG_QUALITY`]) and WebP (quality
-//!   [`WEBP_QUALITY`]). AVIF comes later (M9).
+//! - Each width in JPEG (quality [`JPEG_QUALITY`]), WebP (quality
+//!   [`WEBP_QUALITY`]) and AVIF (quality [`AVIF_QUALITY`], speed
+//!   [`AVIF_SPEED`]). Pages made before AVIF get their AVIF ones on the
+//!   worker's next pass, from the original ([`run_job`]).
 //! - Sizes are as displayed: a JPEG's EXIF orientation is applied first, so
 //!   variants need none.
 //! - A page whose pixels are all neutral gray, within [`GRAY_TOLERANCE`], is
@@ -47,6 +49,14 @@ pub const THUMB: u32 = 240;
 pub const JPEG_QUALITY: u8 = 82;
 pub const WEBP_QUALITY: f32 = 80.0;
 
+/// AVIF variants through rav1e: the optimize presets' quality, at rav1e's
+/// fastest speed. On a made-up line-art page 1440 wide, speed 10 took a
+/// fifth of speed 6's time for a file 13% bigger, still smaller than the
+/// WebP one; variants are made for every page, so time wins here. One
+/// thread, as for everything else the worker makes.
+pub const AVIF_QUALITY: f32 = 70.0;
+pub const AVIF_SPEED: u8 = 10;
+
 /// Largest difference between a pixel's channels for it to count as gray:
 /// scans and JPEG chroma leave a little noise on black-and-white pages.
 pub const GRAY_TOLERANCE: u8 = 8;
@@ -61,16 +71,39 @@ pub const VERSION: i64 = 1;
 pub enum Format {
     Jpeg,
     Webp,
+    Avif,
 }
 
+/// Every format's bit: what a page's variants are made in now.
+pub const FORMATS: u8 = 1 | 2 | 4;
+
 impl Format {
-    pub const ALL: [Format; 2] = [Format::Jpeg, Format::Webp];
+    pub const ALL: [Format; 3] = [Format::Jpeg, Format::Webp, Format::Avif];
 
     /// The file extension, as in the page URL.
     pub fn ext(self) -> &'static str {
         match self {
             Format::Jpeg => "jpg",
             Format::Webp => "webp",
+            Format::Avif => "avif",
+        }
+    }
+
+    /// Its bit, as the reader's script and `variant_pages.formats` have it.
+    pub fn bit(self) -> u8 {
+        match self {
+            Format::Jpeg => 1,
+            Format::Webp => 2,
+            Format::Avif => 4,
+        }
+    }
+
+    /// The MIME type, as in a `<source type>`.
+    pub fn mime(self) -> &'static str {
+        match self {
+            Format::Jpeg => "image/jpeg",
+            Format::Webp => "image/webp",
+            Format::Avif => "image/avif",
         }
     }
 
@@ -291,7 +324,15 @@ fn luma(r: u8, g: u8, b: u8) -> u8 {
 pub fn make(bytes: &[u8], limits: &Limits) -> Result<Vec<Variant>, Error> {
     let pixels = decode(bytes, limits)?;
     let widths: Vec<u32> = widths_for(pixels.width).collect();
-    resized(pixels, &widths, bytes.len())
+    resized(pixels, &widths, &Format::ALL, bytes.len())
+}
+
+/// The AVIF variants of a page made before AVIF ones were: the same widths
+/// as [`make`], from the page itself.
+pub fn make_avif(bytes: &[u8], limits: &Limits) -> Result<Vec<Variant>, Error> {
+    let pixels = decode(bytes, limits)?;
+    let widths: Vec<u32> = widths_for(pixels.width).collect();
+    resized(pixels, &widths, &[Format::Avif], bytes.len())
 }
 
 /// The thumbnail of a page whose variants were made before thumbnails
@@ -302,12 +343,17 @@ pub fn thumb_from(bytes: &[u8], limits: &Limits) -> Result<Vec<Variant>, Error> 
     if pixels.width <= THUMB {
         return Ok(Vec::new());
     }
-    resized(pixels, &[THUMB], bytes.len())
+    resized(pixels, &[THUMB], &[Format::Jpeg, Format::Webp], bytes.len())
 }
 
-/// `pixels` at each of `widths`, in each format, but for those no smaller
-/// than `original_len` bytes.
-fn resized(pixels: Pixels, widths: &[u32], original_len: usize) -> Result<Vec<Variant>, Error> {
+/// `pixels` at each of `widths`, in each of `formats`, but for those no
+/// smaller than `original_len` bytes.
+fn resized(
+    pixels: Pixels,
+    widths: &[u32],
+    formats: &[Format],
+    original_len: usize,
+) -> Result<Vec<Variant>, Error> {
     let mut out = Vec::new();
     let mut resizer = Resizer::new();
     let options = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Lanczos3));
@@ -326,13 +372,14 @@ fn resized(pixels: Pixels, widths: &[u32], original_len: usize) -> Result<Vec<Va
             .resize(&src, &mut dst, &options)
             .map_err(|e| Error::Encode(e.to_string()))?;
         let data = dst.into_vec();
-        for format in Format::ALL {
+        for &format in formats {
             let bytes = match format {
+                Format::Avif => encode_avif(&data, width, height, gray)?,
                 Format::Jpeg => encode_jpeg(&data, width, height, gray)?,
                 Format::Webp => match encode_webp(&data, width, height, gray) {
                     Ok(b) => b,
-                    // WebP stops at 16383 pixels: a very long strip has only
-                    // the JPEG.
+                    // WebP stops at 16383 pixels: a very long strip has no
+                    // WebP one.
                     Err(koma_webp::Error::Dimensions) => continue,
                     Err(e) => return Err(Error::Encode(e.to_string())),
                 },
@@ -369,6 +416,24 @@ fn encode_jpeg(data: &[u8], width: u32, height: u32, gray: bool) -> Result<Vec<u
         .encode(data, w, h, color)
         .map_err(|e| Error::Encode(e.to_string()))?;
     Ok(out)
+}
+
+fn encode_avif(data: &[u8], width: u32, height: u32, gray: bool) -> Result<Vec<u8>, Error> {
+    // ravif takes RGB; a gray page's flat chroma costs next to nothing.
+    let rgb: Vec<ravif::RGB8> = if gray {
+        data.iter().map(|&v| ravif::RGB8::new(v, v, v)).collect()
+    } else {
+        data.chunks_exact(3)
+            .map(|p| ravif::RGB8::new(p[0], p[1], p[2]))
+            .collect()
+    };
+    let (w, h) = (width as usize, height as usize);
+    ravif::Encoder::new()
+        .with_quality(AVIF_QUALITY)
+        .with_speed(AVIF_SPEED)
+        .encode_rgb(ravif::Img::new(&rgb[..], w, h))
+        .map(|e| e.avif_file)
+        .map_err(|e| Error::Encode(e.to_string()))
 }
 
 fn encode_webp(
@@ -435,7 +500,7 @@ pub fn run_job(
                     })?;
                     rows.push((v.width, v.height, v.format.ext(), v.bytes.len() as u64));
                 }
-                catalog.store_variants(&hash, VERSION, &rows, None)?;
+                catalog.store_variants(&hash, VERSION, FORMATS, &rows, None)?;
             }
             Err(e) => {
                 if !matches!(e, Error::Unsupported(_)) {
@@ -444,9 +509,38 @@ pub fn run_job(
                         &[("path", &place.book_path), ("error", &e.to_string())],
                     );
                 }
-                catalog.store_variants(&hash, VERSION, &[], Some(&e.to_string()))?;
+                catalog.store_variants(&hash, VERSION, FORMATS, &[], Some(&e.to_string()))?;
             }
         }
+        done += 1;
+    }
+    let avif = Format::Avif.bit();
+    for (hash, place) in catalog.pages_lacking_format(rel, VERSION, WIDTHS[0], avif)? {
+        if should_stop() {
+            return Ok((JobEnd::Stopped, done));
+        }
+        let made = read_page(library, blobs, &hash, &place)
+            .map_err(|e| e.to_string())
+            .and_then(|b| make_avif(&b, &limits).map_err(|e| e.to_string()));
+        match made {
+            Ok(variants) => {
+                let mut rows = Vec::with_capacity(variants.len());
+                for v in &variants {
+                    write_blob(blobs, &hash, v).map_err(|e| {
+                        let path = blobs.variant_path(&hash, v.width, VERSION, v.format.ext());
+                        ScanError::Io(path, e)
+                    })?;
+                    rows.push((v.width, v.height, v.format.ext(), v.bytes.len() as u64));
+                }
+                catalog.add_variants(&hash, &rows)?;
+            }
+            // It keeps its JPEG and WebP ones.
+            Err(e) => log::error(
+                "variants: no AVIF ones",
+                &[("path", &place.book_path), ("error", &e)],
+            ),
+        }
+        catalog.add_formats(&hash, avif)?;
         done += 1;
     }
     for hash in catalog.pages_lacking_width(rel, VERSION, WIDTHS[0], THUMB)? {
@@ -510,7 +604,23 @@ pub fn give_up_page(catalog: &mut Catalog, rel: &str) -> Result<(), catalog::Err
             "variants: page left as it is",
             &[("path", &place.book_path), ("error", e)],
         );
-        catalog.store_variants(&hash, VERSION, &[], Some(e))?;
+        catalog.store_variants(&hash, VERSION, FORMATS, &[], Some(e))?;
+    } else if let Some((hash, place)) = catalog
+        .pages_lacking_format(rel, VERSION, WIDTHS[0], Format::Avif.bit())?
+        .into_iter()
+        .next()
+    {
+        log::error(
+            "variants: no AVIF ones",
+            &[
+                ("path", &place.book_path),
+                (
+                    "error",
+                    "gave up: the worker stopped while making them each time",
+                ),
+            ],
+        );
+        catalog.add_formats(&hash, Format::Avif.bit())?;
     }
     Ok(())
 }
@@ -621,12 +731,20 @@ mod tests {
             .bytes
     }
 
-    fn decoded(v: &Variant) -> DynamicImage {
+    /// A JPEG or WebP variant decoded; AVIF ones are not decoded.
+    fn decoded(v: &Variant) -> Option<DynamicImage> {
         let format = match v.format {
             Format::Jpeg => ImageFormat::Jpeg,
             Format::Webp => ImageFormat::WebP,
+            Format::Avif => return None,
         };
-        image::load_from_memory_with_format(&v.bytes, format).unwrap()
+        Some(image::load_from_memory_with_format(&v.bytes, format).unwrap())
+    }
+
+    /// A variant's size from its header (the only way for AVIF ones).
+    fn header_size(v: &Variant) -> (u32, u32) {
+        let s = crate::archive::size::read_size(&v.bytes[..], 0, v.bytes.len() as u64).unwrap();
+        (s.width, s.height)
     }
 
     #[test]
@@ -660,17 +778,23 @@ mod tests {
             [
                 (THUMB, 360, Format::Jpeg),
                 (THUMB, 360, Format::Webp),
+                (THUMB, 360, Format::Avif),
                 (720, 1080, Format::Jpeg),
                 (720, 1080, Format::Webp),
+                (720, 1080, Format::Avif),
                 (1080, 1620, Format::Jpeg),
                 (1080, 1620, Format::Webp),
+                (1080, 1620, Format::Avif),
             ]
         );
         for v in &vs {
-            let img = decoded(v);
-            assert_eq!((img.width(), img.height()), (v.width, v.height));
-            assert!(img.color().has_color());
+            assert_eq!(header_size(v), (v.width, v.height), "{v:?}");
+            if let Some(img) = decoded(v) {
+                assert_eq!((img.width(), img.height()), (v.width, v.height));
+                assert!(img.color().has_color());
+            }
         }
+        assert_eq!(&vs[2].bytes[4..12], b"ftypavif");
         assert_eq!(components_of_jpeg(first_jpeg(&vs)), 3);
     }
 
@@ -708,9 +832,12 @@ mod tests {
             |x, _| if x < 750 { [0; 3] } else { [255; 3] },
         );
         let vs = make(&page, &Limits::default()).unwrap();
-        assert_eq!((vs[2].width, vs[2].height), (720, 1080));
+        assert_eq!(
+            (vs[3].width, vs[3].height, vs[3].format),
+            (720, 1080, Format::Jpeg)
+        );
         // The stored left half (black) is now the top.
-        let img = decoded(&vs[2]).into_luma8();
+        let img = decoded(&vs[3]).unwrap().into_luma8();
         assert!(img.get_pixel(360, 100).0[0] < 50);
         assert!(img.get_pixel(360, 980).0[0] > 200);
     }
@@ -719,7 +846,7 @@ mod tests {
     fn gray_pngs_and_transparency() {
         let png = koma_fixtures::png::page(900, 1300, 3);
         let vs = make(&png, &Limits::default()).unwrap();
-        assert_eq!(vs.len(), 4);
+        assert_eq!(vs.len(), 6);
         assert_eq!(components_of_jpeg(first_jpeg(&vs)), 1);
 
         // Fully transparent becomes white.
@@ -793,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn very_long_strips_keep_only_the_jpeg() {
+    fn very_long_strips_keep_no_webp() {
         // 721 wide, 16,500 tall at 720: past WebP's 16,383.
         let strip = koma_fixtures::png::gray(721, 16_523, |_, y| (y % 256) as u8);
         let vs = make(&strip, &Limits::default()).unwrap();
@@ -803,7 +930,9 @@ mod tests {
             [
                 (THUMB, 5500, Format::Jpeg),
                 (THUMB, 5500, Format::Webp),
-                (720, 16_500, Format::Jpeg)
+                (THUMB, 5500, Format::Avif),
+                (720, 16_500, Format::Jpeg),
+                (720, 16_500, Format::Avif)
             ]
         );
     }

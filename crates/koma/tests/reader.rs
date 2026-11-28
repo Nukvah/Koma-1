@@ -115,11 +115,12 @@ async fn the_reader_page() {
         // Its own stylesheet and script, at content-named URLs.
         assert!(page.contains(&format!("href=\"{}\"", koma::html::reader_css_url())));
         assert!(page.contains(&format!("src=\"{}\"", koma::html::reader_js_url())));
-        // The page with its variants: WebP first, JPEG to fall back on, the
+        // The page with its variants: AVIF, then WebP, JPEG to fall back on, the
         // page itself last; shown whole in the window.
         let v = koma::variants::VERSION;
         assert!(page.contains(&format!(
-            "<source id=pgw type=image/webp srcset=\"/p/{big}.240.v{v}.webp 240w, /p/{big}.720.v{v}.webp 720w, /p/{big}.1080.v{v}.webp 1080w, /p/{big}.png 1200w\" sizes=\"min(100vw, 66.7vh)\">"
+            "<picture><source type=image/avif srcset=\"/p/{big}.240.v{v}.avif 240w, /p/{big}.720.v{v}.avif 720w, /p/{big}.1080.v{v}.avif 1080w, /p/{big}.png 1200w\" sizes=\"min(100vw, 66.7vh)\">\
+             <source type=image/webp srcset=\"/p/{big}.240.v{v}.webp 240w, /p/{big}.720.v{v}.webp 720w, /p/{big}.1080.v{v}.webp 1080w, /p/{big}.png 1200w\" sizes=\"min(100vw, 66.7vh)\">"
         )), "{page}");
         assert!(page.contains(&format!(
             "<img id=pg src=\"/p/{big}.png\" srcset=\"/p/{big}.240.v{v}.jpg 240w, /p/{big}.720.v{v}.jpg 720w, /p/{big}.1080.v{v}.jpg 1080w, /p/{big}.png 1200w\""
@@ -171,7 +172,7 @@ async fn the_reader_page() {
         assert_eq!(p.len(), 3);
         assert_eq!(p[0]["h"], big.as_str());
         assert_eq!(p[0]["w"], 1200);
-        assert_eq!(p[0]["s"], serde_json::json!([[240, 3], [720, 3], [1080, 3]]));
+        assert_eq!(p[0]["s"], serde_json::json!([[240, 7], [720, 7], [1080, 7]]));
         assert_eq!(p[1]["s"], serde_json::json!([]));
         // At its end, the next book with its cover; the last one goes back.
         let end = j["end"].as_str().unwrap();

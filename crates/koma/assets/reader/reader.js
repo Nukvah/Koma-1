@@ -34,27 +34,29 @@
   let pages = null;
   let view = 'single';
 
-  // A page's sources: its variants in one format (WebP where the browser
-  // takes it, else JPEG) and itself. With Save-Data, the 720 one only.
+  // A page's sources: each variant in the best format the browser takes
+  // (AVIF, WebP, JPEG), and itself. With Save-Data, the 720 one only. AVIF:
+  // the browser chose it for the page the HTML came with.
   const webp = (() => {
     try { return document.createElement('canvas').toDataURL('image/webp').startsWith('data:image/webp'); } catch (e) { return false; }
   })();
+  const ok = /\.avif$/.test(($('#pg') || {}).currentSrc) ? 7 : webp ? 3 : 1;
+  const ext = m => m & ok & 4 ? 'avif' : m & ok & 2 ? 'webp' : 'jpg';
   const save = !!(navigator.connection && navigator.connection.saveData);
   const P = m => pages.p[m - 1];
   const N = () => pages.p.length;
   const url = (p, w, f) => '/p/' + p.h + (w ? '.' + w + '.v' + pages.v + '.' : '.') + f;
   const srcset = p => {
-    const f = webp ? 2 : 1;
-    const vs = p.s.filter(([w, m]) => m & f && (!save || w === 720));
-    const set = vs.map(([w]) => url(p, w, webp ? 'webp' : 'jpg') + ' ' + w + 'w');
+    const vs = p.s.filter(([w, m]) => m & ok && (!save || w === 720));
+    const set = vs.map(([w, m]) => url(p, w, ext(m)) + ' ' + w + 'w');
     if (!save || !vs.length) set.push(url(p, 0, p.f) + ' ' + p.w + 'w');
     return set.join(', ');
   };
   // The smallest picture of a page, for thumbnails and the scrubber; none
   // for a large page whose smaller copies are not made yet.
   const small = p => {
-    const v = p.s.find(([, m]) => m & (webp ? 2 : 1));
-    return v ? url(p, v[0], webp ? 'webp' : 'jpg') : p.w > 720 ? '' : url(p, 0, p.f);
+    const v = p.s.find(([, m]) => m & ok);
+    return v ? url(p, v[0], ext(v[1])) : p.w > 720 ? '' : url(p, 0, p.f);
   };
   // Page m's picture, its size known before it loads; no source yet.
   const image = (m, sizes) => {

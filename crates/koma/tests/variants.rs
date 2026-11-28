@@ -97,6 +97,12 @@ fn all_pages(catalog: &Catalog) -> Vec<(String, koma::catalog::Page)> {
     out
 }
 
+/// An image's size from its header: JPEG, WebP and AVIF alike.
+fn size_of(bytes: &[u8]) -> (u32, u32) {
+    let s = koma::archive::size::read_size(bytes, 0, bytes.len() as u64).unwrap();
+    (s.width, s.height)
+}
+
 fn db(data: &Path) -> PathBuf {
     data.join("koma.db")
 }
@@ -140,20 +146,19 @@ fn every_big_page_gets_its_variants_once() {
         let want: Vec<(u32, u32, String)> = variants::widths_for(size.width)
             .flat_map(|w| {
                 let h = variants::height_for(size.width, size.height, w);
-                [(w, h, "jpg".to_owned()), (w, h, "webp".to_owned())]
+                ["avif", "jpg", "webp"].map(|f| (w, h, f.to_owned()))
             })
             .collect();
         assert_eq!(got, want, "{path} page {}", page.number);
         for (w, h, format) in got {
             let bytes = fs::read(blobs.variant_path(&page.hash, w, VERSION, &format)).unwrap();
-            let img = image::load_from_memory(&bytes).unwrap();
-            assert_eq!((img.width(), img.height()), (w, h));
+            assert_eq!(size_of(&bytes), (w, h));
             files += 1;
         }
     }
     // v01: 3 + 3 + 0 widths (the thumbnail, 720, 1080), v02: 3 (the shared
-    // page again) + 2, Mirelle: 3; each in two formats.
-    assert_eq!(files, 2 * (6 + 5 + 3));
+    // page again) + 2, Mirelle: 3; each in three formats.
+    assert_eq!(files, 3 * (6 + 5 + 3));
 
     // Nothing left to do.
     let again = scan(&lib, &data, &mut catalog).unwrap();
@@ -193,7 +198,7 @@ fn pages_made_before_thumbnails_get_theirs_from_the_720_copy() {
             .map(|(w, h, f, l)| (*w, *h, f.as_str(), *l))
             .collect();
         catalog
-            .store_variants(&page.hash, VERSION, &rows, None)
+            .store_variants(&page.hash, VERSION, variants::FORMATS, &rows, None)
             .unwrap();
         before.push(page);
     }
@@ -205,16 +210,72 @@ fn pages_made_before_thumbnails_get_theirs_from_the_720_copy() {
     for page in &before {
         let got = catalog.variants_of(&page.hash).unwrap();
         let size = page.size.unwrap();
-        assert_eq!(got.len(), 2 * variants::widths_for(size.width).count());
+        // The AVIF thumbnail stays missing: AVIF ones were made already.
+        assert_eq!(got.len(), 3 * variants::widths_for(size.width).count() - 1);
         for format in ["jpg", "webp"] {
             let (w, h, _) = got
                 .iter()
                 .find(|(w, _, f)| *w == variants::THUMB && f == format)
                 .expect("a thumbnail");
             let bytes = fs::read(blobs.variant_path(&page.hash, *w, VERSION, format)).unwrap();
-            let img = image::load_from_memory(&bytes).unwrap();
-            assert_eq!((img.width(), img.height()), (*w, *h));
+            assert_eq!(size_of(&bytes), (*w, *h));
         }
+    }
+    assert_eq!(scan(&lib, &data, &mut catalog).unwrap().variant_pages, 0);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn pages_made_before_avif_get_avif_ones_from_the_original() {
+    let root = temp_root("avif");
+    let lib = library(&root);
+    let data = root.join("data");
+    let mut catalog = Catalog::open(&db(&data)).unwrap();
+    scan(&lib, &data, &mut catalog).unwrap();
+
+    // As a catalogue made before AVIF: JPEG and WebP variants, formats 3.
+    let blobs = BlobStore::new(&data);
+    let mut before = Vec::new();
+    for (_, page) in all_pages(&catalog) {
+        let rows: Vec<(u32, u32, String, u64)> = catalog
+            .variants_of(&page.hash)
+            .unwrap()
+            .into_iter()
+            .filter(|(_, _, f)| f != "avif")
+            .map(|(w, h, f)| {
+                let path = blobs.variant_path(&page.hash, w, VERSION, &f);
+                (w, h, f, fs::metadata(path).unwrap().len())
+            })
+            .collect();
+        if rows.is_empty() {
+            continue;
+        }
+        let rows: Vec<(u32, u32, &str, u64)> = rows
+            .iter()
+            .map(|(w, h, f, l)| (*w, *h, f.as_str(), *l))
+            .collect();
+        let old = Format::Jpeg.bit() | Format::Webp.bit();
+        catalog
+            .store_variants(&page.hash, VERSION, old, &rows, None)
+            .unwrap();
+        before.push(page);
+    }
+    before.dedup_by_key(|p| p.hash);
+    assert_eq!(before.len(), 4);
+
+    // The next pass adds the AVIF ones at every width the page has.
+    let report = scan(&lib, &data, &mut catalog).unwrap();
+    assert_eq!(report.variant_pages, 4);
+    for page in &before {
+        let got = catalog.variants_of(&page.hash).unwrap();
+        let size = page.size.unwrap();
+        for w in variants::widths_for(size.width) {
+            let h = variants::height_for(size.width, size.height, w);
+            assert!(got.contains(&(w, h, "avif".to_owned())), "{got:?}");
+            let bytes = fs::read(blobs.variant_path(&page.hash, w, VERSION, "avif")).unwrap();
+            assert_eq!(size_of(&bytes), (w, h));
+        }
+        assert_eq!(got.len(), 3 * variants::widths_for(size.width).count());
     }
     assert_eq!(scan(&lib, &data, &mut catalog).unwrap().variant_pages, 0);
     let _ = fs::remove_dir_all(&root);
@@ -323,7 +384,7 @@ fn a_page_that_kills_the_worker_each_time_is_given_up_alone() {
         .map(|(_, p)| p)
         .collect();
     assert!(catalog.variants_of(&pages[0].hash).unwrap().is_empty());
-    assert_eq!(catalog.variants_of(&pages[1].hash).unwrap().len(), 6);
+    assert_eq!(catalog.variants_of(&pages[1].hash).unwrap().len(), 9);
     assert_eq!(catalog.variant_page_count(VERSION).unwrap(), 4);
     assert_eq!(catalog.job_count().unwrap(), 0);
     let _ = fs::remove_dir_all(&root);
@@ -403,11 +464,8 @@ fn killing_the_worker_mid_job_then_restarting_finishes_cleanly() {
     let blobs = BlobStore::new(&data);
     for (_, page) in all_pages(&catalog) {
         for (w, h, format) in catalog.variants_of(&page.hash).unwrap() {
-            let img = image::load_from_memory(
-                &fs::read(blobs.variant_path(&page.hash, w, VERSION, &format)).unwrap(),
-            )
-            .unwrap();
-            assert_eq!((img.width(), img.height()), (w, h));
+            let bytes = fs::read(blobs.variant_path(&page.hash, w, VERSION, &format)).unwrap();
+            assert_eq!(size_of(&bytes), (w, h));
         }
     }
     let _ = fs::remove_dir_all(&root);
@@ -477,7 +535,8 @@ async fn variants_are_served_at_their_own_immutable_urls() {
 
     tokio::task::spawn_blocking(move || {
         let hex = big.to_hex();
-        for (format, mime) in [(Format::Jpeg, "image/jpeg"), (Format::Webp, "image/webp")] {
+        for format in Format::ALL {
+            let mime = format.mime();
             for width in [720, 1080] {
                 let url = variants::url(&big, width, format);
                 assert_eq!(url, format!("/p/{hex}.{width}.v{VERSION}.{}", format.ext()));
@@ -495,7 +554,7 @@ async fn variants_are_served_at_their_own_immutable_urls() {
                     headers.contains(&format!("etag: \"{hex}.{width}.v{VERSION}\"")),
                     "{headers}"
                 );
-                assert_eq!(image::load_from_memory(&body).unwrap().width(), width);
+                assert_eq!(size_of(&body).0, width);
             }
         }
         // The original is still there as it was.
@@ -509,7 +568,6 @@ async fn variants_are_served_at_their_own_immutable_urls() {
             format!("/p/{hex}.720.jpg"), // no version
             format!("/p/{hex}.720.{v}.jpg"),
             format!("/p/{hex}.720.v{v}.png"), // not a variant format
-            format!("/p/{hex}.720.v{v}.avif"), // not yet
             format!("/p/{hex}.-720.v{v}.jpg"),
             format!("/p/{hex}.720.v{v}.jpg.x"),
             variants::url(&small, 720, Format::Jpeg), // too small to have any

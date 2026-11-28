@@ -840,17 +840,12 @@ async fn details_data(
                     let url = match c
                         .variants_of(&p.hash)?
                         .iter()
-                        .find(|v| v.0 == crate::html::COVER_WIDTH)
+                        .find(|v| v.0 == crate::html::COVER_WIDTH && v.2 != "avif")
                     {
-                        Some(v) => crate::variants::url(
-                            &p.hash,
-                            v.0,
-                            if v.2 == "webp" {
-                                crate::variants::Format::Webp
-                            } else {
-                                crate::variants::Format::Jpeg
-                            },
-                        ),
+                        Some(v) => match crate::variants::Format::from_ext(&v.2) {
+                            Some(f) => crate::variants::url(&p.hash, v.0, f),
+                            None => crate::html::page_url(&p),
+                        },
                         None => crate::html::page_url(&p),
                     };
                     pages.push((p.number, url));

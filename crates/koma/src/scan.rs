@@ -432,6 +432,11 @@ pub fn run_jobs(
                 let (version, min_width) = (variants::VERSION, variants::WIDTHS[0]);
                 if catalog.queue_missing_variants(version, min_width)?
                     + catalog.queue_missing_width(version, min_width, variants::THUMB)?
+                    + catalog.queue_missing_format(
+                        version,
+                        min_width,
+                        variants::Format::Avif.bit(),
+                    )?
                     > 0
                 {
                     continue;

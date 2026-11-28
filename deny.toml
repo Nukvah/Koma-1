@@ -3,6 +3,14 @@
 
 [graph]
 all-features = false
+# Only what Koma-1 is built for: leaves out dependencies that exist only for
+# other targets (rav1e's wasm and `cfg(fuzzing)` ones, for example).
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-unknown-linux-musl",
+]
 
 [advisories]
 # Every advisory fails, unmaintained crates included. Ignore one only with a reason.
@@ -12,6 +20,8 @@ ignore = []
 # Permissive licences only; add one here when a new dependency needs it.
 allow = [
     "Apache-2.0",
+    # rav1e (AVIF encoding).
+    "BSD-2-Clause",
     "BSD-3-Clause",
     # jpeg-encoder (page variants). Permissive; binaries must say they are
     # "based in part on the work of the Independent JPEG Group": README.md.

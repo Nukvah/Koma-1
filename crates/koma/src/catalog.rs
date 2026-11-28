@@ -14,7 +14,7 @@ pub use crate::archive::size::Size;
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 14;
+const SCHEMA_VERSION: i64 = 15;
 
 /// How long a book whose file vanished is remembered, so that a folder that
 /// comes back (a drive mounted late, a move noticed in two steps) keeps its
@@ -149,7 +149,8 @@ CREATE VIRTUAL TABLE search USING fts5(
 CREATE TABLE variant_pages (
     hash     BLOB PRIMARY KEY,       -- a page whose variants are made (maybe none)
     version  INTEGER NOT NULL,       -- variants::VERSION they were made with
-    error    TEXT                    -- why it has none, if it could not be decoded
+    error    TEXT,                   -- why it has none, if it could not be decoded
+    formats  INTEGER NOT NULL DEFAULT 3 -- formats tried (variants::Format::bit)
 ) WITHOUT ROWID;
 ";
 
@@ -161,6 +162,14 @@ const LIBRARY_OF_PATH: &str = "CASE WHEN substr(path, 1, 1) = char(0) THEN '' \
        WHEN instr(substr(path, instr(path, '/') + 1), '/') = 0 THEN substr(path, 1, instr(path, '/') - 1) \
        ELSE substr(path, 1, instr(path, '/') + instr(substr(path, instr(path, '/') + 1), '/') - 1) END \
      WHEN instr(path, '/') > 0 THEN substr(path, 1, instr(path, '/') - 1) ELSE '' END";
+
+/// Pages of present books wider than ?2 (or of unknown size) whose
+/// variants, made with version ?1 without an error, were not tried in the
+/// format bit ?3.
+const LACKING_FORMAT: &str = "FROM books JOIN pages ON pages.book_id = books.id
+     JOIN variant_pages v ON v.hash = pages.hash AND v.version = ?1
+     WHERE books.gone IS NULL AND v.error IS NULL AND v.formats & ?3 = 0
+       AND (pages.width IS NULL OR pages.width > ?2)";
 
 /// Pages of present books whose variants, made with version ?1, include a
 /// JPEG ?2 wide but nothing ?3 wide.
@@ -294,6 +303,11 @@ CREATE TABLE IF NOT EXISTS edits (
 /// kind and title, and names the tidy must leave alone.
 const MIGRATE_13_TO_14: &str = "ALTER TABLE ops ADD COLUMN kind TEXT;
 ALTER TABLE ops ADD COLUMN title TEXT;";
+
+/// Schema 14 to 15: the formats each page's variants were made in. Pages
+/// made before AVIF have JPEG and WebP (3); their AVIF ones are added.
+const MIGRATE_14_TO_15: &str =
+    "ALTER TABLE variant_pages ADD COLUMN formats INTEGER NOT NULL DEFAULT 3;";
 
 /// Names to keep as they are (a tidy undone).
 const NAMING: &str = "CREATE TABLE IF NOT EXISTS name_keep (
@@ -543,7 +557,7 @@ impl Catalog {
         match version {
             // From 7 on the catalogue is upgraded in place, one step at a
             // time: remaking page variants is too costly to start over.
-            7..=13 => {
+            7..=14 => {
                 let mut steps = String::new();
                 if version == 7 {
                     steps.push_str(&migrate_7_to_8());
@@ -575,6 +589,14 @@ impl Catalog {
                 )?;
                 if version == 13 && !has_kind {
                     steps.push_str(MIGRATE_13_TO_14);
+                }
+                let has_formats: bool = self.conn.query_row(
+                    "SELECT count(*) > 0 FROM pragma_table_info('variant_pages') WHERE name = 'formats'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                if !has_formats {
+                    steps.push_str(MIGRATE_14_TO_15);
                 }
                 steps.push_str(ORGANISE);
                 steps.push_str(NAMING);
@@ -1710,6 +1732,64 @@ impl Catalog {
         tx.commit()
     }
 
+    /// Queues a variants job for each present book with a page whose
+    /// variants, made with `version`, were not tried in the format `bit`:
+    /// pages made before that format was. Returns how many.
+    pub fn queue_missing_format(
+        &self,
+        version: i64,
+        min_width: u32,
+        bit: u8,
+    ) -> Result<usize, Error> {
+        self.conn.execute(
+            &format!(
+                "INSERT INTO jobs (kind, path)
+                 SELECT 'variants', books.path {LACKING_FORMAT}
+                 GROUP BY books.id ORDER BY books.id
+                 ON CONFLICT (kind, path) DO NOTHING"
+            ),
+            params![version, min_width, bit],
+        )
+    }
+
+    /// The pages of the present book at `path` whose variants were not
+    /// tried in the format `bit` (see [`Catalog::queue_missing_format`]),
+    /// each content once, in reading order.
+    pub fn pages_lacking_format(
+        &self,
+        path: &str,
+        version: i64,
+        min_width: u32,
+        bit: u8,
+    ) -> Result<Vec<(blake3::Hash, PageLocation)>, Error> {
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT pages.hash, COALESCE(pages.file, books.path), pages.format, pages.length,
+                    pages.offset, MIN(pages.number) AS first {LACKING_FORMAT}
+             AND books.path = ?4 GROUP BY pages.hash ORDER BY first"
+        ))?;
+        let rows = stmt.query_map(params![version, min_width, bit, path], |r| {
+            Ok((
+                hash_from_row(r, 0)?,
+                PageLocation {
+                    book_path: r.get(1)?,
+                    format: r.get(2)?,
+                    length: r.get::<_, i64>(3)? as u64,
+                    offset: r.get::<_, Option<i64>>(4)?.map(|o| o as u64),
+                },
+            ))
+        })?;
+        rows.collect()
+    }
+
+    /// Records that a page's variants were tried in the formats `bits` too.
+    pub fn add_formats(&mut self, hash: &blake3::Hash, bits: u8) -> Result<(), Error> {
+        self.conn.execute(
+            "UPDATE variant_pages SET formats = formats | ?2 WHERE hash = ?1",
+            params![hash.as_bytes(), bits],
+        )?;
+        Ok(())
+    }
+
     /// The pages of the present book at `path` that lack variants made with
     /// `version` and may need some (see [`Catalog::queue_missing_variants`]),
     /// each page content once, in reading order.
@@ -1743,12 +1823,14 @@ impl Catalog {
     }
 
     /// Records a page's variants (`(width, height, format, length)`; their
-    /// blobs already written), made with `version`, replacing any it had.
-    /// `error` says why a page has none.
+    /// blobs already written), made with `version` in `formats` (bits of
+    /// `variants::Format::bit`), replacing any it had. `error` says why a
+    /// page has none.
     pub fn store_variants(
         &mut self,
         hash: &blake3::Hash,
         version: i64,
+        formats: u8,
         variants: &[(u32, u32, &str, u64)],
         error: Option<&str>,
     ) -> Result<(), Error> {
@@ -1770,9 +1852,10 @@ impl Catalog {
             }
         }
         tx.execute(
-            "INSERT INTO variant_pages (hash, version, error) VALUES (?1, ?2, ?3)
-             ON CONFLICT (hash) DO UPDATE SET version = excluded.version, error = excluded.error",
-            params![hash.as_bytes(), version, error],
+            "INSERT INTO variant_pages (hash, version, error, formats) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (hash) DO UPDATE SET version = excluded.version, error = excluded.error,
+                                              formats = excluded.formats",
+            params![hash.as_bytes(), version, error, formats],
         )?;
         tx.commit()
     }
