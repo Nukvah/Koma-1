@@ -195,8 +195,10 @@ serving never resizes or transcodes (`koma::variants`):
   a year under the old URLs are never wrong, only old. A page's files of an
   older version are removed when it is made again. Version 2: JPEG through
   jpegli.
-- One page at a time on one thread: on the 2-CPU target the other CPU stays
-  free for `koma serve`.
+- Today: one page at a time on one thread, so that on 2 CPUs the other one
+  stays free for `koma serve`. To change (manifesto, principle 10; plan in
+  [m9-progress.md](m9-progress.md#threading)): pages in parallel, one per core
+  the worker is given, the worker at low priority so `serve` comes first.
 
 ## Catalogue and scan
 

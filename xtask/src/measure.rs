@@ -16,7 +16,8 @@ use crate::report::Report;
 const KIB: f64 = 1024.0;
 const MIB: f64 = 1024.0 * 1024.0;
 
-/// Matches the target hardware: 2 CPUs and 1 GB of memory.
+/// The smallest hardware Koma-1 must keep working on (the floor, not the
+/// target): 2 CPUs and 1 GB of memory.
 const LIMITS: [&str; 4] = ["--cpus", "2", "--memory", "1g"];
 /// Matches the hardening the manifesto asks of a deployment.
 const HARDENING: [&str; 5] = [
