@@ -838,9 +838,16 @@ impl Run<'_> {
                     .unwrap_or_default()
                     .to_owned()
             };
-            outcome
-                .failed
-                .push((s("name"), format!("{} (in the browser)", s("why"))));
+            outcome.failed.push((
+                s("name"),
+                // Refused by the plan: the reason says it all. Otherwise
+                // the browser could not send it.
+                if f.get("refused").and_then(Value::as_bool) == Some(true) {
+                    s("why")
+                } else {
+                    format!("{} (in the browser)", s("why"))
+                },
+            ));
         }
         // Taken up again after a stop: what was filed already stays filed.
         let filed: Vec<String> = self

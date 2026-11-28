@@ -56,6 +56,16 @@ fn request(addr: SocketAddr, user: &str, method: &str, path: &str, body: &[u8]) 
     answer(s)
 }
 
+/// A page: its status and its text.
+fn page_text(addr: SocketAddr, user: &str, path: &str) -> (u16, String) {
+    let mut s = connect(addr);
+    s.write_all(head(user, "GET", path, 0).as_bytes()).unwrap();
+    let mut raw = Vec::new();
+    s.read_to_end(&mut raw).unwrap();
+    let text = String::from_utf8_lossy(&raw).into_owned();
+    (text[9..12].parse().unwrap(), text)
+}
+
 /// Sends `len` bulk bytes from `from` as a file's next piece, but drops the
 /// connection after `cut` of them when `cut` is given.
 fn send(
@@ -545,6 +555,41 @@ async fn a_drop_is_planned_filed_logged_and_undone() {
             log.contains("✗ Starfall 04.cbz: Network error (in the browser)"),
             "{log}"
         );
+        // The pages: the drop zone with its script, the log for whom it concerns.
+        assert_eq!(request(addr, "bram", "GET", "/", b"").status, 200); // a reader
+        let (status, add) = page_text(addr, "mirelle", "/add?l=manga");
+        assert_eq!(status, 200);
+        assert!(add.contains("data-add data-library=\"manga\""), "{add}");
+        let js = add
+            .split("<script defer src=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap();
+        assert!(js.starts_with("/a/upload."), "{js}");
+        assert_eq!(page_text(addr, "mirelle", js).0, 200);
+        let (status, add) = page_text(addr, "mirelle", &format!("/add?s={}", academy.0.id));
+        assert_eq!(status, 200);
+        assert!(
+            add.contains(&format!("data-series={}", academy.0.id)),
+            "{add}"
+        );
+        assert!(add.contains("add to · <b>~/Starfall Academy</b>"), "{add}");
+        assert_eq!(page_text(addr, "bram", "/add?l=manga").0, 403);
+        assert_eq!(page_text(addr, "mirelle", "/add?l=nowhere").0, 404);
+        let (status, log) = page_text(addr, "mirelle", "/uploads");
+        assert_eq!(status, 200);
+        assert!(log.contains("4 out of 6 added without problems"), "{log}");
+        assert!(
+            log.contains("✗ Starfall 03.cbz: This archive is damaged"),
+            "{log}"
+        );
+        let (status, log) = page_text(addr, "bram", "/uploads");
+        assert_eq!(status, 200);
+        assert!(!log.contains("added without problems") && log.contains("No drops this month"));
+        assert_eq!(page_text(addr, "mirelle", "/uploads?m=../../x").0, 200);
+
         let staged: Vec<_> = fs::read_dir(data.join("uploads"))
             .unwrap()
             .flatten()

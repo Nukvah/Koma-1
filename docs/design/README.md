@@ -348,3 +348,7 @@ Chosen with the owner where marked; the rest is proposed:
   once it has been quiet for 30 minutes.
 - Videos dropped into a cosplay set are kept in its ZIP, in their place
   between the photos; M10 shows them.
+- Not built yet: dropping straight onto a library, collection or series
+  page (the series page and the side panel link to `add files`; every drop
+  shows the review sheet), and the log entry for a drop whose browser never
+  reports the end (its uploads are swept after a day).

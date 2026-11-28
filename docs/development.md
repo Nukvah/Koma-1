@@ -615,10 +615,17 @@ from the disk, so the plan the browser shows is the one the worker carries out.
 - `koma::uplog` writes the upload log, `<data>/logs/uploads-YYYY-MM.log`: one entry per drop, files that
   went in fine only counted, every failure (the worker's and the browser's) on a line with its reason.
   The change's message on `/jobs` is the same summary.
+- The pages: `GET /add?l=<library>[&c=<collection>]` or `?s=<series>` is the drop zone (also file and
+  folder pickers); `assets/curator/upload.js` reads the drop by name, asks `/up/plan`, shows the review
+  sheet (each file's place and name, a switch for the standard names, a box per file), then sends files in
+  8 MiB pieces and packs image by image, retrying with backoff and resuming at the server's offset, and
+  commits. `GET /uploads[?m=YYYY-MM]` shows the log: each account its own drops and those to libraries it
+  may organise. Not built yet: dropping straight onto a library or series page (the series page links to
+  `/add?s=`), and a log entry for an upload the browser never finished (it is swept after a day).
 - `tests/upload.rs` is the other half of M8's exit check: a 2 GB upload cut twice (at 700 MB and 1.5 GB)
   and resumed arrives byte for byte (`koma_fixtures::bulk` makes bytes from their offset, so nothing is
   kept in memory); also packs, refusals and privacy, and a drop planned, sent, filed (CB7 converted, a
-  duplicate skipped, a damaged archive refused, the log written) and undone.
+  duplicate skipped, a damaged archive refused, the log written), shown on the pages and undone.
 - `tests/drops.rs` is half of M8's exit check: the golden set `tests/drops_golden.json` (25 made-up drops)
   gives exactly the expected plans; it also checks the standard names.
 

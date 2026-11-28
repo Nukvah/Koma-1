@@ -17,6 +17,7 @@
 //! consistent; until that task ends, the upload answers 409 "busy".
 
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::io::{self, Read};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -26,7 +27,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::{Path as UrlPath, RawQuery, State};
 use axum::http::StatusCode;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
-use axum::response::{IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Response};
 use http_body::Body as _;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -35,6 +36,7 @@ use crate::auth::Viewer;
 use crate::catalog::{Catalog, Series};
 use crate::curate::may_organise;
 use crate::drops::{self, Known, Place, Target};
+use crate::html::escape;
 use crate::libraries::{Kind as LibraryKind, Library, library_of};
 use crate::serve::{AppState, Failure};
 use crate::staging::{Error, Kind, Staging, Upload};
@@ -611,4 +613,208 @@ pub async fn commit(
             "message": done.map(|s| s.message),
         }),
     ))
+}
+
+// ---- the pages
+
+/// The add-files page's script: reading a drop, the review sheet, sending.
+pub const UPLOAD_JS: &str = include_str!("../assets/curator/upload.js");
+
+static UPLOAD_JS_URL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let hex = blake3::hash(UPLOAD_JS.as_bytes()).to_hex();
+    format!("/a/upload.{}.js", &hex[..16])
+});
+
+pub fn upload_js_url() -> &'static str {
+    &UPLOAD_JS_URL
+}
+
+fn page(me: &Viewer, libraries: &[Library], title: &str, main: &str) -> String {
+    let me2 = me.me();
+    crate::html::shell(
+        title,
+        libraries,
+        &crate::curate::here(&me2, "add files"),
+        main,
+    )
+}
+
+/// `GET /add?l=<library>[&c=<collection>]` or `/add?s=<series>`: the drop
+/// zone, and the review sheet the script fills. Without a target, the
+/// libraries the viewer may add to.
+pub async fn add_page(
+    State(state): State<AppState>,
+    Extension(me): Extension<Viewer>,
+    RawQuery(q): RawQuery,
+) -> Result<Response, Failure> {
+    let q = q.as_deref();
+    let first = |k: &str| crate::curate::query_all(q, k).into_iter().next();
+    let series_id = first("s").and_then(|s| s.parse::<i64>().ok());
+    let viewer = me.clone();
+    let (libraries, series) = state
+        .query(move |c| {
+            let libs = crate::curate::libraries(c, &viewer)?;
+            let s = match series_id {
+                Some(id) => Some(
+                    c.series_by_id(id)?
+                        .filter(|s| viewer.sees(&s.path) && !s.path.starts_with('\0'))
+                        .ok_or(Failure::NotFound)?,
+                ),
+                None => None,
+            };
+            Ok((libs, s))
+        })
+        .await?;
+    let folder = match &series {
+        Some(s) => Some(library_of(&s.path).to_owned()),
+        None => first("l"),
+    };
+    let mine: Vec<&Library> = libraries
+        .iter()
+        .filter(|l| may_organise(&me, &l.folder))
+        .collect();
+    let lib = match folder {
+        Some(f) => Some(
+            libraries
+                .iter()
+                .find(|l| l.folder == f)
+                .ok_or(Failure::NotFound)?,
+        ),
+        None if mine.len() == 1 => Some(mine[0]),
+        None => None,
+    };
+    let Some(lib) = lib else {
+        let mut m = String::from(
+            "<div class=toolbar><h1>add files</h1></div><p class=hint>Pick where they go: a library here, \
+             or a series from its page.</p><div class=row>",
+        );
+        for l in &mine {
+            let _ = write!(
+                m,
+                "<a class=btn href=\"/add?l={}\">~/{}</a>",
+                crate::libraries::encode_path_part(&l.folder),
+                escape(&l.name)
+            );
+        }
+        if mine.is_empty() {
+            m.push_str("<p>There is no library you may add to.</p>");
+        }
+        m.push_str("</div>");
+        return Ok(Html(page(&me, &libraries, "Add files", &m)).into_response());
+    };
+    if !may_organise(&me, &lib.folder) {
+        return Err(crate::curate::refuse(&me));
+    }
+    let collection = series
+        .is_none()
+        .then(|| first("c"))
+        .flatten()
+        .filter(|c| !c.is_empty());
+    let (to, extra) = match (&series, &collection) {
+        (Some(s), _) => (s.name.clone(), format!(" data-series={}", s.id)),
+        (None, Some(c)) => (
+            format!("{}/{c}", lib.name),
+            format!(" data-collection=\"{}\"", escape(c)),
+        ),
+        (None, None) => (lib.name.clone(), String::new()),
+    };
+    let what = if lib.kind == LibraryKind::Cosplay {
+        "ZIP files and folders of photos, with their videos"
+    } else {
+        "CBZ, ZIP, CB7 and EPUB files, folders of images, or folders of all of these"
+    };
+    let m = format!(
+        "<div class=toolbar><h1>add to · <b>~/{}</b></h1></div>\
+         <div class=empty data-add data-library=\"{}\"{extra}>\
+         <strong>drop files or folders here</strong>\
+         <p>{what}. Nothing is sent until you have seen where each one goes.</p>\
+         <p><label class=btn for=files>choose files…</label> <label class=btn for=folder>choose a folder…</label>\
+         <input id=files type=file multiple hidden> <input id=folder type=file webkitdirectory hidden></p>\
+         <noscript><p class=pending>Adding files needs JavaScript: it reads the drop and sends it in pieces.</p></noscript>\
+         </div><div data-review></div>\
+         <p class=hint>What happened to each drop is kept in the <a href=/uploads>upload log</a>.</p>",
+        escape(&to),
+        escape(&lib.folder),
+    );
+    let s = page(&me, &libraries, &format!("Add to {to}"), &m).replacen(
+        "</head>",
+        &format!("<script defer src=\"{}\"></script></head>", upload_js_url()),
+        1,
+    );
+    Ok(Html(s).into_response())
+}
+
+/// `GET /uploads[?m=YYYY-MM]`: the upload log of a month. Each account sees
+/// its own drops and those to libraries it may organise.
+pub async fn log_page(
+    State(state): State<AppState>,
+    Extension(me): Extension<Viewer>,
+    RawQuery(q): RawQuery,
+) -> Result<Response, Failure> {
+    let viewer = me.clone();
+    let libraries = state
+        .query(move |c| crate::curate::libraries(c, &viewer))
+        .await?;
+    let now = crate::uplog::month(crate::accounts::now());
+    let month = crate::curate::query_all(q.as_deref(), "m")
+        .into_iter()
+        .next()
+        .filter(|m| crate::uplog::is_month(m))
+        .unwrap_or(now.clone());
+    let data = state.data_dir().to_path_buf();
+    let m2 = month.clone();
+    let (entries, mut months) =
+        blocking(move || (crate::uplog::read(&data, &m2), crate::uplog::months(&data))).await?;
+    if !months.contains(&now) {
+        months.insert(0, now);
+    }
+    let mut m = format!(
+        "<div class=toolbar><h1>upload log · <b>{}</b></h1><nav class=seg aria-label=Month>",
+        escape(&month)
+    );
+    for x in months.iter().take(6).rev() {
+        let _ = write!(
+            m,
+            "<a href=\"/uploads?m={x}\"{}>{x}</a>",
+            if *x == month {
+                " aria-current=page"
+            } else {
+                ""
+            }
+        );
+    }
+    let _ = write!(
+        m,
+        "</nav></div><p class=hint>One entry per drop. Files that went in fine are only counted; every one \
+         that did not is written out with its reason. Kept as <code>logs/uploads-{}.log</code> in the data folder.</p>",
+        escape(&month)
+    );
+    let mut shown = 0;
+    for (head, summary, failed) in &entries {
+        let Some((by, lib)) = crate::uplog::parties(head) else {
+            continue;
+        };
+        if by != me.name && !may_organise(&me, lib) {
+            continue;
+        }
+        shown += 1;
+        let _ = write!(
+            m,
+            "<section class=\"job done\"><div><b>{}</b><br><small>{}</small></div>",
+            escape(head),
+            escape(summary)
+        );
+        if !failed.is_empty() {
+            m.push_str("<small>");
+            for (i, f) in failed.iter().enumerate() {
+                let _ = write!(m, "{}✗ {}", if i > 0 { "<br>" } else { "" }, escape(f));
+            }
+            m.push_str("</small>");
+        }
+        m.push_str("</section>");
+    }
+    if shown == 0 {
+        m.push_str("<p>No drops this month.</p>");
+    }
+    Ok(Html(page(&me, &libraries, "Upload log", &m)).into_response())
 }
