@@ -26,7 +26,12 @@ kbd{font:inherit;font-size:11px;border:1px solid var(--line2);padding:1px 5px}
 .side .n{margin-left:auto;font-size:12px;color:var(--dim)}
 .side [aria-current]{color:var(--accent)}
 .tree a{padding:0 6px;margin:0 -6px;white-space:pre}
-.tree .on{background:var(--accent);color:var(--on-accent);font-weight:bold}
+/* The open library: its name folds its collections (a details, no script) */
+.tree summary{display:flex;align-items:center;min-height:30px;padding:0 6px;margin:0 -6px;white-space:pre;cursor:pointer;list-style:none}
+.tree summary::-webkit-details-marker{display:none}
+.tree summary::before{content:"▾ "}.tree details:not([open]) summary::before{content:"▸ "}
+/* Selected: dark on the accent, hovered too (the hover colour is the accent) */
+.tree .on,.side .on:hover{background:var(--accent);color:var(--on-accent);font-weight:bold}
 .tree .on .n{color:var(--on-accent)}
 .tree .sub{color:var(--dim)}
 .status{font-size:12px;color:var(--dim)}
@@ -109,8 +114,9 @@ mark{background:none;color:var(--accent);font-weight:bold}
 /* Phones: the side panel folds behind a menu button (a checkbox, no JavaScript) */
 .menu{position:absolute;opacity:0;width:1px;height:1px}
 .menu-btn{display:none}
-@media (max-width:760px){.menu-btn{display:flex;align-items:center;padding:0 12px;border-left:1px solid var(--line);cursor:pointer}
-.menu:checked~.top .menu-btn{background:var(--accent);color:var(--on-accent)}
+/* The ≡ takes the logo's place; the search gets its room */
+@media (max-width:760px){.brand{display:none}.menu-btn{order:-1;display:flex;align-items:center;padding:0 16px;font-size:24px;line-height:1;background:var(--accent);color:var(--on-accent);cursor:pointer}
+.menu:checked~.top .menu-btn{background:var(--raised);color:var(--accent)}
 .menu:focus-visible~.top .menu-btn{outline:2px solid var(--accent);outline-offset:-2px}
 .menu:not(:checked)~.layout .side{display:none}
 }

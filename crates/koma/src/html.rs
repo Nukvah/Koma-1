@@ -109,7 +109,7 @@ pub(crate) fn shell(title: &str, libraries: &[Library], here: &Here<'_>, main: &
          <form class=search role=search action=\"/search\"><label for=q>/</label>\
          <input id=q name=q type=search value=\"{}\" \
          placeholder=\"search all libraries: title, author:, tag:\"></form>\
-         <label for=menu class=menu-btn aria-hidden=true>menu</label>{}</header>\
+         <label for=menu class=menu-btn aria-hidden=true>≡</label>{}</header>\
          <div class=layout><aside class=side aria-label=\"Navigation and libraries\">\
          <nav aria-label=Main><h2>// go</h2><ul>",
         escape(here.query),
@@ -162,9 +162,24 @@ pub(crate) fn shell(title: &str, libraries: &[Library], here: &Here<'_>, main: &
     )
 }
 
-/// A library in the side panel; the open one with its collections.
+/// A library in the side panel; the open one with its collections. On the
+/// library itself (no collection picked) its name folds the collections
+/// away and back, in place: a link to the page already open would only
+/// load it again.
 fn tree_entry(b: &mut String, l: &Library, here: &Here<'_>) {
     let open = here.library.is_some_and(|h| h.folder == l.folder);
+    if open && here.collection.is_none() {
+        let _ = write!(
+            b,
+            "<li><details open><summary class=on aria-current=true>{}<span class=n>{}</span>\
+             </summary><ul>",
+            escape(&l.name),
+            l.series
+        );
+        collections(b, l, here);
+        b.push_str("</ul></details></li>");
+        return;
+    }
     let _ = write!(
         b,
         "<li><a{} href=\"{}\">{} {}<span class=n>{}</span></a></li>",
@@ -179,21 +194,26 @@ fn tree_entry(b: &mut String, l: &Library, here: &Here<'_>) {
         l.series
     );
     if open {
-        let last = here.collections.len().saturating_sub(1);
-        for (i, c) in here.collections.iter().enumerate() {
-            let _ = write!(
-                b,
-                "<li><a class=sub href=\"{}\"{}>  {} {}</a></li>",
-                collection_url(l, c),
-                if here.collection == Some(c.as_str()) {
-                    " aria-current=page"
-                } else {
-                    ""
-                },
-                if i == last { "└─" } else { "├─" },
-                escape(c)
-            );
-        }
+        collections(b, l, here);
+    }
+}
+
+/// The open library's collections, under it in the side panel.
+fn collections(b: &mut String, l: &Library, here: &Here<'_>) {
+    let last = here.collections.len().saturating_sub(1);
+    for (i, c) in here.collections.iter().enumerate() {
+        let _ = write!(
+            b,
+            "<li><a class=sub href=\"{}\"{}>  {} {}</a></li>",
+            collection_url(l, c),
+            if here.collection == Some(c.as_str()) {
+                " aria-current=page"
+            } else {
+                ""
+            },
+            if i == last { "└─" } else { "├─" },
+            escape(c)
+        );
     }
 }
 
@@ -1270,8 +1290,8 @@ pub fn reader(r: &Reader<'_>) -> String {
          <a href=\"#bars\" data-fit=height>height</a></div>\
          <span class=\"dim label\">direction</span><div class=seg>\
          <a href=\"#bars\" data-dir=rtl{}>← rtl</a><a href=\"#bars\" data-dir=ltr{}>ltr →</a></div>\
-         <a class=end href=\"#bars\" data-zoom hidden>zoom <kbd>z</kbd></a>\
-         <a href=\"#bars\" data-thumbs hidden>thumbnails <kbd>t</kbd></a></footer></div>",
+         <a class=end href=\"#bars\" data-thumbs hidden>thumbnails <kbd>t</kbd></a>\
+         <a href=\"#bars\" data-full hidden>fullscreen <kbd>f</kbd></a></footer></div>",
         escape(&r.series.name),
         escape(&book.name),
         if r.rtl { " aria-current=true" } else { "" },
@@ -1280,7 +1300,7 @@ pub fn reader(r: &Reader<'_>) -> String {
     let title = format!("{} · {number}/{total} · Koma-1", book.name);
     format!(
         "<!doctype html>\n<html lang=en data-kept=\"{}\"><head><meta charset=utf-8>\
-         <meta name=viewport content=\"width=device-width,initial-scale=1\">\
+         <meta name=viewport content=\"width=device-width,initial-scale=1,minimum-scale=1\">\
          <title>{}</title>{head}</head><body class=reader data-book={} data-series={} \
          data-n={number} data-dir={}>{b}</body></html>\n",
         escape(r.kept),

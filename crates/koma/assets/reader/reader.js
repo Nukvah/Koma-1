@@ -50,10 +50,11 @@
     if (!save || !vs.length) set.push(url(p, 0, p.f) + ' ' + p.w + 'w');
     return set.join(', ');
   };
-  // The smallest picture of a page, for thumbnails.
+  // The smallest picture of a page, for thumbnails and the scrubber; none
+  // for a large page whose smaller copies are not made yet.
   const small = p => {
     const v = p.s.find(([, m]) => m & (webp ? 2 : 1));
-    return v ? url(p, v[0], webp ? 'webp' : 'jpg') : url(p, 0, p.f);
+    return v ? url(p, v[0], webp ? 'webp' : 'jpg') : p.w > 720 ? '' : url(p, 0, p.f);
   };
   // Page m's picture, its size known before it loads; no source yet.
   const image = (m, sizes) => {
@@ -197,34 +198,56 @@
     else show(m, m < n ? -1 : 1);
   };
 
-  // Zoom (z, or the bars): twice the size, sharper pictures, panned by
-  // scrolling or dragging; out again on z, Escape, a double click or a turn.
+  // Zoom (a double tap or click, or z): twice the size, sharper pictures,
+  // the spot tapped kept under the finger; panned by scrolling or dragging;
+  // out again the same way, on Escape or a turn.
   let zoomed = false;
-  const zoom = on => {
+  const box = () => stage.getBoundingClientRect();
+  const zoom = (on, e) => {
     if (on === zoomed || (on && view === 'strip')) return;
     zoomed = on;
     const ims = [...stage.querySelectorAll('img')];
     const ws = ims.map(im => im.clientWidth * 2);
+    const r = box(), x = e ? e.clientX : innerWidth / 2, y = e ? e.clientY : innerHeight / 2;
+    const u = (x - r.left) / r.width, v = (y - r.top) / r.height;
     body.classList.toggle('zoom', on);
     ims.forEach((im, i) => {
       im.style.width = on ? ws[i] + 'px' : '';
       im.sizes = on ? ws[i] + 'px' : sizes(+im.dataset.n, view === 'double');
     });
-    if (on) scrollTo((doc.scrollWidth - innerWidth) / 2, (doc.scrollHeight - innerHeight) / 2);
+    if (on) { const b = box(); scrollBy(b.left + u * b.width - x, b.top + v * b.height - y); }
     else start(1);
+  };
+  // Two taps within 300 ms are a double tap; a single one does `one` after.
+  let tap = -1e3, wait;
+  const taps = (e, one) => {
+    clearTimeout(wait);
+    if (e.timeStamp - tap < 300) { tap = -1e3; return zoom(!zoomed, e); }
+    tap = e.timeStamp;
+    if (one) wait = setTimeout(one, 300);
   };
   on(stage, 'pointermove', e => { if (zoomed && e.buttons && e.pointerType === 'mouse') scrollBy(-e.movementX, -e.movementY); });
   on(stage, 'dragstart', e => e.preventDefault());
-  on(stage, 'dblclick', () => zoom(false));
 
   // The scrubber: a preview of the page under it while it moves; the page
   // when it is let go.
   const scrub = $('#scrub');
   const peek = scrub.nextElementSibling;
+  // One preview loads at a time: moving fast skips the pages passed over.
   const peekIm = new Image();
+  let want = 0;
+  const peekLoad = () => {
+    if (!want || (peekIm.src && !peekIm.complete)) return;
+    const u = small(P(want));
+    want = 0;
+    if (u) peekIm.src = u; else peekIm.removeAttribute('src');
+  };
+  on(peekIm, 'load', peekLoad);
+  on(peekIm, 'error', peekLoad);
   on(scrub, 'input', () => {
     const m = +scrub.value;
-    peekIm.src = small(P(m));
+    want = m;
+    peekLoad();
     peek.replaceChildren(peekIm, 'p ' + m);
     peek.style.setProperty('--p', (100 * (m - 1) / Math.max(1, N() - 1)) + '%');
     scrub.parentNode.classList.add('on');
@@ -305,7 +328,7 @@
     if (first && view === 'single' && fit === 'page') { first.removeAttribute('id'); first.dataset.n = n; made.set(n + 's', { im: first, ready: Promise.resolve() }); }
     if (view === 'strip') stripOn();
     else { pair(); show(n, 1); }
-    for (const e of [scrub.parentNode, $('[data-zoom]'), $('[data-thumbs]')]) e.hidden = false;
+    for (const e of [scrub.parentNode, $('[data-thumbs]')]) e.hidden = false;
     scrub.max = N();
     links();
   };
@@ -330,11 +353,12 @@
   zones.forEach((a, i) => on(a, 'click', e => {
     e.preventDefault();
     body.classList.remove('hint');
-    if (i === 1) return bars();
+    if (i === 1) return taps(e, bars);
     turn((i === 0) === rtl() ? 1 : -1);
   }));
-  // In the strip a tap anywhere shows or hides the bars.
-  on(stage, 'click', () => { if (view === 'strip') bars(); });
+  // In the strip a tap anywhere shows or hides the bars; zoomed, a double
+  // tap zooms out.
+  on(stage, 'click', e => { if (view === 'strip') bars(); else if (zoomed) taps(e); });
   const setting = (sel, f) => {
     for (const a of $$(sel)) {
       on(a, 'click', e => { e.preventDefault(); f(a); if (pages) apply(); else links(); });
@@ -344,7 +368,10 @@
   setting('a[data-mode]', a => { mode = keep('mode', a.dataset.mode); });
   setting('a[data-fit]', a => { fit = keep('fit', a.dataset.fit); });
   const act = (sel, f) => on($(sel), 'click', e => { e.preventDefault(); f(); });
-  act('a[data-zoom]', () => { bars(false); zoom(!zoomed); });
+  // Fullscreen (f, or the bars), where the browser can (not on iPhones).
+  const full = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {});
+  act('a[data-full]', full);
+  $('[data-full]').hidden = !document.fullscreenEnabled;
   act('a[data-thumbs]', thumbsOn);
   setting('a[data-shift]', flip);
   on(window, 'keydown', e => {
@@ -360,14 +387,16 @@
     else if (k === 'Escape') { if (card) close(); else if (zoomed) zoom(false); else bars(false); }
     else if (k === 'z') zoom(!zoomed);
     else if (k === 't') thumbsOn();
+    else if (k === 'f') full();
     else if (k === 's' && view === 'double') { flip(); apply(); }
     else return;
     e.preventDefault();
   });
   // A swipe turns like the tap on the side it starts from (not where it
-  // scrolls: the strip, fit height, zoom).
+  // scrolls: the strip, fit height, zoom; nor on the bars, where a finger
+  // moves the scrubber or the thumbnails, nor on the end card).
   let x0 = null;
-  on(window, 'touchstart', e => { x0 = e.touches.length === 1 ? e.touches[0].clientX : null; }, { passive: true });
+  on(window, 'touchstart', e => { x0 = e.touches.length === 1 && !e.target.closest('.bars,.next') ? e.touches[0].clientX : null; }, { passive: true });
   on(window, 'touchend', e => {
     if (x0 === null || view === 'strip' || zoomed || fit === 'height') return;
     const dx = e.changedTouches[0].clientX - x0;

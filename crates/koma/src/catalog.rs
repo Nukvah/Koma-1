@@ -162,6 +162,14 @@ const LIBRARY_OF_PATH: &str = "CASE WHEN substr(path, 1, 1) = char(0) THEN '' \
        ELSE substr(path, 1, instr(path, '/') + instr(substr(path, instr(path, '/') + 1), '/') - 1) END \
      WHEN instr(path, '/') > 0 THEN substr(path, 1, instr(path, '/') - 1) ELSE '' END";
 
+/// Pages of present books whose variants, made with version ?1, include a
+/// JPEG ?2 wide but nothing ?3 wide.
+const LACKING_WIDTH: &str = "FROM books JOIN pages ON pages.book_id = books.id
+     JOIN variant_pages v ON v.hash = pages.hash AND v.version = ?1
+     JOIN variants a ON a.hash = pages.hash AND a.width = ?2 AND a.format = 'jpg'
+     LEFT JOIN variants t ON t.hash = pages.hash AND t.width = ?3
+     WHERE books.gone IS NULL AND t.hash IS NULL";
+
 /// Schema 7 to 8: series get their library. Nothing else changes, so the
 /// catalogue (and the page variants, which are costly to remake) is kept.
 fn migrate_7_to_8() -> String {
@@ -1642,6 +1650,64 @@ impl Catalog {
              ON CONFLICT (kind, path) DO NOTHING",
             params![version, min_width],
         )
+    }
+
+    /// Queues a variants job for each present book with a page whose
+    /// variants, made with `version`, include a `from`-wide JPEG but nothing
+    /// `width` wide: pages made before that width was. Returns how many.
+    pub fn queue_missing_width(&self, version: i64, from: u32, width: u32) -> Result<usize, Error> {
+        self.conn.execute(
+            &format!(
+                "INSERT INTO jobs (kind, path)
+                 SELECT 'variants', books.path {LACKING_WIDTH}
+                 GROUP BY books.id ORDER BY books.id
+                 ON CONFLICT (kind, path) DO NOTHING"
+            ),
+            params![version, from, width],
+        )
+    }
+
+    /// The pages of the present book at `path` lacking a `width`-wide
+    /// variant (see [`Catalog::queue_missing_width`]), each content once.
+    pub fn pages_lacking_width(
+        &self,
+        path: &str,
+        version: i64,
+        from: u32,
+        width: u32,
+    ) -> Result<Vec<blake3::Hash>, Error> {
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT pages.hash, MIN(pages.number) AS first {LACKING_WIDTH}
+             AND books.path = ?4 GROUP BY pages.hash ORDER BY first"
+        ))?;
+        let rows = stmt.query_map(params![version, from, width, path], |r| hash_from_row(r, 0))?;
+        rows.collect()
+    }
+
+    /// Adds variants to a page (`(width, height, format, length)`; their
+    /// blobs already written), keeping those it has.
+    pub fn add_variants(
+        &mut self,
+        hash: &blake3::Hash,
+        variants: &[(u32, u32, &str, u64)],
+    ) -> Result<(), Error> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut insert = tx.prepare_cached(
+                "INSERT OR REPLACE INTO variants (hash, width, format, height, length)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            for &(width, height, format, length) in variants {
+                insert.execute(params![
+                    hash.as_bytes(),
+                    width,
+                    format,
+                    height,
+                    length as i64
+                ])?;
+            }
+        }
+        tx.commit()
     }
 
     /// The pages of the present book at `path` that lack variants made with

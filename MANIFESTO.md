@@ -81,7 +81,7 @@ No cache invalidation, ever. Duplicate pages and archives are stored once.
 **Zero-copy serving from CBZ files.** Most CBZ archives store JPEGs uncompressed. At ingest, the zip central directory is indexed to `(file, offset, length)` per page. Original-quality pages are served with `sendfile()` on a byte range of the archive: no extraction, no temp files. CBR and PDF are extracted once at ingest.
 
 **Derived variants, made once at ingest:**
-- Widths 720, 1080, 1440 and original. Never upscale.
+- Widths 720, 1080, 1440 and original, and a 240 thumbnail for the reader's strip and scrubber. Never upscale.
 - AVIF and WebP, JPEG fallback. Format is chosen in the URL via `<picture>`, never via `Accept` negotiation, which fragments caches.
 - Grayscale detection: black-and-white pages are stored as 8-bit single-channel images.
 - Optional lossless JPEG XL recompression of originals for archival (bit-exact reversible).

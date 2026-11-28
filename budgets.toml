@@ -42,7 +42,7 @@ max_kib = 3
 name = "Reader JS"
 dir = "crates/koma/assets/reader"
 suffix = ".js"
-max_kib = 16
+max_kib = 18
 
 [[assets]]
 name = "EPUB reader JS"  # loaded only on EPUB chapter pages

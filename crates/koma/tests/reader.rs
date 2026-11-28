@@ -119,10 +119,10 @@ async fn the_reader_page() {
         // page itself last; shown whole in the window.
         let v = koma::variants::VERSION;
         assert!(page.contains(&format!(
-            "<source id=pgw type=image/webp srcset=\"/p/{big}.720.v{v}.webp 720w, /p/{big}.1080.v{v}.webp 1080w, /p/{big}.png 1200w\" sizes=\"min(100vw, 66.7vh)\">"
+            "<source id=pgw type=image/webp srcset=\"/p/{big}.240.v{v}.webp 240w, /p/{big}.720.v{v}.webp 720w, /p/{big}.1080.v{v}.webp 1080w, /p/{big}.png 1200w\" sizes=\"min(100vw, 66.7vh)\">"
         )), "{page}");
         assert!(page.contains(&format!(
-            "<img id=pg src=\"/p/{big}.png\" srcset=\"/p/{big}.720.v{v}.jpg 720w, /p/{big}.1080.v{v}.jpg 1080w, /p/{big}.png 1200w\""
+            "<img id=pg src=\"/p/{big}.png\" srcset=\"/p/{big}.240.v{v}.jpg 240w, /p/{big}.720.v{v}.jpg 720w, /p/{big}.1080.v{v}.jpg 1080w, /p/{big}.png 1200w\""
         )));
         assert!(page.contains("width=1200 height=1800 alt=\"Page 1\" fetchpriority=high"));
         // Right to left (a manga library): the left third goes forward; on
@@ -143,7 +143,7 @@ async fn the_reader_page() {
         }
         assert!(page.contains("<div class=scrub hidden><input id=scrub type=range min=1 max=3 value=1"));
         assert!(page.contains("<div class=thumbs hidden></div>"));
-        assert!(page.contains("data-zoom hidden>zoom <kbd>z</kbd></a>"));
+        assert!(page.contains("data-full hidden>fullscreen <kbd>f</kbd></a>"));
         assert!(page.contains("data-thumbs hidden>thumbnails <kbd>t</kbd></a>"));
         assert!(page.contains(&format!("<link rel=next href=\"/r/{starfall}/2\">")));
 
@@ -171,7 +171,7 @@ async fn the_reader_page() {
         assert_eq!(p.len(), 3);
         assert_eq!(p[0]["h"], big.as_str());
         assert_eq!(p[0]["w"], 1200);
-        assert_eq!(p[0]["s"], serde_json::json!([[720, 3], [1080, 3]]));
+        assert_eq!(p[0]["s"], serde_json::json!([[240, 3], [720, 3], [1080, 3]]));
         assert_eq!(p[1]["s"], serde_json::json!([]));
         // At its end, the next book with its cover; the last one goes back.
         let end = j["end"].as_str().unwrap();
