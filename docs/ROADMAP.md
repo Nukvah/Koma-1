@@ -196,11 +196,14 @@ Goal: save disk space when you decide to, and see where it went.
 - Managed storage (manifesto, principle 9): originals stored by hash in the blob store,
   where only the worker writes; folders and names become the catalogue's, so organising,
   renames and the trash move no bytes. The M6 to M8 features keep working on it.
-- Import of an existing folder as a job: hard links on the same mount, copies otherwise;
-  a book already stored is not stored again *(proven)*.
+- Import of a folder as a job the admin starts, with a dry run first: how many books,
+  whether hard links will work (or why not) and the space a copy would take. Hard links on
+  the same mount, copies otherwise; a book already stored is not stored again *(proven)*.
+  No upgrade path: there are no installs, so managed storage starts from an empty catalogue.
 - Takeout as a job: a library, series or everything as plain files with the standard
   names and `metadata.json`, in stored ZIPs under 4 GiB with a checksum manifest,
-  resumable; a takeout imports back as it was *(proven)*.
+  resumable; a takeout imports back as it was *(proven)*. Reader apps get books one at a
+  time, always current, through OPDS (M12); nothing else sees the stored files.
 - Opt-in per series, collection, selection or library; an estimate per preset from sample
   pages and a before-and-after page compare *(proven)*.
 - Presets: Default (AVIF, quality 70, speed 6, full colour, grayscale for black-and-white
@@ -309,10 +312,4 @@ lossless JPEG XL archival and a dedicated phone layout.
 - **ffmpeg.** Video thumbnails need ffmpeg, which alone is bigger than the image budget.
   Options: a separate optional media image, thumbnails only when ffmpeg is present, or no
   video thumbnails.
-- **Existing installs.** Today's `/library` folder becomes managed storage through one
-  import (hard links, so no second copy). Is a one-time import at upgrade enough, or should
-  a release keep reading `/library` read-only for a while?
-- **Other apps on the same files.** Managed storage takes the plain folder away from other
-  readers and file shares; takeout gives it back as a copy. Is a read-only view (WebDAV,
-  OPDS downloads) needed, or is takeout enough?
 - **AVIF originals.** Conversion is lossy. Is keeping originals for a set number of days enough?

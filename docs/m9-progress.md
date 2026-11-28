@@ -14,7 +14,7 @@ Each wave is a few small pull requests, each green before the next starts.
 | 1c | jpegli (`koma-jpegli`) against `jpeg-encoder`, measured on made-up pages; switch only if it wins | done: switched (variants version 2) |
 | 1d | The worker in parallel: pages on every core it is given, at low priority (see [Threading](#threading)) | next |
 | 2a | Managed storage: originals in the blob store by hash; uploads stored there; folders and names in the catalogue (see [Managed storage](#managed-storage)) | to do |
-| 2b | Import of an existing folder (hard links or copies), and the upgrade of today's `/library` | to do |
+| 2b | Import of a folder: a job the admin starts, dry run first; hard links or copies | to do |
 | 2c | Takeout: stored ZIPs under 4 GiB with a checksum manifest, resumable; imports back | to do |
 | 3a | Presets and the book converter, with kept originals and Undo | to do |
 | 3b | Auto-convert new uploads; a night window with Run now | to do |
@@ -201,12 +201,27 @@ periodic scan becomes `scrub`: rehash and repair.
   book row points at it, the old blob is the kept original; Undo points back.
 - Identical books, uploaded twice or in two libraries, are stored once.
 
-**Import (2b).** A job reads a mounted folder once, with today's reading of
-folders and names, and stores each book: `link()` when the folder is on the
+**Import (2b).** A job the admin starts (CLI or the jobs page) reads a
+mounted folder once, with today's reading of folders and names. Its dry run
+says how many books, whether hard links will work or why not ("the folder and
+/data are separate mounts"), and the space a copy would take. Then it stores
+each book: `link()` when the folder is on the
 same mount as `/data`, a copy otherwise (`link()` fails across mount points,
 two Docker bind mounts included, with `EXDEV`). A hard-linked file is still
 the user's: one edited in place changes the stored book, which `scrub` finds
-by its hash. Today's installs upgrade by importing `/library` this way.
+by its hash.
+
+**No upgrade path (owner's decision).** There are no installs: the only
+library holds test books. Managed storage starts from an empty catalogue, and
+test books are imported again. Its catalogue schema can start over too:
+older catalogues are dropped and rebuilt, as those before schema 7 were, so
+no in-place migration is written for it.
+
+**Other apps (owner's decision).** Two ways out, nothing else: takeout, for
+everything at once, and OPDS (M12), for reader apps, one book at a time and
+always current. No mirror folder, no WebDAV; nothing outside Koma-1 sees the
+stored files. Takeout's resumable downloads and M12's download API share the
+same byte ranges.
 
 **Takeout (2c).** The plan of a takeout puts books into chunks of under
 4 GiB (classic ZIP, stored: books are compressed already), in library and
