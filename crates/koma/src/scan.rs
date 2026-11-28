@@ -437,6 +437,7 @@ pub fn run_jobs(
                         min_width,
                         variants::Format::Avif.bit(),
                     )?
+                    + catalog.queue_other_widths(version, min_width)?
                     > 0
                 {
                     continue;

@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 
 use crate::accounts::{Account, Passkey, Role, Session};
 use crate::html::{Here, css_url, escape, shell};
-use crate::libraries::{COLOURS, Direction, Kind, Library};
+use crate::libraries::{COLOURS, Direction, Kind, Library, WIDTH_CHOICES};
 
 /// Who is signed in, as pages show it.
 pub struct Me<'a> {
@@ -572,6 +572,7 @@ pub fn settings(
         m.push_str(
             "<div class=scroll><table class=tbl><thead><tr><th scope=col>library<th scope=col class=opt>folder\
              <th scope=col>type<th scope=col class=opt>direction<th scope=col class=opt>colour\
+             <th scope=col class=opt>page copies\
              <th scope=col class=r>series<th scope=col class=r><span class=hint>actions</span></thead><tbody>",
         );
         for l in list {
@@ -587,11 +588,22 @@ pub fn settings(
          their settings.</p><p>Until changed here, a library's settings come from its folder: name \
          capitalised; type comics if it says “comic”, cosplay if it says “cosplay”, else manga; \
          direction right to left for manga, left to right otherwise; colour the next in a fixed list. \
-         A book's own metadata still wins over the direction.</p><p>Changes are kept in the catalogue, \
+         A book's own metadata still wins over the direction.</p><p>Page copies: the widths of the \
+         smaller copies the worker keeps of every large page, for the reader. Fewer take less disk; \
+         the reader then loads the next larger copy, or the page itself. A change is made in the \
+         background: copies no longer wanted are removed, new ones made from the pages.</p><p>Changes are kept in the catalogue, \
          not in /library: no file or folder is renamed. <code>koma serve</code> queues them and the \
          worker writes them, so the worker stays the catalogue's only writer.</p></div>",
     );
     shell("Settings", libraries, &here(me), &m)
+}
+
+/// A library's variant widths as the settings show them.
+fn widths_label(widths: u8) -> &'static str {
+    WIDTH_CHOICES
+        .iter()
+        .find(|c| c.0 == widths)
+        .map_or("custom", |c| c.1)
 }
 
 fn library_row(m: &mut String, l: &Library, editable: bool, queued: bool) {
@@ -604,7 +616,7 @@ fn library_row(m: &mut String, l: &Library, editable: bool, queued: bool) {
         let _ = write!(
             m,
             "<tr><td><a href=\"{}\">{}</a><td class=opt>{}<td>{}<td class=opt>{}\
-             <td class=opt><span class=swatch style=\"--c:{}\"></span> {}<td class=r>{}<td>",
+             <td class=opt><span class=swatch style=\"--c:{}\"></span> {}<td class=opt>{}<td class=r>{}<td>",
             l.url(),
             escape(&l.name),
             escape(&folder),
@@ -612,6 +624,7 @@ fn library_row(m: &mut String, l: &Library, editable: bool, queued: bool) {
             l.direction.as_str(),
             l.colour.1,
             l.colour.0,
+            widths_label(l.widths),
             l.series
         );
         return;
@@ -662,6 +675,17 @@ fn library_row(m: &mut String, l: &Library, editable: bool, queued: bool) {
             m,
             "<option{}>{name}</option>",
             if name == l.colour.0 { " selected" } else { "" }
+        );
+    }
+    let _ = write!(
+        m,
+        "</select><td class=opt><select form={form} name=widths aria-label=\"page copies of {label}\">"
+    );
+    for (bits, text) in WIDTH_CHOICES {
+        let _ = write!(
+            m,
+            "<option value={bits}{}>{text}</option>",
+            if bits == l.widths { " selected" } else { "" }
         );
     }
     let _ = write!(

@@ -14,7 +14,7 @@ pub use crate::archive::size::Size;
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 15;
+const SCHEMA_VERSION: i64 = 16;
 
 /// How long a book whose file vanished is remembered, so that a folder that
 /// comes back (a drive mounted late, a move noticed in two steps) keeps its
@@ -150,7 +150,8 @@ CREATE TABLE variant_pages (
     hash     BLOB PRIMARY KEY,       -- a page whose variants are made (maybe none)
     version  INTEGER NOT NULL,       -- variants::VERSION they were made with
     error    TEXT,                   -- why it has none, if it could not be decoded
-    formats  INTEGER NOT NULL DEFAULT 3 -- formats tried (variants::Format::bit)
+    formats  INTEGER NOT NULL DEFAULT 3, -- formats tried (variants::Format::bit)
+    widths   INTEGER NOT NULL DEFAULT 7  -- widths made for (variants::width_bit)
 ) WITHOUT ROWID;
 ";
 
@@ -162,6 +163,34 @@ const LIBRARY_OF_PATH: &str = "CASE WHEN substr(path, 1, 1) = char(0) THEN '' \
        WHEN instr(substr(path, instr(path, '/') + 1), '/') = 0 THEN substr(path, 1, instr(path, '/') - 1) \
        ELSE substr(path, 1, instr(path, '/') + instr(substr(path, instr(path, '/') + 1), '/') - 1) END \
      WHEN instr(path, '/') > 0 THEN substr(path, 1, instr(path, '/') - 1) ELSE '' END";
+
+/// The widths a page (`pages.hash`) is wanted at: every width bit set in
+/// the setting of a library with a present book that has it (7, all, for a
+/// library never changed). NULL for a page in no present book.
+const WANTED_WIDTHS: &str =
+    "(SELECT MAX(COALESCE(ls.widths, 7) & 1) + MAX(COALESCE(ls.widths, 7) & 2)
+              + MAX(COALESCE(ls.widths, 7) & 4)
+     FROM pages wp JOIN books wb ON wb.id = wp.book_id AND wb.gone IS NULL
+     JOIN series ws ON ws.id = wb.series_id
+     LEFT JOIN library_settings ls ON ls.folder = ws.library
+     WHERE wp.hash = pages.hash)";
+
+/// Pages of present books wider than ?2 (or of unknown size) whose
+/// variants, made with version ?1 without an error, were made for other
+/// widths than wanted.
+/// A page made for other widths than wanted: its hash and place, the
+/// formats it was made in, the widths made for, the widths wanted.
+pub type OtherWidths = (blake3::Hash, PageLocation, u8, u8, u8);
+
+fn other_widths() -> String {
+    format!(
+        "FROM books JOIN pages ON pages.book_id = books.id
+         JOIN variant_pages v ON v.hash = pages.hash AND v.version = ?1
+         WHERE books.gone IS NULL AND v.error IS NULL
+           AND (pages.width IS NULL OR pages.width > ?2)
+           AND v.widths <> COALESCE({WANTED_WIDTHS}, 7)"
+    )
+}
 
 /// Pages of present books wider than ?2 (or of unknown size) whose
 /// variants, made with version ?1 without an error, were not tried in the
@@ -249,7 +278,8 @@ const LIBRARY_SETTINGS: &str = "CREATE TABLE IF NOT EXISTS library_settings (
     kind      TEXT NOT NULL,          -- 'manga', 'comics' or 'cosplay'
     direction TEXT NOT NULL,          -- 'rtl' or 'ltr'
     colour    TEXT NOT NULL,          -- a name from libraries::COLOURS
-    change    INTEGER NOT NULL        -- the id of the queued change applied last
+    change    INTEGER NOT NULL,       -- the id of the queued change applied last
+    widths    INTEGER NOT NULL DEFAULT 7 -- page variant widths (variants::width_bit)
 ) WITHOUT ROWID;";
 
 /// What organising the library keeps (crate::journal): the state of each
@@ -308,6 +338,13 @@ ALTER TABLE ops ADD COLUMN title TEXT;";
 /// made before AVIF have JPEG and WebP (3); their AVIF ones are added.
 const MIGRATE_14_TO_15: &str =
     "ALTER TABLE variant_pages ADD COLUMN formats INTEGER NOT NULL DEFAULT 3;";
+
+/// Schema 15 to 16: variant widths as a library setting. Every page so far
+/// was made for all three widths.
+const MIGRATE_15_TO_16: &str =
+    "ALTER TABLE variant_pages ADD COLUMN widths INTEGER NOT NULL DEFAULT 7;";
+const MIGRATE_15_TO_16_SETTINGS: &str =
+    "ALTER TABLE library_settings ADD COLUMN widths INTEGER NOT NULL DEFAULT 7;";
 
 /// Names to keep as they are (a tidy undone).
 const NAMING: &str = "CREATE TABLE IF NOT EXISTS name_keep (
@@ -557,7 +594,7 @@ impl Catalog {
         match version {
             // From 7 on the catalogue is upgraded in place, one step at a
             // time: remaking page variants is too costly to start over.
-            7..=14 => {
+            7..=15 => {
                 let mut steps = String::new();
                 if version == 7 {
                     steps.push_str(&migrate_7_to_8());
@@ -597,6 +634,24 @@ impl Catalog {
                 )?;
                 if !has_formats {
                     steps.push_str(MIGRATE_14_TO_15);
+                }
+                let has_widths: bool = self.conn.query_row(
+                    "SELECT count(*) > 0 FROM pragma_table_info('variant_pages') WHERE name = 'widths'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                if !has_widths {
+                    steps.push_str(MIGRATE_15_TO_16);
+                }
+                // Before 12 the settings table is made by a step above,
+                // with the column.
+                let settings_widths: bool = self.conn.query_row(
+                    "SELECT count(*) > 0 FROM pragma_table_info('library_settings') WHERE name = 'widths'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                if version >= 12 && !settings_widths {
+                    steps.push_str(MIGRATE_15_TO_16_SETTINGS);
                 }
                 steps.push_str(ORGANISE);
                 steps.push_str(NAMING);
@@ -1153,9 +1208,9 @@ impl Catalog {
     /// Library settings changed in the UI.
     pub fn library_settings(&self) -> Result<Vec<crate::libraries::Settings>, Error> {
         use crate::libraries::{Direction, Kind, Settings, colour};
-        let mut stmt = self
-            .conn
-            .prepare_cached("SELECT folder, name, kind, direction, colour FROM library_settings")?;
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT folder, name, kind, direction, colour, widths FROM library_settings",
+        )?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -1163,17 +1218,19 @@ impl Catalog {
                 r.get::<_, String>(2)?,
                 r.get::<_, String>(3)?,
                 r.get::<_, String>(4)?,
+                r.get::<_, u8>(5)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (folder, name, kind, direction, c) = row?;
+            let (folder, name, kind, direction, c, widths) = row?;
             out.push(Settings {
                 folder,
                 name,
                 kind: Kind::parse(&kind).unwrap_or(Kind::Manga),
                 direction: Direction::from_code(&direction).unwrap_or(Direction::RightToLeft),
                 colour: colour(&c).unwrap_or(crate::libraries::COLOURS[0]),
+                widths: widths & crate::variants::ALL_WIDTHS,
             });
         }
         Ok(out)
@@ -1202,11 +1259,19 @@ impl Catalog {
     /// Writes a queued settings change (the worker's job).
     pub fn apply_setting(&self, c: &crate::accounts::SettingChange) -> Result<(), Error> {
         self.conn.execute(
-            "INSERT INTO library_settings (folder, name, kind, direction, colour, change)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO library_settings (folder, name, kind, direction, colour, change, widths)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT (folder) DO UPDATE SET name = ?2, kind = ?3, direction = ?4,
-               colour = ?5, change = ?6",
-            params![c.folder, c.name, c.kind, c.direction, c.colour, c.id],
+               colour = ?5, change = ?6, widths = ?7",
+            params![
+                c.folder,
+                c.name,
+                c.kind,
+                c.direction,
+                c.colour,
+                c.id,
+                c.widths
+            ],
         )?;
         Ok(())
     }
@@ -1781,6 +1846,108 @@ impl Catalog {
         rows.collect()
     }
 
+    /// The widths (bits of `variants::width_bit`) a page's variants are
+    /// wanted at: those of every library with a present book that has it.
+    /// All of them for a page in no present book.
+    pub fn wanted_widths(&self, hash: &blake3::Hash) -> Result<u8, Error> {
+        let w: Option<u8> = self
+            .conn
+            .prepare_cached(&format!(
+                "SELECT {WANTED_WIDTHS} FROM pages WHERE hash = ?1 LIMIT 1"
+            ))?
+            .query_row([hash.as_bytes()], |r| r.get(0))
+            .optional()?
+            .flatten();
+        Ok(w.unwrap_or(crate::variants::ALL_WIDTHS))
+    }
+
+    /// Queues a variants job for each present book with a page whose
+    /// variants were made for other widths than its libraries want now.
+    /// Cheap when no library's widths were ever changed. Returns how many.
+    pub fn queue_other_widths(&self, version: i64, min_width: u32) -> Result<usize, Error> {
+        let changed: bool = self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM library_settings WHERE widths <> 7)
+                 OR EXISTS (SELECT 1 FROM variant_pages WHERE widths <> 7)",
+            [],
+            |r| r.get(0),
+        )?;
+        if !changed {
+            return Ok(0);
+        }
+        self.conn.execute(
+            &format!(
+                "INSERT INTO jobs (kind, path)
+                 SELECT 'variants', books.path {}
+                 GROUP BY books.id ORDER BY books.id
+                 ON CONFLICT (kind, path) DO NOTHING",
+                other_widths()
+            ),
+            params![version, min_width],
+        )
+    }
+
+    /// The pages of the present book at `path` made for other widths than
+    /// wanted (see [`Catalog::queue_other_widths`]), each content once, with
+    /// the formats they were made in, the widths made for and the widths
+    /// wanted.
+    pub fn pages_with_other_widths(
+        &self,
+        path: &str,
+        version: i64,
+        min_width: u32,
+    ) -> Result<Vec<OtherWidths>, Error> {
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT pages.hash, COALESCE(pages.file, books.path), pages.format, pages.length,
+                    pages.offset, MIN(pages.number) AS first, v.formats, v.widths, {WANTED_WIDTHS}
+             {} AND books.path = ?3 GROUP BY pages.hash ORDER BY first",
+            other_widths()
+        ))?;
+        let rows = stmt.query_map(params![version, min_width, path], |r| {
+            Ok((
+                hash_from_row(r, 0)?,
+                PageLocation {
+                    book_path: r.get(1)?,
+                    format: r.get(2)?,
+                    length: r.get::<_, i64>(3)? as u64,
+                    offset: r.get::<_, Option<i64>>(4)?.map(|o| o as u64),
+                },
+                r.get(6)?,
+                r.get(7)?,
+                r.get::<_, Option<u8>>(8)?
+                    .unwrap_or(crate::variants::ALL_WIDTHS),
+            ))
+        })?;
+        rows.collect()
+    }
+
+    /// Removes a page's variants `width` wide (in every format), keeping
+    /// the others. Their blobs are the caller's to remove.
+    pub fn remove_width(&mut self, hash: &blake3::Hash, width: u32) -> Result<(), Error> {
+        self.conn.execute(
+            "DELETE FROM variants WHERE hash = ?1 AND width = ?2",
+            params![hash.as_bytes(), width],
+        )?;
+        Ok(())
+    }
+
+    /// Records the widths a page's variants are made for now.
+    pub fn set_widths(&mut self, hash: &blake3::Hash, widths: u8) -> Result<(), Error> {
+        self.conn.execute(
+            "UPDATE variant_pages SET widths = ?2 WHERE hash = ?1",
+            params![hash.as_bytes(), widths],
+        )?;
+        Ok(())
+    }
+
+    /// The widths a page's variants were made for (bits of
+    /// `variants::width_bit`), if they were made.
+    pub fn made_widths(&self, hash: &blake3::Hash) -> Result<Option<u8>, Error> {
+        self.conn
+            .prepare_cached("SELECT widths FROM variant_pages WHERE hash = ?1")?
+            .query_row([hash.as_bytes()], |r| r.get(0))
+            .optional()
+    }
+
     /// Records that a page's variants were tried in the formats `bits` too.
     pub fn add_formats(&mut self, hash: &blake3::Hash, bits: u8) -> Result<(), Error> {
         self.conn.execute(
@@ -1824,13 +1991,13 @@ impl Catalog {
 
     /// Records a page's variants (`(width, height, format, length)`; their
     /// blobs already written), made with `version` in `formats` (bits of
-    /// `variants::Format::bit`), replacing any it had. `error` says why a
-    /// page has none.
+    /// `variants::Format::bit`) for `widths` (bits of `variants::width_bit`),
+    /// replacing any it had. `error` says why a page has none.
     pub fn store_variants(
         &mut self,
         hash: &blake3::Hash,
         version: i64,
-        formats: u8,
+        (formats, widths): (u8, u8),
         variants: &[(u32, u32, &str, u64)],
         error: Option<&str>,
     ) -> Result<(), Error> {
@@ -1852,10 +2019,11 @@ impl Catalog {
             }
         }
         tx.execute(
-            "INSERT INTO variant_pages (hash, version, error, formats) VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO variant_pages (hash, version, error, formats, widths)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT (hash) DO UPDATE SET version = excluded.version, error = excluded.error,
-                                              formats = excluded.formats",
-            params![hash.as_bytes(), version, error, formats],
+                                              formats = excluded.formats, widths = excluded.widths",
+            params![hash.as_bytes(), version, error, formats, widths],
         )?;
         tx.commit()
     }

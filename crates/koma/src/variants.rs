@@ -181,10 +181,31 @@ impl std::error::Error for Error {}
 /// The widths of the variants a page of `width` pixels gets: the
 /// thumbnail, then those of [`WIDTHS`] narrower than the page.
 pub fn widths_for(width: u32) -> impl Iterator<Item = u32> {
+    widths_in(width, ALL_WIDTHS)
+}
+
+/// [`widths_for`] with only the widths of [`WIDTHS`] whose bit
+/// ([`width_bit`]) is in `mask`, as a library's setting chooses them. The
+/// thumbnail is always made.
+pub fn widths_in(width: u32, mask: u8) -> impl Iterator<Item = u32> {
     let thumb = (width > WIDTHS[0]).then_some(THUMB);
-    thumb
-        .into_iter()
-        .chain(WIDTHS.into_iter().filter(move |&w| w < width))
+    thumb.into_iter().chain(
+        WIDTHS
+            .into_iter()
+            .filter(move |&w| w < width && mask & width_bit(w) != 0),
+    )
+}
+
+/// Every width of [`WIDTHS`]: what a library has until its setting is changed.
+pub const ALL_WIDTHS: u8 = 1 | 2 | 4;
+
+/// A width's bit in a library's setting and `variant_pages.widths`: 1 for
+/// 720, 2 for 1080, 4 for 1440; 0 for any other (the thumbnail).
+pub fn width_bit(width: u32) -> u8 {
+    WIDTHS
+        .iter()
+        .position(|&w| w == width)
+        .map_or(0, |i| 1 << i)
 }
 
 /// The height of a variant `width` pixels wide of a page `page_width` by
@@ -322,17 +343,25 @@ fn luma(r: u8, g: u8, b: u8) -> u8 {
 /// except those that come out no smaller than the page itself. Empty for a
 /// page no wider than the smallest width.
 pub fn make(bytes: &[u8], limits: &Limits) -> Result<Vec<Variant>, Error> {
-    let pixels = decode(bytes, limits)?;
-    let widths: Vec<u32> = widths_for(pixels.width).collect();
-    resized(pixels, &widths, &Format::ALL, bytes.len())
+    make_some(bytes, limits, ALL_WIDTHS, true, &Format::ALL)
 }
 
-/// The AVIF variants of a page made before AVIF ones were: the same widths
-/// as [`make`], from the page itself.
-pub fn make_avif(bytes: &[u8], limits: &Limits) -> Result<Vec<Variant>, Error> {
+/// The variants of a page at the widths of `mask` ([`widths_in`]; the
+/// thumbnail too if `thumb`), in `formats`. [`make`] makes them all; a page
+/// made before AVIF gets its AVIF ones, and one whose library wants more
+/// widths now gets those, this way.
+pub fn make_some(
+    bytes: &[u8],
+    limits: &Limits,
+    mask: u8,
+    thumb: bool,
+    formats: &[Format],
+) -> Result<Vec<Variant>, Error> {
     let pixels = decode(bytes, limits)?;
-    let widths: Vec<u32> = widths_for(pixels.width).collect();
-    resized(pixels, &widths, &[Format::Avif], bytes.len())
+    let widths: Vec<u32> = widths_in(pixels.width, mask)
+        .filter(|&w| thumb || w != THUMB)
+        .collect();
+    resized(pixels, &widths, formats, bytes.len())
 }
 
 /// The thumbnail of a page whose variants were made before thumbnails
@@ -488,7 +517,8 @@ pub fn run_job(
                 continue;
             }
         };
-        let made = make(&bytes, &limits);
+        let widths = catalog.wanted_widths(&hash)?;
+        let made = make_some(&bytes, &limits, widths, true, &Format::ALL);
         drop(bytes);
         match made {
             Ok(variants) => {
@@ -500,7 +530,7 @@ pub fn run_job(
                     })?;
                     rows.push((v.width, v.height, v.format.ext(), v.bytes.len() as u64));
                 }
-                catalog.store_variants(&hash, VERSION, FORMATS, &rows, None)?;
+                catalog.store_variants(&hash, VERSION, (FORMATS, widths), &rows, None)?;
             }
             Err(e) => {
                 if !matches!(e, Error::Unsupported(_)) {
@@ -509,7 +539,8 @@ pub fn run_job(
                         &[("path", &place.book_path), ("error", &e.to_string())],
                     );
                 }
-                catalog.store_variants(&hash, VERSION, FORMATS, &[], Some(&e.to_string()))?;
+                let e = e.to_string();
+                catalog.store_variants(&hash, VERSION, (FORMATS, widths), &[], Some(&e))?;
             }
         }
         done += 1;
@@ -519,9 +550,12 @@ pub fn run_job(
         if should_stop() {
             return Ok((JobEnd::Stopped, done));
         }
+        let widths = catalog.made_widths(&hash)?.unwrap_or(ALL_WIDTHS);
         let made = read_page(library, blobs, &hash, &place)
             .map_err(|e| e.to_string())
-            .and_then(|b| make_avif(&b, &limits).map_err(|e| e.to_string()));
+            .and_then(|b| {
+                make_some(&b, &limits, widths, true, &[Format::Avif]).map_err(|e| e.to_string())
+            });
         match made {
             Ok(variants) => {
                 let mut rows = Vec::with_capacity(variants.len());
@@ -543,6 +577,24 @@ pub fn run_job(
         catalog.add_formats(&hash, avif)?;
         done += 1;
     }
+    for (hash, place, formats, made, wanted) in
+        catalog.pages_with_other_widths(rel, VERSION, WIDTHS[0])?
+    {
+        if should_stop() {
+            return Ok((JobEnd::Stopped, done));
+        }
+        other_widths(
+            library,
+            blobs,
+            catalog,
+            (&hash, &place),
+            formats,
+            made,
+            wanted,
+            &limits,
+        )?;
+        done += 1;
+    }
     for hash in catalog.pages_lacking_width(rel, VERSION, WIDTHS[0], THUMB)? {
         if should_stop() {
             return Ok((JobEnd::Stopped, done));
@@ -551,6 +603,77 @@ pub fn run_job(
         done += 1;
     }
     Ok((JobEnd::Done, done))
+}
+
+/// Brings a page made for the widths `made` to those its libraries want
+/// now, `wanted`: the copies at widths no longer wanted are removed, those
+/// newly wanted made from the page itself, in the formats it has (`formats`).
+/// A page that cannot be read or made now keeps what it has, and is taken
+/// as done, to be tried again only if the setting changes again.
+#[allow(clippy::too_many_arguments)]
+fn other_widths(
+    library: &Path,
+    blobs: &BlobStore,
+    catalog: &mut Catalog,
+    (hash, place): (&blake3::Hash, &PageLocation),
+    formats: u8,
+    made: u8,
+    wanted: u8,
+    limits: &Limits,
+) -> Result<(), ScanError> {
+    let mut now = made;
+    for w in WIDTHS {
+        let bit = width_bit(w);
+        if made & bit != 0 && wanted & bit == 0 {
+            catalog.remove_width(hash, w)?;
+            for f in Format::ALL {
+                let path = blobs.variant_path(hash, w, VERSION, f.ext());
+                match fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(ScanError::Io(path, e)),
+                }
+            }
+            now &= !bit;
+        }
+    }
+    let missing = wanted & !made;
+    if missing != 0 {
+        let formats: Vec<Format> = Format::ALL
+            .into_iter()
+            .filter(|f| formats & f.bit() != 0)
+            .collect();
+        let result = read_page(library, blobs, hash, place)
+            .map_err(|e| e.to_string())
+            .and_then(|b| {
+                make_some(&b, limits, missing, false, &formats).map_err(|e| e.to_string())
+            });
+        match result {
+            Ok(variants) => {
+                let mut rows = Vec::with_capacity(variants.len());
+                for v in &variants {
+                    write_blob(blobs, hash, v).map_err(|e| {
+                        ScanError::Io(
+                            blobs.variant_path(hash, v.width, VERSION, v.format.ext()),
+                            e,
+                        )
+                    })?;
+                    rows.push((v.width, v.height, v.format.ext(), v.bytes.len() as u64));
+                }
+                catalog.add_variants(hash, &rows)?;
+                now |= missing;
+            }
+            Err(e) => {
+                log::error(
+                    "variants: no copies at the widths wanted now",
+                    &[("path", &place.book_path), ("error", &e)],
+                );
+                now = wanted;
+            }
+        }
+    }
+    catalog.set_widths(hash, now)?;
+    Ok(())
 }
 
 /// Adds the thumbnail of a page made before thumbnails were, from its 720
@@ -604,7 +727,7 @@ pub fn give_up_page(catalog: &mut Catalog, rel: &str) -> Result<(), catalog::Err
             "variants: page left as it is",
             &[("path", &place.book_path), ("error", e)],
         );
-        catalog.store_variants(&hash, VERSION, FORMATS, &[], Some(e))?;
+        catalog.store_variants(&hash, VERSION, (FORMATS, ALL_WIDTHS), &[], Some(e))?;
     } else if let Some((hash, place)) = catalog
         .pages_lacking_format(rel, VERSION, WIDTHS[0], Format::Avif.bit())?
         .into_iter()
@@ -621,6 +744,22 @@ pub fn give_up_page(catalog: &mut Catalog, rel: &str) -> Result<(), catalog::Err
             ],
         );
         catalog.add_formats(&hash, Format::Avif.bit())?;
+    } else if let Some((hash, place, _, _, wanted)) = catalog
+        .pages_with_other_widths(rel, VERSION, WIDTHS[0])?
+        .into_iter()
+        .next()
+    {
+        log::error(
+            "variants: no copies at the widths wanted now",
+            &[
+                ("path", &place.book_path),
+                (
+                    "error",
+                    "gave up: the worker stopped while making them each time",
+                ),
+            ],
+        );
+        catalog.set_widths(&hash, wanted)?;
     }
     Ok(())
 }

@@ -4,14 +4,14 @@ A self-hosted manga and comics server: one small Rust binary, a plain web
 library and reader, built to stay fast on small hardware.
 Why and how: [MANIFESTO.md](MANIFESTO.md). Contributing: [AGENTS.md](AGENTS.md).
 
-**Status: Milestone 8 (uploads) in place; optimize and storage come with M9.**
+**Status: Milestone 8 (uploads) in place; M9 (optimize and storage) under way.**
 `koma worker` indexes a library of CBZ, ZIP, CB7 and EPUB files and photo
 folders into SQLite and keeps it up to date, and `koma serve` shows it in a
 browser: libraries and collections as an endless grid or a sortable table,
 search, series pages, downloads of the originals, and a reader: pages one or
 two at a time or as a strip, with a scrubber, thumbnails and zoom, and EPUB
-books as text with their contents. The worker also makes smaller JPEG and WebP copies of each
-large page, once. Everyone signs in (a password, a passkey, or a sign-in proxy); each account
+books as text with their contents. The worker also makes smaller JPEG, WebP and AVIF copies of each
+large page, once, at the widths each library's settings keep. Everyone signs in (a password, a passkey, or a sign-in proxy); each account
 keeps its own reading positions and reader settings across devices, and has a private folder,
 `/library/~name`, that nobody else sees. Curators move, merge, rename and delete series
 and books, and edit their details: each change is planned first, journaled, and undoable, and
@@ -58,8 +58,10 @@ Logs are JSON lines on stderr.
 This software is based in part on the work of the Independent JPEG Group
 (through the `jpeg-encoder` crate, which writes JPEG page variants).
 It includes libwebp, Copyright (c) 2010, Google Inc., under the BSD
-3-Clause licence. Every other dependency is under the MIT, Apache-2.0,
-BSD-3-Clause, Zlib or Unicode-3.0 licence; `cargo deny check` lists them.
+3-Clause licence, and rav1e (with its v_frame and av1-grain crates),
+Copyright (c) 2017-2023, the rav1e contributors, under the BSD 2-Clause
+licence, for AVIF. Every other dependency is under the MIT, Apache-2.0,
+BSD-2-Clause, BSD-3-Clause, Zlib or Unicode-3.0 licence; `cargo deny check` lists them.
 
 ## Docs
 
@@ -67,4 +69,5 @@ BSD-3-Clause, Zlib or Unicode-3.0 licence; `cargo deny check` lists them.
 - [docs/development.md](docs/development.md): building, testing, budgets, test libraries
 - [docs/naming.md](docs/naming.md): what Koma-1 reads from file names and metadata files
 - [docs/ROADMAP.md](docs/ROADMAP.md): milestones
+- [docs/m9-progress.md](docs/m9-progress.md): M9 (optimize and storage): what is done, what is next
 - [docs/design/](docs/design/README.md): UI design

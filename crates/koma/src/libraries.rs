@@ -98,7 +98,21 @@ pub struct Settings {
     pub kind: Kind,
     pub direction: Direction,
     pub colour: (&'static str, &'static str),
+    /// The widths of page variants made for it (bits of
+    /// [`crate::variants::width_bit`]).
+    pub widths: u8,
 }
+
+/// The choices of variant widths in the settings, as `(bits, label)`:
+/// fewer widths, less disk; the reader then takes the next larger copy, or
+/// the page itself.
+pub const WIDTH_CHOICES: [(u8, &str); 5] = [
+    (7, "720 · 1080 · 1440"),
+    (5, "720 · 1440"),
+    (3, "720 · 1080"),
+    (1, "720"),
+    (0, "none"),
+];
 
 /// The name of the default library, for series not in a library folder.
 pub const DEFAULT_NAME: &str = "Library";
@@ -112,6 +126,8 @@ pub struct Library {
     pub direction: Direction,
     /// `(name, CSS colour)` from [`COLOURS`].
     pub colour: (&'static str, &'static str),
+    /// Variant widths, as in [`Settings::widths`].
+    pub widths: u8,
     /// Series with a present book.
     pub series: i64,
 }
@@ -153,6 +169,7 @@ impl Library {
             kind,
             direction,
             colour: COLOURS[index % COLOURS.len()],
+            widths: crate::variants::ALL_WIDTHS,
             series,
         }
     }
@@ -164,6 +181,7 @@ impl Library {
             self.kind = s.kind;
             self.direction = s.direction;
             self.colour = s.colour;
+            self.widths = s.widths;
         }
         self
     }
@@ -329,12 +347,17 @@ mod tests {
             kind: Kind::Comics,
             direction: Direction::LeftToRight,
             colour: colour("rose").unwrap(),
+            widths: 5,
         };
         let all = Library::all(vec![("manga".into(), 1), ("webtoons".into(), 2)], &[s]);
         assert_eq!(all[0].name, "Manga");
         assert_eq!(
             (all[1].name.as_str(), all[1].kind, all[1].colour.0),
             ("Webtoon", Kind::Comics, "rose")
+        );
+        assert_eq!(
+            (all[0].widths, all[1].widths),
+            (crate::variants::ALL_WIDTHS, 5)
         );
     }
 
