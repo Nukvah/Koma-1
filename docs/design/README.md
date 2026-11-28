@@ -315,8 +315,7 @@ series' “naming” button and `/naming?l=` for a library):
 
 ## Uploads (M8)
 
-Proposed, with the choices put to the owner (the recommendation is built
-until they answer):
+Chosen with the owner where marked; the rest is proposed:
 
 - **Drop anywhere.** Files or whole folders dropped on a library, collection
   or series page (or picked on `add files`) are read in the browser by name
@@ -331,7 +330,7 @@ until they answer):
   folders make a collection; a cosplay drop goes to `Cosplayer / Set /`.
 - **Packed on the server.** Images are sent one by one and written straight
   into the archive being built, pages stored as they are; CB7 becomes CBZ
-  the same way. CBR waits for M11's sandbox (proposed): it is not taken,
+  the same way. CBR waits for M11's sandbox (chosen with the owner): it is not taken,
   with the reason.
 - **Uploads wait outside the library** (chosen with the owner): in `/data/uploads`, so
   `koma serve` still never writes to `/library`; the worker checks each file

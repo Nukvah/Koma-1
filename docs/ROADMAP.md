@@ -176,7 +176,8 @@ Goal: drop anything in, and it lands already tidy.
 - Drag and drop of files and whole folders; the server plans what each drop becomes and
   shows it as a review sheet first *(proven)*.
 - Photo folders packed on the server, written straight into the archive as files arrive;
-  CBR and CB7 converted to CBZ with stored pages *(proven)*.
+  CB7 converted to CBZ with stored pages *(proven)*; CBR waits for M11's sandbox and is
+  refused with its reason until then.
 - Duplicates skipped; resumable uploads for large archives.
 - An upload log per month: successes counted, every failure written out with its reason *(proven)*.
 - The same hostile-input checks as ingest, then the naming standard.
