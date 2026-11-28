@@ -1,0 +1,16 @@
+[package]
+name = "koma-jpegli"
+version = "0.0.0"
+description = "JPEG encoding for Koma-1: one safe function over jpegli"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# jpegli from libjxl 0.10.2, built from its vendored C++ source with CMake:
+# nothing at runtime. The FFI is the `jpegli` crate's; this crate has no
+# `unsafe` of its own.
+jpegli = "0.1.0"
+
+[lints]
+workspace = true

@@ -56,9 +56,11 @@ Logs are JSON lines on stderr.
 ## Third-party notices
 
 This software is based in part on the work of the Independent JPEG Group
-(through the `jpeg-encoder` crate, which writes JPEG page variants).
-It includes libwebp, Copyright (c) 2010, Google Inc., under the BSD
-3-Clause licence, and rav1e (with its v_frame and av1-grain crates),
+(through jpegli, built with libjpeg's headers).
+It includes jpegli (from libjxl), Copyright (c) the JPEG XL Project Authors,
+and Highway, Copyright (c) the Highway Project Authors, both under the BSD
+3-Clause licence, for JPEG; libwebp, Copyright (c) 2010, Google Inc., under the BSD
+3-Clause licence; and rav1e (with its v_frame and av1-grain crates),
 Copyright (c) 2017-2023, the rav1e contributors, under the BSD 2-Clause
 licence, for AVIF. Every other dependency is under the MIT, Apache-2.0,
 BSD-2-Clause, BSD-3-Clause, Zlib or Unicode-3.0 licence; `cargo deny check` lists them.

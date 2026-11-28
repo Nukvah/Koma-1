@@ -11,8 +11,8 @@ Each wave is a few small pull requests, each green before the next starts.
 |---|---|---|
 | 1a | AVIF page variants next to WebP and JPEG | done (PR 35) |
 | 1b | Variant widths as a library setting | done (PR 35) |
-| 1c | jpegli (`koma-jpegli`) against `jpeg-encoder`, measured on made-up pages; switch only if it wins | measured: jpegli wins; the switch waits for the owner (see below) |
-| 2a | Presets and the book converter, with kept originals and Undo | to do |
+| 1c | jpegli (`koma-jpegli`) against `jpeg-encoder`, measured on made-up pages; switch only if it wins | done: switched (variants version 2) |
+| 2a | Presets and the book converter, with kept originals and Undo | next |
 | 2b | Auto-convert new uploads; a night window with Run now | to do |
 | 3a | The optimize sheet: per series, collection, selection or library; estimates per preset from sample pages; a before-and-after compare | to do |
 | 3b | The storage page; README, roadmap and docs | to do |
@@ -72,20 +72,39 @@ file was decoded with libjpeg-turbo, as browsers do.
 - Binary: about +0.2 MB (encoder, static, stripped). The 40 MiB budget is
   far off.
 - Build: jpegli is C++ (libjxl 0.10.2 through `jpegli-sys`, with highway),
-  built with CMake: the Alpine stage needs `cmake` and `g++`, and libstdc++
-  linked statically into the musl binary (not tried yet).
+  built with CMake.
 - The IJG notice stays: jpegli is built against libjpeg-turbo's
   `jpeglib.h` and `jmorecfg.h`, under the IJG licence. libjxl (BSD-3-Clause)
   and highway would join the notices.
 - `jpegli-sys`'s errors unwind through the C++ code (`resume_unwind` in
-  `extern "C-unwind"`); `koma-jpegli` would catch them at its one safe
-  function, as `koma-webp` keeps its `unsafe` to itself.
-- Switching means raising `variants::VERSION`, which makes every copy again
-  in every format, AVIF included: hours to days of worker time on a large
+  `extern "C-unwind"`).
+- Switching raises `variants::VERSION`, which makes every copy again in
+  every format, AVIF included: hours to days of worker time on a large
   library. JPEG is the reader's last choice after AVIF and WebP, so the gain
   is disk, not what readers download.
 
-Owner's decision pending: switch (and when), or keep `jpeg-encoder`.
+**Switched (owner's choice).** One quality for every page: at 85,
+progressive, each made-up page scored at least as well as `jpeg-encoder`'s
+at 82 (worst −0.1):
+
+| Page | Size against `jpeg-encoder` 82 | SSIMULACRA2 |
+|---|---|---|
+| gray line art | −6 to −7% | +0.0 to +0.2 |
+| colour | +9 to +12% | +8 to +13 |
+| photo-like | −25 to −36% | −0.1 to +1.2 |
+
+`jpeg-encoder` scores low on flat colour (its 4:2:0 chroma on saturated
+edges): to look as good, a colour page costs a little more, but looks far
+better than before. 84 would save 2 to 3 points more on gray and photos
+while losing up to 0.7 on gray.
+
+- `koma-jpegli` wraps the `jpegli` crate: no `unsafe` of its own, libjpeg
+  errors caught at its one function.
+- `variants::VERSION` is 2: the worker makes every page again (all formats,
+  thumbnails included), and removes each page's version 1 files as it goes.
+- The Alpine stage installs `cmake`, `make` and `g++`; libstdc++ is linked
+  statically into the musl binary.
+- README: jpegli (libjxl) and Highway notices; the IJG one stays.
 
 ### Found on the way: thumbnails of colour pages
 
@@ -102,8 +121,9 @@ for a year (the URL changes only with `VERSION`).
 
 ## Notes for wave 2
 
-- Whatever decodes JPEGs Koma wrote itself must not use `image`'s decoder
-  while they come from `jpeg-encoder` (see above).
+- jpegli's JPEGs decode right with `image`; version 1 ones (from
+  `jpeg-encoder`) did not in colour (see above). Test pages are still made
+  with `jpeg-encoder` (a dev-dependency).
 - The converter needs to decode AVIF pages (to check each written page, and
   to make variants of converted books later). Nothing in the tree decodes
   AVIF yet (`variants::decode` returns `Unsupported("AVIF")`). Candidates:

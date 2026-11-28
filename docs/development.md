@@ -6,6 +6,7 @@
 |---|---|
 | `crates/koma` | The `koma` binary and its library: CLI, server, archives, catalogue, scan |
 | `crates/koma-fixtures` | Made-up test material: PNG pages, zip and 7z writers, a test library |
+| `crates/koma-jpegli` | JPEG encoding: one safe function over jpegli (C++, built with CMake), no `unsafe` of its own |
 | `crates/koma-webp` | Lossy WebP encoding: one safe function over libwebp, the only crate allowed `unsafe` |
 | `fuzz` | Fuzz targets for every parser of hostile input (nightly, own lock file) |
 | `xtask` | Project tasks: `cargo xtask budgets`, `cargo xtask fixtures` |
@@ -119,7 +120,9 @@ serving never resizes or transcodes (`koma::variants`):
 
 - Widths 720, 1080 and 1440, only those narrower than the page: the original
   is always served as it is, and a page no wider than 720 has none. Each width
-  in JPEG (quality 82, through `jpeg-encoder`, pure Rust), WebP (quality 80,
+  in JPEG (quality 85, progressive, through `koma-jpegli`: jpegli from libjxl
+  0.10.2, C++ built with CMake, so building needs `cmake` and a C++
+  compiler), WebP (quality 80,
   through `koma-webp`: libwebp 1.6 built from its vendored C source) and AVIF
   (quality 70, speed 10, through `ravif` on rav1e, pure Rust; the image is
   built with rav1e's assembly, feature `asm`, which needs `nasm` on x86_64).
@@ -130,10 +133,10 @@ serving never resizes or transcodes (`koma::variants`):
 - A page that gets those also gets a 240-wide thumbnail, for the reader's
   thumbnails and scrubber preview: a few KB where a photo's 720 copy is a
   hundred. Pages made before thumbnails existed get theirs from their 720
-  WebP on the worker's next pass, not by decoding the original again. Not
-  from the 720 JPEG: with optimised Huffman tables `jpeg-encoder` writes one
-  scan per component, which browsers and libjpeg read but `image`'s decoder
-  (zune-jpeg) misreads in colour. Schema 17 had those thumbnails made again.
+  WebP on the worker's next pass, not by decoding the original again. (Not
+  from the 720 JPEG: the JPEGs of variants version 1, from `jpeg-encoder`,
+  had one scan per component, which browsers read but `image`'s decoder
+  misreads in colour. Version 2 makes every page again, thumbnail included.)
 - On made-up scan-like pages (1600 x 2400, JPEG at quality 90, 1.7 MB each)
   the WebP variants were 7% (720), 23% (1080) and 51% (1440) of the page's
   size, and all six variants together about 1.7 times the originals' space.
@@ -189,7 +192,9 @@ serving never resizes or transcodes (`koma::variants`):
 - `variants::VERSION` names the settings (widths, formats, qualities) and is
   part of every variant's file name and URL. Raising it makes the worker redo
   every page under the new settings, at new URLs: copies already cached for
-  a year under the old URLs are never wrong, only old.
+  a year under the old URLs are never wrong, only old. A page's files of an
+  older version are removed when it is made again. Version 2: JPEG through
+  jpegli.
 - One page at a time on one thread: on the 2-CPU target the other CPU stays
   free for `koma serve`.
 

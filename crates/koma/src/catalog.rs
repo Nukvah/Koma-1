@@ -2036,6 +2036,17 @@ impl Catalog {
         tx.commit()
     }
 
+    /// The version a page's variants were made with, if they were.
+    pub fn variants_version(&self, hash: &blake3::Hash) -> Result<Option<i64>, Error> {
+        self.conn
+            .query_row(
+                "SELECT version FROM variant_pages WHERE hash = ?1",
+                [hash.as_bytes()],
+                |r| r.get(0),
+            )
+            .optional()
+    }
+
     /// How many page contents have their variants made with `version`.
     pub fn variant_page_count(&self, version: i64) -> Result<i64, Error> {
         self.conn.query_row(

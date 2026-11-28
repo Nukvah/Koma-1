@@ -46,7 +46,10 @@ pub const WIDTHS: [u32; 3] = [720, 1080, 1440];
 /// phone screen, a few KB where the 720 copy of a photo is a hundred.
 pub const THUMB: u32 = 240;
 
-pub const JPEG_QUALITY: u8 = 82;
+/// JPEG variants through jpegli, progressive: at 85 every made-up page of
+/// docs/m9-progress.md looked as good as `jpeg-encoder`'s at 82 or better,
+/// gray ones 6% smaller and photos a quarter to a third.
+pub const JPEG_QUALITY: f32 = 85.0;
 pub const WEBP_QUALITY: f32 = 80.0;
 
 /// AVIF variants through rav1e: the optimize presets' quality, at rav1e's
@@ -64,7 +67,7 @@ pub const GRAY_TOLERANCE: u8 = 8;
 /// Changes whenever what [`make`] produces changes (widths, formats,
 /// qualities): pages made under an older version are made again, with new
 /// file names and URLs (see [`url`]).
-pub const VERSION: i64 = 1;
+pub const VERSION: i64 = 2;
 
 /// A variant's format.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -433,21 +436,10 @@ fn resized(
 }
 
 fn encode_jpeg(data: &[u8], width: u32, height: u32, gray: bool) -> Result<Vec<u8>, Error> {
-    let (Ok(w), Ok(h)) = (u16::try_from(width), u16::try_from(height)) else {
-        return Err(Error::Limit("too tall for JPEG"));
-    };
-    let mut out = Vec::new();
-    let mut encoder = jpeg_encoder::Encoder::new(&mut out, JPEG_QUALITY);
-    encoder.set_optimized_huffman_tables(true);
-    let color = if gray {
-        jpeg_encoder::ColorType::Luma
-    } else {
-        jpeg_encoder::ColorType::Rgb
-    };
-    encoder
-        .encode(data, w, h, color)
-        .map_err(|e| Error::Encode(e.to_string()))?;
-    Ok(out)
+    koma_jpegli::encode(data, width, height, gray, JPEG_QUALITY).map_err(|e| match e {
+        koma_jpegli::Error::Dimensions => Error::Limit("too tall for JPEG"),
+        e => Error::Encode(e.to_string()),
+    })
 }
 
 fn encode_avif(data: &[u8], width: u32, height: u32, gray: bool) -> Result<Vec<u8>, Error> {
@@ -520,6 +512,7 @@ pub fn run_job(
                 continue;
             }
         };
+        remove_older(blobs, catalog, &hash)?;
         let widths = catalog.wanted_widths(&hash)?;
         let made = make_some(&bytes, &limits, widths, true, &Format::ALL);
         drop(bytes);
@@ -608,6 +601,29 @@ pub fn run_job(
     Ok((JobEnd::Done, done))
 }
 
+/// Removes the files of a page's variants made under an older [`VERSION`]:
+/// they are never served again (their URLs name their version), and are
+/// about to be made again. Removed first, so that a worker killed now leaves
+/// nothing behind; the rows go when the new ones are stored.
+fn remove_older(
+    blobs: &BlobStore,
+    catalog: &Catalog,
+    hash: &blake3::Hash,
+) -> Result<(), ScanError> {
+    let Some(old) = catalog.variants_version(hash)?.filter(|&v| v != VERSION) else {
+        return Ok(());
+    };
+    for (width, _, format) in catalog.variants_of(hash)? {
+        let path = blobs.variant_path(hash, width, old, &format);
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(ScanError::Io(path, e)),
+        }
+    }
+    Ok(())
+}
+
 /// Brings a page made for the widths `made` to those its libraries want
 /// now, `wanted`: the copies at widths no longer wanted are removed, those
 /// newly wanted made from the page itself, in the formats it has (`formats`).
@@ -684,8 +700,8 @@ fn other_widths(
 /// reader uses the 720 copy instead) and is tried again on the next pass.
 ///
 /// Not from the 720 JPEG: `image`'s JPEG decoder misreads the colour JPEGs
-/// `jpeg-encoder` writes (optimised Huffman tables, 4:2:0), where browsers
-/// and libjpeg read them right. Schema 17 dropped the thumbnails made from
+/// `jpeg-encoder` wrote for version 1 (one scan per component, 4:2:0), where
+/// browsers read them right. Schema 17 dropped the thumbnails made from
 /// them; any thumbnail file found here is such a leftover, and replaced.
 fn add_thumb(
     blobs: &BlobStore,
@@ -1124,10 +1140,19 @@ mod tests {
             got,
             [(THUMB, 360, Format::Jpeg), (THUMB, 360, Format::Webp)]
         );
-        // And it is the same picture. Only WebP is decoded here: `image`
-        // misreads the colour JPEGs `jpeg-encoder` writes (see `add_thumb`).
+        // And it is the same picture, in every format `image` decodes: the
+        // 720 JPEG too (those of version 1 it misread, see `add_thumb`).
+        let jpeg_720 = vs
+            .iter()
+            .find(|v| v.width == 720 && v.format == Format::Jpeg)
+            .unwrap();
         let page_mean = mean_rgb(&page);
-        for t in [&from.bytes, &thumbs[1].bytes] {
+        for t in [
+            &jpeg_720.bytes,
+            &from.bytes,
+            &thumbs[0].bytes,
+            &thumbs[1].bytes,
+        ] {
             let m = mean_rgb(t);
             for c in 0..3 {
                 assert!((m[c] - page_mean[c]).abs() < 4.0, "{m:?} != {page_mean:?}");

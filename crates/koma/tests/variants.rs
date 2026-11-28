@@ -261,6 +261,85 @@ fn pages_made_before_thumbnails_get_theirs_from_the_720_webp() {
 }
 
 #[test]
+fn a_new_version_makes_every_page_again_and_removes_the_old_files() {
+    let root = temp_root("version");
+    let lib = library(&root);
+    let data = root.join("data");
+    let mut catalog = Catalog::open(&db(&data)).unwrap();
+    scan(&lib, &data, &mut catalog).unwrap();
+
+    // As if made by the version before: the same files under its name.
+    let (old, blobs) = (VERSION - 1, BlobStore::new(&data));
+    let mut pages = Vec::new();
+    for (_, page) in all_pages(&catalog) {
+        let made = catalog.variants_of(&page.hash).unwrap();
+        if made.is_empty() || pages.contains(&page.hash) {
+            continue;
+        }
+        let mut rows = Vec::new();
+        for (w, h, f) in &made {
+            let now = blobs.variant_path(&page.hash, *w, VERSION, f);
+            let before = blobs.variant_path(&page.hash, *w, old, f);
+            fs::rename(&now, &before).unwrap();
+            rows.push((*w, *h, f.clone(), fs::metadata(&before).unwrap().len()));
+        }
+        let rows: Vec<(u32, u32, &str, u64)> = rows
+            .iter()
+            .map(|(w, h, f, l)| (*w, *h, f.as_str(), *l))
+            .collect();
+        catalog
+            .store_variants(
+                &page.hash,
+                old,
+                (variants::FORMATS, variants::ALL_WIDTHS),
+                &rows,
+                None,
+            )
+            .unwrap();
+        pages.push(page.hash);
+    }
+    assert_eq!(pages.len(), 4);
+    let count = |dir: &Path, version: i64| -> usize {
+        let suffix = format!(".v{version}.");
+        walk(dir)
+            .iter()
+            .filter(|p| p.to_string_lossy().contains(&suffix))
+            .count()
+    };
+    let old_files = count(&data.join("blobs"), old);
+    assert!(old_files >= 4 * 6, "{old_files}");
+
+    // The next pass makes each page again under this version, and leaves
+    // no file of the old one.
+    let report = scan(&lib, &data, &mut catalog).unwrap();
+    assert_eq!(report.variant_pages, 4);
+    assert_eq!(catalog.variant_page_count(VERSION).unwrap(), 4);
+    assert_eq!(count(&data.join("blobs"), old), 0);
+    assert_eq!(count(&data.join("blobs"), VERSION), old_files);
+    for hash in &pages {
+        for (w, h, f) in catalog.variants_of(hash).unwrap() {
+            let bytes = fs::read(blobs.variant_path(hash, w, VERSION, &f)).unwrap();
+            assert_eq!(size_of(&bytes), (w, h));
+        }
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Every file under `dir`.
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.extend(walk(&p));
+        } else {
+            out.push(p);
+        }
+    }
+    out
+}
+
+#[test]
 fn pages_made_before_avif_get_avif_ones_from_the_original() {
     let root = temp_root("avif");
     let lib = library(&root);

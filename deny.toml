@@ -23,8 +23,9 @@ allow = [
     # rav1e (AVIF encoding).
     "BSD-2-Clause",
     "BSD-3-Clause",
-    # jpeg-encoder (page variants). Permissive; binaries must say they are
-    # "based in part on the work of the Independent JPEG Group": README.md.
+    # jpeg-encoder (test pages). Permissive; binaries must say they are
+    # "based in part on the work of the Independent JPEG Group": README.md
+    # does, for jpegli, built with libjpeg's headers.
     "IJG",
     "MIT",
     "Unicode-3.0",

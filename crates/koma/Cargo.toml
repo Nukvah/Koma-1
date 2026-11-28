@@ -19,12 +19,13 @@ blake3 = "1.8"
 # Streaming downloads: a response body fed from a blocking reader.
 bytes = "1.12"
 # Page variants: pure-Rust decoders (no colour-management or EXR/TIFF extras),
-# resizing and JPEG; WebP through libwebp in koma-webp.
+# and resizing; JPEG through jpegli in koma-jpegli, WebP through libwebp in
+# koma-webp.
 fast_image_resize = { version = "6.2", default-features = false, features = ["std"] }
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 http-body = "1.1"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
-jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
+koma-jpegli = { path = "../koma-jpegli" }
 koma-webp = { path = "../koma-webp" }
 # AVIF through rav1e, pure Rust. Its assembly (feature `asm`, needs nasm on
 # x86_64) is on in the image; tests run without it.
@@ -44,6 +45,8 @@ asm = ["ravif/asm"]
 
 [dev-dependencies]
 blake3 = "1.8"
+# Test pages in JPEG.
+jpeg-encoder = { version = "0.7.1", default-features = false, features = ["std"] }
 koma-fixtures = { path = "../koma-fixtures" }
 tokio = { version = "1.54", features = ["sync"] }
 
