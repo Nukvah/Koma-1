@@ -13,10 +13,13 @@ Each wave is a few small pull requests, each green before the next starts.
 | 1b | Variant widths as a library setting | done (PR 35) |
 | 1c | jpegli (`koma-jpegli`) against `jpeg-encoder`, measured on made-up pages; switch only if it wins | done: switched (variants version 2) |
 | 1d | The worker in parallel: pages on every core it is given, at low priority (see [Threading](#threading)) | next |
-| 2a | Presets and the book converter, with kept originals and Undo | to do |
-| 2b | Auto-convert new uploads; a night window with Run now | to do |
-| 3a | The optimize sheet: per series, collection, selection or library; estimates per preset from sample pages; a before-and-after compare | to do |
-| 3b | The storage page; README, roadmap and docs | to do |
+| 2a | Managed storage: originals in the blob store by hash; uploads stored there; folders and names in the catalogue (see [Managed storage](#managed-storage)) | to do |
+| 2b | Import of an existing folder (hard links or copies), and the upgrade of today's `/library` | to do |
+| 2c | Takeout: stored ZIPs under 4 GiB with a checksum manifest, resumable; imports back | to do |
+| 3a | Presets and the book converter, with kept originals and Undo | to do |
+| 3b | Auto-convert new uploads; a night window with Run now | to do |
+| 4a | The optimize sheet: per series, collection, selection or library; estimates per preset from sample pages; a before-and-after compare | to do |
+| 4b | The storage page; README, roadmap and docs | to do |
 
 ## Decisions already taken
 
@@ -27,7 +30,7 @@ Each wave is a few small pull requests, each green before the next starts.
   in parallel from wave 1d). On a made-up
   1440-wide line-art page speed 10 took 0.8 s against 4.1 s for speed 6,
   for a file 13% bigger that is still smaller than the WebP one. The
-  converter (wave 2) uses the presets' speed 6.
+  converter (wave 3) uses the presets' speed 6.
 - **Covers** stay WebP and JPEG: another `<source>` on every card costs the
   library page's 15 KiB budget.
 - **Kept originals** (owner's choice): kept like the trash. The admin picks
@@ -153,7 +156,7 @@ What changes, in order:
 3. **Budgets.** The 2 CPU / 1 GB checks stay as they are, as the floor. Add
    a measure of worker throughput (pages a minute on a made-up library) at 2
    CPUs and at all the runner's cores, and a budget that it grows with them.
-4. **Within one encode (converter, wave 2, and M10 photo sets).** Not for
+4. **Within one encode (converter, wave 3, and M10 photo sets).** Not for
    variants: ravif sets as many AVIF tiles as threads, so the bytes would
    depend on the machine and files grow a little. Where one huge page is
    the whole job (a 50 MP photo converted at speed 6), use threads inside
@@ -171,7 +174,57 @@ Code that says "one thread" today, to update with step 1: `variants::run_job`
 `crates/koma/src/variants.rs`, `scan::run_jobs` (one job at a time), and
 docs/development.md (page variants).
 
-## Notes for wave 2
+## Managed storage
+
+Owner's decision (manifesto, principle 9): Koma-1 keeps the books, stored by
+hash where nothing else writes; plain files come back through takeout. No
+folder is mounted for Koma-1 to follow: what came from outside comes in once,
+by import.
+
+**What it removes.** Koma-1 no longer guesses what changed while it was not
+looking: no rescans to find changes, no stable ids through outside renames
+and moves (`scan.rs`'s matching, `tests/stable_ids.rs`), no grace period for
+missing folders. Every change is one Koma-1 made, in the journal. The
+periodic scan becomes `scrub`: rehash and repair.
+
+**What changes.**
+- Originals are blobs (`blobs/ab/<hash>.<ext>`), next to the variants. Zero
+  copy serving stays: a stored CBZ is still a file to `sendfile()` a byte
+  range of.
+- A book is a catalogue row pointing at its original's hash, with its
+  library, folder and file name. Organising and the naming standard (M6, M7)
+  edit rows; the journal records old and new rows; the trash is rows with a
+  date, and their blob goes when no row points at it after the keep time.
+- Uploads (M8): `filing.rs` stores into the blob store instead of moving into
+  `/library`.
+- The converter (wave 3) gets simpler: a converted book is a new blob, the
+  book row points at it, the old blob is the kept original; Undo points back.
+- Identical books, uploaded twice or in two libraries, are stored once.
+
+**Import (2b).** A job reads a mounted folder once, with today's reading of
+folders and names, and stores each book: `link()` when the folder is on the
+same mount as `/data`, a copy otherwise (`link()` fails across mount points,
+two Docker bind mounts included, with `EXDEV`). A hard-linked file is still
+the user's: one edited in place changes the stored book, which `scrub` finds
+by its hash. Today's installs upgrade by importing `/library` this way.
+
+**Takeout (2c).** The plan of a takeout puts books into chunks of under
+4 GiB (classic ZIP, stored: books are compressed already), in library and
+series order, with fewer than 65,535 entries each; a book bigger than a chunk
+gets a chunk of its own, in ZIP64. In each chunk: the folder tree with the
+standard names and each book's `metadata.json` (edits included). A manifest
+lists the chunks, their files and BLAKE3 hashes. Chunks are streamed, not
+written to disk first: their layout is fixed when planned (CRC-32s computed
+then by the worker), so each can be served with byte ranges and resumed.
+`download.rs` streams whole downloads today, without ranges: ranges are new
+here, and M12's sync API wants them too. `archive::zipout` (M8) writes ZIP
+and ZIP64 already.
+
+**Exit check.** A made-up library imported by hard links takes no new space
+for originals; its takeout, imported into an empty Koma-1, gives the same
+books (hashes), names and metadata.
+
+## Notes for the converter (wave 3)
 
 - jpegli's JPEGs decode right with `image`; version 1 ones (from
   `jpeg-encoder`) did not in colour (see above). Test pages are still made
@@ -184,5 +237,6 @@ docs/development.md (page variants).
 - Lossless preset: `koma-webp` has lossy encoding only; add a lossless
   function there (libwebp's `WebPEncodeLosslessRGB`).
 - A converted book is a new file with new page hashes: write it to a
-  temporary file, check every page, swap it in through the M6 journal so it
-  keeps its id and progress, and keep the original under the keep time.
+  temporary file, check every page, store it as a blob and point the book at
+  it through the journal, so it keeps its id and progress; the old blob is
+  the kept original (see [Managed storage](#managed-storage)).

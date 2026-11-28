@@ -193,6 +193,14 @@ upload survives a dropped connection.
 
 Goal: save disk space when you decide to, and see where it went.
 
+- Managed storage (manifesto, principle 9): originals stored by hash in the blob store,
+  where only the worker writes; folders and names become the catalogue's, so organising,
+  renames and the trash move no bytes. The M6 to M8 features keep working on it.
+- Import of an existing folder as a job: hard links on the same mount, copies otherwise;
+  a book already stored is not stored again *(proven)*.
+- Takeout as a job: a library, series or everything as plain files with the standard
+  names and `metadata.json`, in stored ZIPs under 4 GiB with a checksum manifest,
+  resumable; a takeout imports back as it was *(proven)*.
 - Opt-in per series, collection, selection or library; an estimate per preset from sample
   pages and a before-and-after page compare *(proven)*.
 - Presets: Default (AVIF, quality 70, speed 6, full colour, grayscale for black-and-white
@@ -212,7 +220,9 @@ Goal: save disk space when you decide to, and see where it went.
 - A storage page: size per library, space saved, the biggest books not converted yet, kept
   originals and trash *(proven)*.
 
-Exit: converting and undoing a volume restores the original bit for bit, with progress intact.
+Exit: converting and undoing a volume restores the original bit for bit, with progress intact;
+a made-up library imported by hard links takes no new space for its originals, and its
+takeout imported into an empty Koma-1 gives the same books, names and metadata.
 
 ### M10 · Photo sets and video
 
@@ -299,4 +309,10 @@ lossless JPEG XL archival and a dedicated phone layout.
 - **ffmpeg.** Video thumbnails need ffmpeg, which alone is bigger than the image budget.
   Options: a separate optional media image, thumbnails only when ffmpeg is present, or no
   video thumbnails.
+- **Existing installs.** Today's `/library` folder becomes managed storage through one
+  import (hard links, so no second copy). Is a one-time import at upgrade enough, or should
+  a release keep reading `/library` read-only for a while?
+- **Other apps on the same files.** Managed storage takes the plain folder away from other
+  readers and file shares; takeout gives it back as a copy. Is a read-only view (WebDAV,
+  OPDS downloads) needed, or is takeout enough?
 - **AVIF originals.** Conversion is lossy. Is keeping originals for a set number of days enough?

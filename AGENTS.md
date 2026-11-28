@@ -26,7 +26,7 @@ A self-hosted manga server with a web library and reader, shipped as Docker on L
 - Redis, message brokers, microservices, Kubernetes manifests.
 - Postgres (unless multi-writer is proven necessary).
 - Recommendations, social features, comments, ratings, trackers of external sites, scrapers or downloaders of other sites.
-- Writes to `/library` from `koma serve`, or any write that skips the journal.
+- Writes to the stored books from `koma serve` or from outside Koma-1, or any write that skips the journal.
 - Anything that breaks the budgets below.
 
 ## Budgets (CI-enforced)
