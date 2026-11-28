@@ -24,10 +24,12 @@ pub mod libraries;
 pub mod log;
 pub mod meta;
 pub mod names;
+pub mod naming;
 pub mod natsort;
 pub mod organise;
 pub mod pages;
 pub mod password;
+pub mod rename;
 pub mod scan;
 pub mod search;
 pub mod serve;
@@ -302,6 +304,8 @@ fn pass(
         log::error("scan: failed", &[("error", &e.to_string())]);
     })?;
     scan::log_report(&report, started);
+    // Cosplay libraries kept in Cosplayer / Set / variant folders.
+    organise::tidy(&paths.library, &paths.data, catalog);
     Ok(())
 }
 

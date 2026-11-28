@@ -757,7 +757,7 @@ pub fn series(
     if view.organise && !view.select {
         let _ = write!(
             m,
-            "<a class=btn href=\"/move?s={id}\">move or rename</a>\
+            "<a class=btn href=\"/move?s={id}\">move or rename</a><a class=btn href=\"/naming?s={id}\">naming</a>\
              <form method=post action=/organise><input type=hidden name=s value={id}>\
              <button class=\"btn danger\" type=submit name=action value=trash-series>delete series</button></form>",
             id = series.id

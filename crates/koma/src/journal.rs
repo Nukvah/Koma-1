@@ -177,14 +177,72 @@ impl Catalog {
 
     /// The highest change id the worker has taken up; 0 if none.
     pub fn last_op(&self) -> Result<i64, Error> {
+        self.conn.query_row(
+            "SELECT coalesce(max(id), 0) FROM ops WHERE id > 0",
+            [],
+            |r| r.get(0),
+        )
+    }
+
+    /// Starts one of the worker's own changes (the cosplay tidy): a negative
+    /// id, with its kind and title kept here since accounts.db has no row.
+    pub fn new_worker_op(&self, kind: &str, title: &str) -> Result<i64, Error> {
+        let id: i64 = self.conn.query_row(
+            "SELECT min(coalesce(min(id), 0), 0) - 1 FROM ops",
+            [],
+            |r| r.get(0),
+        )?;
+        self.conn.execute(
+            "INSERT INTO ops (id, state, done, total, message, started, kind, title)
+             VALUES (?1, 'running', 0, 0, '', ?2, ?3, ?4)",
+            params![id, crate::accounts::now(), kind, title],
+        )?;
+        Ok(id)
+    }
+
+    /// The worker's own changes, newest first: `(state, kind, title)`.
+    pub fn worker_ops(&self, limit: usize) -> Result<Vec<(OpState, String, String)>, Error> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT id, state, done, total, message, started, finished, kind, title FROM ops
+             WHERE id < 0 ORDER BY id LIMIT ?1",
+        )?;
+        stmt.query_map([limit as i64], |r| {
+            Ok((
+                op_row(r)?,
+                r.get::<_, Option<String>>(7)?.unwrap_or_default(),
+                r.get::<_, Option<String>>(8)?.unwrap_or_default(),
+            ))
+        })?
+        .collect()
+    }
+
+    /// The kind of one of the worker's own changes.
+    pub fn worker_op_kind(&self, id: i64) -> Result<Option<(String, String)>, Error> {
         self.conn
-            .query_row("SELECT coalesce(max(id), 0) FROM ops", [], |r| r.get(0))
+            .query_row(
+                "SELECT coalesce(kind, ''), coalesce(title, '') FROM ops WHERE id = ?1 AND id < 0",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+    }
+
+    /// Names the tidy leaves as they are.
+    pub fn kept_names(&self) -> Result<Vec<String>, Error> {
+        let mut stmt = self.conn.prepare_cached("SELECT path FROM name_keep")?;
+        stmt.query_map([], |r| r.get(0))?.collect()
+    }
+
+    pub fn keep_name(&self, path: &str) -> Result<(), Error> {
+        self.conn
+            .execute("INSERT OR IGNORE INTO name_keep (path) VALUES (?1)", [path])?;
+        Ok(())
     }
 
     /// Changes left running or paused (a restart, or a pause), oldest first.
     pub fn unfinished_ops(&self) -> Result<Vec<i64>, Error> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT id FROM ops WHERE state IN ('running', 'paused') ORDER BY id",
+            "SELECT id FROM ops WHERE state IN ('running', 'paused') AND id > 0 ORDER BY id",
         )?;
         stmt.query_map([], |r| r.get(0))?.collect()
     }
@@ -510,6 +568,28 @@ impl Catalog {
                 r.get(0)
             })
             .optional()
+    }
+
+    /// The first folder of every present book's path (library candidates).
+    pub fn book_tops(&self) -> Result<Vec<String>, Error> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT DISTINCT CASE WHEN instr(path, '/') > 0 THEN substr(path, 1, instr(path, '/') - 1)
+             ELSE '' END FROM books WHERE gone IS NULL",
+        )?;
+        stmt.query_map([], |r| r.get(0))?.collect()
+    }
+
+    /// Present books under the folder `folder`: `(id, path, photos, series)`.
+    pub fn books_under(&self, folder: &str) -> Result<Vec<(i64, String, bool, i64)>, Error> {
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT id, path, folder = path, series_id FROM books WHERE gone IS NULL AND {}
+             AND path <> ?1 ORDER BY path COLLATE natsort",
+            under("path")
+        ))?;
+        stmt.query_map([folder], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?
+        .collect()
     }
 
     /// Used by tests: makes sure a series row for `path` exists.

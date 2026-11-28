@@ -10,9 +10,11 @@ All names here are made up.
 
 From strongest to weakest:
 
-1. `metadata.json` inside the book (what Koma-1 will write when you edit a book).
-2. `ComicInfo.xml` inside the book.
-3. The file name, read by the rules below.
+1. Details edited in Koma-1 (and answers given in the fix-up queue).
+2. `<name>.metadata.json` next to the book: what Koma-1 writes when asked.
+3. `metadata.json` inside the book.
+4. `ComicInfo.xml` inside the book.
+5. The file name, read by the rules below.
 
 A field set in a stronger layer wins. Genres and tags are combined instead, the stronger layer's first, without
 repeats. The file name only fills what the metadata files leave empty: the number, the chapter or volume, the
@@ -81,12 +83,38 @@ called "Unsorted"; a loose one-shot is a series of its own.
 | `[English] Lone Comet.cbz` | Lone Comet | — | — | — | — |
 | `[Digital (Mirelle)] Lone Comet.cbz` | Lone Comet | — | — | Mirelle | — |
 
+## Naming standard
+
+What Koma-1 renames a manga or comics book to, when asked (the naming page of a series or a library):
+`(Event) [Circle (Author)] Series - Ch. 003 [EN].cbz`. Each part only when known: from the book's details,
+else from the series' other books (the author, circle and language most of them have). The event is kept
+from the name it had. A chapter is `Ch.`, a volume `Vol.`, a number of unknown kind stands alone. Numbers
+are padded to the largest of their kind in the series (`Largest` below), decimals kept. With an author and
+no circle the name is `[Author] - Series`, which reads back as the author. Every name reads back, by the
+rules above, as what it was made from, so a rename loses nothing.
+
+A book goes to the fix-up queue instead when it has no number and is not its series' only book, or when
+another file would get the same name.
+
+| Name | Series | Kind | Number | Author | Circle | Event | Language | Largest |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `(SF12) [Moonforge (Mirelle)] Starfall Academy - Ch. 003 [EN]` | Starfall Academy | chapter | 3 | Mirelle | Moonforge | SF12 | EN | 120 |
+| `[Moonforge (Mirelle)] Starfall Academy - Ch. 3 [EN]` | Starfall Academy | chapter | 3 | Mirelle | Moonforge | — | EN | 9 |
+| `[Mirelle] - Starfall Academy - Vol. 02` | Starfall Academy | volume | 2 | Mirelle | — | — | — | 14 |
+| `Moonforge Chronicle - Ch. 010.5` | Moonforge Chronicle | chapter | 10.5 | — | — | — | — | 300 |
+| `Harbor Lights - 07` | Harbor Lights | — | 7 | — | — | — | — | 12 |
+| `[Moonforge (Mirelle)] Lone Comet` | Lone Comet | — | — | Mirelle | Moonforge | — | — | — |
+
+In a cosplay library, the worker keeps every set in `Cosplayer / Set /` folders by itself, after each scan:
+`[Lumen Studio] Mirelle - Starfall Bunny - Bonus.zip` goes to `Mirelle/Starfall Bunny/`, keeping its own
+name. A set with no cosplayer in its name stays where it is, in the fix-up queue. Each tidy is a journaled
+change; undone, it is not done again.
+
 ## Cosplay
 
 `[Photographer / Publisher] Cosplayer - Set - Variant`, with or without the bracket. The bracket is metadata
 only (the circle); `[Circle(Cosplayer)]Set` names the cosplayer too. A second ` - ` marks a variant (`Bonus`,
-`Normal`…). Until library types arrive (milestone 3) this is checked by these tests only and not yet used at
-ingest; grouping variants among sibling folders comes with it.
+`Normal`…). The cosplay tidy (above) places sets by it.
 
 | Name | Circle | Cosplayer | Set | Variant |
 | --- | --- | --- | --- | --- |

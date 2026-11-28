@@ -82,6 +82,81 @@ fn every_cosplay_example() {
     assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
 }
 
+#[test]
+fn every_naming_standard_example() {
+    use koma::names::Kind;
+    use koma::naming::{Parts, Widths, build, event_of, language_of};
+    let mut wrong = Vec::new();
+    for row in table("Naming standard") {
+        let [
+            name,
+            series,
+            kind,
+            number,
+            author,
+            circle,
+            event,
+            language,
+            largest,
+        ] = &row[..]
+        else {
+            panic!("row needs 9 cells: {row:?}");
+        };
+        let some = |s: &String| (!s.is_empty()).then(|| s.clone());
+        let kind = match kind.as_str() {
+            "chapter" => Some(Kind::Chapter),
+            "volume" => Some(Kind::Volume),
+            _ => None,
+        };
+        let width = largest.len().max(1);
+        let parts = Parts {
+            event: some(event),
+            circle: some(circle),
+            author: some(author),
+            series: series.clone(),
+            kind,
+            number: number.parse().ok(),
+            language: some(language),
+        };
+        let got = build(
+            &parts,
+            Widths {
+                chapter: width,
+                volume: width,
+            },
+        );
+        if &got != name {
+            wrong.push(format!("{name}\n  built {got}"));
+        }
+        // And it reads back as what it was made from.
+        let back = book_name(&got);
+        let back = (
+            back.series.unwrap_or_default(),
+            back.kind,
+            back.number,
+            back.author,
+            back.publisher,
+            event_of(&got),
+            language_of(&got),
+        );
+        let want = (
+            series.clone(),
+            kind,
+            parts.number,
+            parts.author.clone(),
+            parts.circle.clone(),
+            parts.event.clone(),
+            parts.language.clone(),
+        );
+        if back != want {
+            wrong.push(format!(
+                "{name}\n  reads back {back:?}\n  not        {want:?}"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "\n{}", wrong.join("\n"));
+}
+
 struct Library {
     root: PathBuf,
     catalog: Catalog,

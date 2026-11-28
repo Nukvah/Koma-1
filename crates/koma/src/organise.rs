@@ -31,15 +31,16 @@ use crate::log;
 pub const TRASH: &str = ".koma-trash";
 
 /// Kinds of change.
-pub const KINDS: [&str; 10] = [
+pub const KINDS: [&str; 12] = [
     "move", "series", "merge", "trash", "restore", "erase", "empty", "details", "write", "undo",
+    "rename", "tidy",
 ];
 
 /// Changes that can be undone.
 pub fn undoable(kind: &str) -> bool {
     matches!(
         kind,
-        "move" | "series" | "merge" | "trash" | "restore" | "details" | "write"
+        "move" | "series" | "merge" | "trash" | "restore" | "details" | "write" | "rename" | "tidy"
     )
 }
 
@@ -197,6 +198,39 @@ pub fn plan(c: &Catalog, library: &Path, kind: &str, p: &Value) -> Result<Plan, 
             Ok(())
         };
     match kind {
+        // New names in the same folders (the naming standard).
+        "rename" => {
+            let list = p
+                .get("books")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            for item in list {
+                let id = item.get("id").and_then(Value::as_i64).unwrap_or(0);
+                let name = item.get("to").and_then(Value::as_str).unwrap_or_default();
+                if !safe_name(name) {
+                    return Err(format!("not a file name: {name}"));
+                }
+                let book = c.book(id).map_err(err)?.ok_or("a book is gone")?;
+                let folder = crate::scan::folder_of_path(&book.path);
+                let to = join(&[folder, name]);
+                if to == book.path {
+                    continue;
+                }
+                let (to, clash) = free(library, &to, book.photos, &taken);
+                taken.push(to.clone());
+                out.steps.push(Step {
+                    book: Some(id),
+                    series: Some(book.series_id),
+                    from: book.path,
+                    to,
+                    photos: book.photos,
+                    folder: false,
+                    clash,
+                    skip: false,
+                });
+            }
+        }
         "move" => {
             let folder = target(c, p.get("to").unwrap_or(&Value::Null))?;
             for id in ids(p, "books") {
@@ -273,7 +307,8 @@ pub fn plan(c: &Catalog, library: &Path, kind: &str, p: &Value) -> Result<Plan, 
 struct Run<'a> {
     library: &'a Path,
     catalog: &'a mut Catalog,
-    accounts: &'a Accounts,
+    /// To look for a pause or a cancel; none for the worker's own changes.
+    accounts: Option<&'a Accounts>,
     op: &'a Op,
     done: i64,
     total: i64,
@@ -307,9 +342,7 @@ impl Run<'_> {
     fn step(&mut self, message: &str) -> Result<(), Stop> {
         let control = self
             .accounts
-            .op(self.op.id)
-            .ok()
-            .flatten()
+            .and_then(|a| a.op(self.op.id).ok().flatten())
             .map(|o| o.control)
             .unwrap_or_default();
         match control.as_str() {
@@ -648,9 +681,19 @@ impl Run<'_> {
             }
         }
         self.total = entries.len() as i64;
+        // A tidy undone is not done again: its books keep the names they
+        // get back.
+        let tidy = of < 0
+            && self
+                .catalog
+                .worker_op_kind(of)?
+                .is_some_and(|(kind, _)| kind == "tidy");
         for e in entries.iter().rev() {
             self.step("undoing")?;
             self.undo_entry(e)?;
+            if tidy && e.action == "move" {
+                self.catalog.keep_name(&e.from)?;
+            }
             self.done += 1;
         }
         self.catalog.rebuild_search()?;
@@ -853,7 +896,7 @@ fn run_op(library: &Path, catalog: &mut Catalog, accounts: &Accounts, op: &Op) {
     let mut run = Run {
         library,
         catalog,
-        accounts,
+        accounts: Some(accounts),
         op,
         done: 0,
         total: 0,
@@ -861,7 +904,7 @@ fn run_op(library: &Path, catalog: &mut Catalog, accounts: &Accounts, op: &Op) {
     let result = (|| -> Result<(), Stop> {
         run.step("starting")?;
         match op.kind.as_str() {
-            "move" | "series" | "merge" => {
+            "move" | "series" | "merge" | "rename" => {
                 let plan = plan(run.catalog, library, &op.kind, &p).map_err(Stop::Failed)?;
                 run.moves(&plan)
             }
@@ -920,6 +963,7 @@ pub fn run(library: &Path, data: &Path, catalog: &mut Catalog) {
     {
         todo.extend(new.iter().map(|o| o.id));
     }
+    let ran = !todo.is_empty();
     for id in todo {
         let Ok(Some(op)) = accounts.op(id) else {
             continue;
@@ -935,6 +979,98 @@ pub fn run(library: &Path, data: &Path, catalog: &mut Catalog) {
             continue;
         }
         run_op(library, catalog, &accounts, &op);
+    }
+    // A set renamed in the fix-up queue (or moved) is placed at once.
+    if ran {
+        tidy(library, data, catalog);
+    }
+}
+
+/// Keeps every cosplay library in `Cosplayer / Set / variant` folders: the
+/// worker's own change (a negative id), journaled and undoable like any
+/// other, run after each scan. Sets it cannot place are left for the
+/// fix-up queue; a tidy undone is not done again.
+pub fn tidy(library: &Path, data: &Path, catalog: &mut Catalog) {
+    let Ok(folders) = crate::naming::cosplay_libraries(catalog) else {
+        return;
+    };
+    let mut kept: std::collections::HashSet<String> = catalog
+        .kept_names()
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    if let Ok(Some(a)) = Accounts::open_read_only(&data.join("accounts.db")) {
+        kept.extend(a.kept_names().unwrap_or_default());
+    }
+    for folder in folders {
+        let Ok(rows) = crate::naming::tidy_rows(catalog, library, &folder, &kept) else {
+            continue;
+        };
+        let steps: Vec<Step> = rows
+            .iter()
+            .filter(|r| r.status == crate::naming::Status::Rename)
+            .map(|r| Step {
+                book: Some(r.book),
+                series: Some(r.series),
+                from: r.from.clone(),
+                to: r.to.clone(),
+                photos: r.photos,
+                folder: false,
+                clash: false,
+                skip: false,
+            })
+            .collect();
+        if steps.is_empty() {
+            continue;
+        }
+        let title = format!(
+            "Tidy {folder}: {} into Cosplayer / Set folders",
+            crate::html::plural(steps.len() as i64, "set", "sets")
+        );
+        let Ok(id) = catalog.new_worker_op("tidy", &title) else {
+            continue;
+        };
+        let op = Op {
+            id,
+            account: None,
+            by: "worker".into(),
+            kind: "tidy".into(),
+            payload: String::new(),
+            title: title.clone(),
+            control: String::new(),
+            created: crate::accounts::now(),
+        };
+        let mut run = Run {
+            library,
+            catalog: &mut *catalog,
+            accounts: None,
+            op: &op,
+            done: 0,
+            total: 0,
+        };
+        let result = run.moves(&Plan {
+            steps,
+            remove_after: None,
+        });
+        let (done, total) = (run.done, run.total);
+        let (state, message) = match result {
+            Ok(()) => ("done", String::new()),
+            Err(Stop::Failed(why)) => ("failed", why),
+            Err(_) => ("cancelled", String::new()),
+        };
+        if state == "failed" {
+            log::error(
+                "worker: the cosplay tidy failed",
+                &[("library", &folder), ("error", &message)],
+            );
+        } else {
+            log::info(
+                "worker: cosplay tidy",
+                &[("library", &folder), ("sets", &done.to_string())],
+            );
+        }
+        let _ = catalog.set_op(id, state, done, total, &message);
+        let _ = catalog.rebuild_search();
     }
 }
 

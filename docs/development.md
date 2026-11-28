@@ -545,6 +545,33 @@ docs/design (select, move, jobs, trash, details).
   rescan, and comes back from the trash with its progress after its
   folder's parent was removed.
 
+## Naming standard
+
+`koma::naming` (names and plans), `koma::rename` (pages); rules and examples in docs/naming.md, whose
+"Naming standard" table `tests/naming_baseline.rs` checks: each name built, and read back by
+`names::book_name` as what it was made from.
+
+- `naming::build` makes `(Event) [Circle (Author)] Series - Ch. 003 [EN]` from `Parts`; `Widths::of` pads
+  to the digits of the series' largest chapter and volume. The author, circle and language a book lacks are
+  the series' most common; the event is kept from its old name; the language from its details or its old
+  name's last brackets.
+- `naming::series_rows` / `library_rows` give every book's status: `Same`, `Rename`, or `Fixup(why)` (no
+  number in a series of several, or a clash: two targets alike, or one taken on disk by a file not moving,
+  without case). Names kept as they are (accounts.db `kept_names`, from the fix-up queue; catalogue
+  `name_keep`, from an undone tidy) are left out.
+- A rename is an ordinary change (`rename`: book ids and new file names), carried out and undone by
+  `koma::organise` like a move. A fix-up first queues the answers as details (so the catalogue and the name
+  agree, and a rescan reads the same), then the rename.
+- **The cosplay tidy** (`organise::tidy`) runs after each worker pass and after each batch of changes: for
+  every cosplay library (`naming::cosplay_libraries`: by its settings or its folder name), every book not
+  under `<library>/<Cosplayer>/<Set>/` moves there (`naming::tidy_rows`, reading `names::cosplay_name`). It
+  is the worker's own change, with a negative id and its kind and title in the catalogue's `ops` (schema
+  14), listed on `/jobs` for curators and the admin and undone like any other; undone, its books' paths go
+  in `name_keep`, so it is not done again.
+- `tests/naming.rs` is M7's exit check: 500 made-up messy files in five series renamed through the naming
+  page, then undone, give back byte-identical paths, contents and folders. It also covers padding, clashes,
+  the fix-up queue, and the tidy.
+
 ## Serving
 
 `koma serve` (`koma::serve`) opens the catalogue read-only and renders HTML
@@ -613,6 +640,8 @@ round (`-<column>`, `aria-sort` says which).
 | `GET /move`, `POST /move` | where to move books or a series, the plan, and applying it |
 | `GET /details`, `POST /details` | editing one or several books' details |
 | `GET /trash`, `POST /trash` | the trash: restore, delete for good, keep time |
+| `GET /naming?s=…` or `?l=…`, `POST /naming` | the rename plan of a series or a library, and applying it |
+| `GET /fixup`, `POST /fixup` | the fix-up queue: rename from answers, or keep the name |
 | `GET /jobs`, `GET /jobs/events`, `POST /jobs/{id}/{pause,resume,cancel,undo}` | changes, live |
 | `GET /search?q={query}&l={folder}` | search, in every library or one (see Search) |
 | `GET /s/{id}` | a series: its cover, facts and books, each with its cover |

@@ -237,6 +237,14 @@ pub fn router(state: AppState) -> Router {
             get(curate::details_page).post(curate::details_save),
         )
         .route("/trash", get(curate::trash_page).post(curate::trash_action))
+        .route(
+            "/naming",
+            get(crate::rename::naming_page).post(crate::rename::naming_apply),
+        )
+        .route(
+            "/fixup",
+            get(crate::rename::fixup_page).post(crate::rename::fixup_apply),
+        )
         .route("/jobs", get(curate::jobs_page))
         .route("/jobs/events", get(curate::job_events))
         .route("/jobs/{id}/{action}", post(curate::job_action))
