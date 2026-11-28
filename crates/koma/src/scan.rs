@@ -107,15 +107,26 @@ impl From<catalog::Error> for ScanError {
 /// Scans `library` into `catalog` with a [`Check::Files`] scan, and runs every
 /// queued job, writing inflated pages under `data`.
 pub fn scan(library: &Path, data: &Path, catalog: &mut Catalog) -> Result<ScanReport, ScanError> {
-    let started = Instant::now();
+    let started = (Instant::now(), cpu_time());
     let mut report = discover(library, catalog, Check::Files)?;
     run_jobs(library, data, catalog, &mut report, &|| false)?;
     log_report(&report, started);
     Ok(report)
 }
 
-/// Logs a finished scan.
-pub fn log_report(report: &ScanReport, started: Instant) {
+/// The CPU time the process has used so far, all its threads together.
+pub fn cpu_time() -> std::time::Duration {
+    let t = rustix::time::clock_gettime(rustix::time::ClockId::ProcessCPUTime);
+    std::time::Duration::new(
+        t.tv_sec.max(0) as u64,
+        t.tv_nsec.clamp(0, 999_999_999) as u32,
+    )
+}
+
+/// Logs a finished scan, started at `started`: the time, and the process's
+/// CPU time then ([`cpu_time`]). `cpu_ms` over `ms` is how many CPUs the
+/// scan kept busy on average.
+pub fn log_report(report: &ScanReport, (started, cpu_started): (Instant, std::time::Duration)) {
     log::info(
         "scan: done",
         &[
@@ -128,6 +139,13 @@ pub fn log_report(report: &ScanReport, started: Instant) {
             ("folders_skipped", &report.folders_skipped.to_string()),
             ("variant_pages", &report.variant_pages.to_string()),
             ("ms", &started.elapsed().as_millis().to_string()),
+            (
+                "cpu_ms",
+                &cpu_time()
+                    .saturating_sub(cpu_started)
+                    .as_millis()
+                    .to_string(),
+            ),
         ],
     );
 }

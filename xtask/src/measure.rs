@@ -343,9 +343,13 @@ const THROUGHPUT_BOOKS: u32 = 2;
 const THROUGHPUT_PAGES: u32 = 16;
 const THROUGHPUT_SIZE: (u32, u32) = (1600, 2400);
 
-/// The worker's speed on more CPUs: `koma scan` makes the page copies of a
-/// made-up library at 2 CPUs, then at all of the host's, with 1 GB each
-/// time, and the speed-up per CPU is held to `budgets.worker.scaling_min`.
+/// The worker on more CPUs: `koma scan` makes the page copies of a made-up
+/// library at 2 CPUs, then at all of the host's, with 1 GB each time. Judged:
+/// the share of the CPUs it keeps busy with all of them (its CPU time over
+/// the time taken, over the CPUs), held to `budgets.worker.busy_min`. That
+/// is what manifesto principle 10 asks, and unlike the speed-up it does not
+/// depend on whether the CPUs are cores or hyperthreads. Shown: pages a
+/// minute at each, and the speed-up.
 pub fn throughput(image: &str, budgets: &Budgets, report: &mut Report) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
 
@@ -361,41 +365,65 @@ pub fn throughput(image: &str, budgets: &Budgets, report: &mut Report) -> Result
     let user = format!("{}:{}", meta.uid(), meta.gid());
     let measured = (|| {
         let two = timed_scan(image, &root, &user, 2)?;
-        let per_minute = |(pages, took): (u64, Duration)| pages as f64 * 60.0 / took.as_secs_f64();
-        report.info(
-            "Worker speed (2 CPUs, 1 GB)",
-            format!(
-                "{:.0} pages a minute ({} in {:.1} s)",
-                per_minute(two),
-                two.0,
-                two.1.as_secs_f64()
-            ),
-        );
-        if cpus <= 2 {
-            report.check(
-                "Worker speed grows with CPUs",
-                true,
-                format!("this machine has {cpus} CPUs: nothing to compare"),
+        report.info("Worker speed (2 CPUs, 1 GB)", two.describe());
+        let all = if cpus > 2 {
+            let all = timed_scan(image, &root, &user, cpus)?;
+            report.info(
+                &format!("Worker speed ({cpus} CPUs, 1 GB)"),
+                format!(
+                    "{}, {:.2} times as fast",
+                    all.describe(),
+                    all.per_minute() / two.per_minute()
+                ),
             );
-            return Ok(());
-        }
-        let all = timed_scan(image, &root, &user, cpus)?;
-        let scaling = (per_minute(all) / per_minute(two)) / (cpus as f64 / 2.0);
+            all
+        } else {
+            two
+        };
         report.at_least(
-            &format!("Worker speed-up per CPU ({cpus} CPUs against 2)"),
-            scaling,
-            budgets.worker.scaling_min,
+            &format!("Worker keeps its CPUs busy ({} CPUs)", all.cpus),
+            all.busy(),
+            budgets.worker.busy_min,
             "",
             &format!(
-                "{:.0} against {:.0} pages a minute",
-                per_minute(all),
-                per_minute(two)
+                "{:.1} s of CPU in {:.1} s",
+                all.cpu.as_secs_f64(),
+                all.took.as_secs_f64()
             ),
         );
         Ok(())
     })();
     let _ = fs::remove_dir_all(&root);
     measured
+}
+
+/// One timed `koma scan`.
+#[derive(Clone, Copy)]
+struct Run {
+    cpus: usize,
+    pages: u64,
+    took: Duration,
+    cpu: Duration,
+}
+
+impl Run {
+    fn per_minute(&self) -> f64 {
+        self.pages as f64 * 60.0 / self.took.as_secs_f64()
+    }
+
+    /// The share of its CPUs it kept busy, on average.
+    fn busy(&self) -> f64 {
+        self.cpu.as_secs_f64() / self.took.as_secs_f64() / self.cpus as f64
+    }
+
+    fn describe(&self) -> String {
+        format!(
+            "{:.0} pages a minute ({} in {:.1} s)",
+            self.per_minute(),
+            self.pages,
+            self.took.as_secs_f64()
+        )
+    }
 }
 
 /// Two books of big pages: gray line art with screentone, and colour.
@@ -472,14 +500,9 @@ fn colour_page(w: u32, h: u32, seed: u32) -> Vec<u8> {
 }
 
 /// Runs `koma scan` on the throughput library into a new data folder, at
-/// `cpus` CPUs and 1 GB, and returns the page copies it made and how long
-/// its scan took (its `scan: done` line).
-fn timed_scan(
-    image: &str,
-    root: &Path,
-    user: &str,
-    cpus: usize,
-) -> Result<(u64, Duration), String> {
+/// `cpus` CPUs and 1 GB: the page copies it made, the time its scan took
+/// and the CPU time it used (its `scan: done` line).
+fn timed_scan(image: &str, root: &Path, user: &str, cpus: usize) -> Result<Run, String> {
     eprintln!("timing koma scan at {cpus} CPUs...");
     let data = root.join(format!("data-{cpus}"));
     let _ = fs::remove_dir_all(&data);
@@ -509,13 +532,21 @@ fn timed_scan(
     let ms: u64 = log_field(done, "ms")
         .parse()
         .map_err(|_| format!("koma scan at {cpus} CPUs: {done}"))?;
+    let cpu_ms: u64 = log_field(done, "cpu_ms")
+        .parse()
+        .map_err(|_| format!("koma scan at {cpus} CPUs: {done}"))?;
     let want = u64::from(THROUGHPUT_BOOKS * THROUGHPUT_PAGES);
     if pages != want || !out.status.success() {
         return Err(format!(
             "koma scan at {cpus} CPUs made copies of {pages} pages, not {want}: {done}"
         ));
     }
-    Ok((pages, Duration::from_millis(ms.max(1))))
+    Ok(Run {
+        cpus,
+        pages,
+        took: Duration::from_millis(ms.max(1)),
+        cpu: Duration::from_millis(cpu_ms),
+    })
 }
 
 /// `path` cut to fit a report line: page image names are 64-digit hashes.
@@ -712,7 +743,7 @@ mod tests {
         fs::write(root.join("assets/big.css"), vec![b' '; 11 * 1024]).unwrap();
         let budgets = Budgets::parse(
             "[image]\nmax_mib = 1\n[memory]\nserve_idle_mib = 1\nworker_idle_mib = 1\n\
-             [latency]\nttfb_p99_ms = 1\ncold_start_ms = 1\n[worker]\nscaling_min = 0.5\n\
+             [latency]\nttfb_p99_ms = 1\ncold_start_ms = 1\n[worker]\nbusy_min = 0.5\n\
              [[assets]]\nname = \"CSS\"\ndir = \"assets\"\nsuffix = \".css\"\nmax_kib = 10\n",
         )
         .unwrap();

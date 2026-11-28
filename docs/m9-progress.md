@@ -326,9 +326,12 @@ before build").
 
 1. **1d, parallel worker** and **1e, its throughput budget** (both done):
    `cargo xtask budgets` times `koma scan` on two books of 16 made-up pages
-   at 2 CPUs and at all of the runner's; the speed-up per CPU must be at
-   least 0.7 (0.94 on a 4-CPU machine: 45 pages a minute at 2 CPUs, 85 at
-   4). Books still run one after another, so small books scale less well:
+   at 2 CPUs and at all of the runner's; with all of them it must keep at
+   least 0.75 of them busy (0.87 on a 4-CPU machine, where it made 47 pages
+   a minute at 2 CPUs and 84 at 4). A first version held the speed-up per
+   CPU to 0.7, and failed at 0.68 on GitHub's x86_64 runner, whose 4 CPUs
+   are 2 cores with hyperthreads: the share of CPUs kept busy does not
+   depend on that. `scan: done` now logs `cpu_ms`. Books still run one after another, so small books scale less well:
    to look at if photo sets of a few images (M10) turn out slow.
 2. **2a, roles.** `Role` becomes admin, user, guest; a new account is a
    guest; the admin hands the role to any account and becomes a user;

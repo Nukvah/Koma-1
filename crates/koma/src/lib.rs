@@ -290,7 +290,7 @@ fn pass(
 ) -> Result<(), ()> {
     apply_settings(&paths.data, catalog);
     organise::run(&paths.library, &paths.data, catalog);
-    let started = std::time::Instant::now();
+    let started = (std::time::Instant::now(), scan::cpu_time());
     log::info(
         "scan: started",
         &[
