@@ -333,7 +333,7 @@ until they answer):
   into the archive being built, pages stored as they are; CB7 becomes CBZ
   the same way. CBR waits for M11's sandbox (proposed): it is not taken,
   with the reason.
-- **Uploads wait outside the library** (proposed): in `/data/uploads`, so
+- **Uploads wait outside the library** (chosen with the owner): in `/data/uploads`, so
   `koma serve` still never writes to `/library`; the worker checks each file
   like ingest does and files it as one journaled change, with undo. Put that
   folder on the library's drive and filing is a rename.
