@@ -199,10 +199,11 @@ Goal: save disk space when you decide to, and see where it went.
 - Libraries are explicit: setup makes the admin, then its first library (name, kind,
   private or shared; private by default), and every book is in one. An owner is an account,
   not a `~name` folder, so it survives a rename; there is no default library.
-- Roles replace M5's reader and curator, and its folder per account: one admin (makes shared
-  libraries and managers, hands the role over and becomes a manager), managers (their own
-  private libraries; organise the shared ones), users (read and download the shared ones).
-  A new account is a user.
+- Roles replace M5's reader and curator, and its folder per account: one admin (the shared
+  libraries and the accounts; hands the role to any account and becomes a user), users
+  (readers with private libraries of their own), readers (read and download the shared
+  ones). A new account is a reader. Making a user a reader sends their private libraries
+  to the trash, after a warning to the admin, and tells them, with a takeout.
 - Import of a folder as a job the admin starts, with a dry run first: how many books,
   whether hard links will work (or why not) and the space a copy would take. Hard links on
   the same mount, copies otherwise; a book already stored is not stored again *(proven)*.

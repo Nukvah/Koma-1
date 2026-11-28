@@ -226,35 +226,39 @@ of `libraries.rs` go: the default `""` library for books loose at the top,
   makes its first library, private by default with "shared" as a choice;
   until then every page leads there, as for the account today. Then the
   library page offers upload, or import into it.
-- Roles (owner's decision), replacing `reader` and `curator`:
+- Roles (owner's decision), replacing `reader` and `curator`. One rule
+  under them: a shared library is the admin's to keep, a private one its
+  owner's.
 
-  | | Admin (one) | Manager | User |
+  | | Admin (one) | User | Reader |
   |---|---|---|---|
   | Read and download shared libraries | yes | yes | yes |
-  | Organise shared ones (upload, import, rename, move, edit, convert) | yes | yes | no |
-  | Make, rename and remove shared libraries, their settings | yes | no | no |
-  | Own private libraries | yes | yes | no |
-  | Make managers, add and remove accounts | yes | no | no |
+  | Make, organise and set up shared libraries (upload, import, rename, move, edit, convert, settings) | yes | no | no |
+  | Own private libraries and do anything in them (upload, rename, move, edit, convert, takeout) | yes | yes | no |
+  | Take out a shared library | yes | no | no |
+  | Add and remove accounts, make readers users and users readers | yes | no | no |
 
-  A private library is seen and organised by its owner alone (the admin does
-  not see others'). Every account after the admin starts as a user. The
-  admin hands the role to another account and becomes a manager, in one step:
-  there is always exactly one admin, who cannot be removed or demoted
-  otherwise. `curate::may_organise` becomes: own private library, or a shared
-  one and manager or admin. accounts.db can start over like the catalogue
-  (no installs), so the role names change without a migration.
-- Proposed, to confirm with the owner:
-  - Only the admin makes shared libraries and changes their settings
-    (kind, page copies); managers organise what is in them.
-  - A manager made a user again keeps their private libraries, read-only
-    and still seen by them alone, until made a manager again; nothing is
-    removed.
-  - Removing an account sends its private libraries to the trash with the
-    usual keep time, offering its owner a takeout first; the admin sees only
-    that, and how much space, not what is in them.
-  - Takeout of a library: its owner for a private one, managers and the
-    admin for shared ones; users download book by book (OPDS, the reader).
-  - The admin hands the role over only to an existing manager.
+  - A private library is seen by its owner alone; the admin does not see
+    others'.
+  - Every account after the admin starts as a reader.
+  - The admin hands the role to any account, a reader included, and becomes
+    a user, in one step. There is always exactly one admin, who cannot be
+    removed or demoted any other way.
+  - Import reads a folder on the server, so it is the admin's, into a shared
+    library or the admin's own; users add books by upload.
+  - `curate::may_organise` becomes: the library is the viewer's own private
+    one, or it is shared and the viewer is the admin.
+  - accounts.db can start over like the catalogue (no installs), so the role
+    names change without a migration.
+- Taking libraries away (owner's decision). Nothing is deleted outright:
+  - Making a user a reader: if they have private libraries, the admin is
+    warned first, with how many and their size (never what is in them):
+    they go to the trash for the keep time. The reader is told at next
+    sign-in that they were made a reader, until when their libraries are
+    kept, and offered a takeout of them meanwhile. Made a user again before
+    the keep time ends, they get them back from the trash.
+  - Removing an account: its private libraries go to the trash for the keep
+    time the same way, and its owner is offered a takeout first.
 - Every upload and import goes into a library chosen first.
 - A book stored once for two libraries is never mentioned to anyone: saying
   "already there" across accounts would tell what is in a private library.
