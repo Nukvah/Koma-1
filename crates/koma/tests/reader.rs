@@ -143,7 +143,7 @@ async fn the_reader_page() {
         }
         assert!(page.contains("<div class=scrub hidden><input id=scrub type=range min=1 max=3 value=1"));
         assert!(page.contains("<div class=thumbs hidden></div>"));
-        assert!(page.contains("data-zoom hidden>zoom <kbd>z</kbd></a>"));
+        assert!(page.contains("data-full hidden>fullscreen <kbd>f</kbd></a>"));
         assert!(page.contains("data-thumbs hidden>thumbnails <kbd>t</kbd></a>"));
         assert!(page.contains(&format!("<link rel=next href=\"/r/{starfall}/2\">")));
 

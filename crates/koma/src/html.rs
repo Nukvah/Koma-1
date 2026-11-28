@@ -1290,8 +1290,8 @@ pub fn reader(r: &Reader<'_>) -> String {
          <a href=\"#bars\" data-fit=height>height</a></div>\
          <span class=\"dim label\">direction</span><div class=seg>\
          <a href=\"#bars\" data-dir=rtl{}>← rtl</a><a href=\"#bars\" data-dir=ltr{}>ltr →</a></div>\
-         <a class=end href=\"#bars\" data-zoom hidden>zoom <kbd>z</kbd></a>\
-         <a href=\"#bars\" data-thumbs hidden>thumbnails <kbd>t</kbd></a></footer></div>",
+         <a class=end href=\"#bars\" data-thumbs hidden>thumbnails <kbd>t</kbd></a>\
+         <a href=\"#bars\" data-full hidden>fullscreen <kbd>f</kbd></a></footer></div>",
         escape(&r.series.name),
         escape(&book.name),
         if r.rtl { " aria-current=true" } else { "" },
@@ -1300,7 +1300,7 @@ pub fn reader(r: &Reader<'_>) -> String {
     let title = format!("{} · {number}/{total} · Koma-1", book.name);
     format!(
         "<!doctype html>\n<html lang=en data-kept=\"{}\"><head><meta charset=utf-8>\
-         <meta name=viewport content=\"width=device-width,initial-scale=1\">\
+         <meta name=viewport content=\"width=device-width,initial-scale=1,minimum-scale=1\">\
          <title>{}</title>{head}</head><body class=reader data-book={} data-series={} \
          data-n={number} data-dir={}>{b}</body></html>\n",
         escape(r.kept),
