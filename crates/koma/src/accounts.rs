@@ -16,7 +16,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA: &str = "
 CREATE TABLE meta (
@@ -104,6 +104,14 @@ const OPS: &str = "CREATE TABLE ops (
     control   TEXT NOT NULL DEFAULT '',  -- '', 'pause' or 'cancel'
     created   INTEGER NOT NULL
 );";
+
+/// Schema 2 to 3: names a curator chose to keep as they are, out of the
+/// fix-up queue.
+const KEPT_NAMES: &str = "CREATE TABLE kept_names (
+    path      TEXT PRIMARY KEY,       -- relative to the library
+    account   INTEGER,
+    at        INTEGER NOT NULL
+) WITHOUT ROWID;";
 
 /// A session kept with 'keep me signed in' lasts this long after it was
 /// last used.
@@ -266,10 +274,13 @@ impl Accounts {
         let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
         match version {
             0 => conn.execute_batch(&format!(
-                "BEGIN; {SCHEMA} {OPS} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                "BEGIN; {SCHEMA} {OPS} {KEPT_NAMES} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))?,
             1 => conn.execute_batch(&format!(
-                "BEGIN; {OPS} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                "BEGIN; {OPS} {KEPT_NAMES} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+            ))?,
+            2 => conn.execute_batch(&format!(
+                "BEGIN; {KEPT_NAMES} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))?,
             SCHEMA_VERSION => {}
             _ => return Err(Error::InvalidQuery),
@@ -916,6 +927,20 @@ impl Accounts {
             "INSERT INTO meta (key, value) VALUES ('trash-days', ?1)
              ON CONFLICT (key) DO UPDATE SET value = ?1",
             [days.to_string().into_bytes()],
+        )?;
+        Ok(())
+    }
+
+    /// Names kept as they are, out of the fix-up queue.
+    pub fn kept_names(&self) -> Result<Vec<String>, Error> {
+        let mut st = self.conn.prepare_cached("SELECT path FROM kept_names")?;
+        st.query_map([], |r| r.get(0))?.collect()
+    }
+
+    pub fn keep_name(&self, account: i64, path: &str) -> Result<(), Error> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO kept_names (path, account, at) VALUES (?1, ?2, ?3)",
+            params![path, account, now()],
         )?;
         Ok(())
     }

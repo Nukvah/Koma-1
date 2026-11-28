@@ -191,6 +191,18 @@ series.
   book (`Starfall v07.metadata.json`; inside a photo folder), which Koma-1
   reads at the next index too; an archive's own bytes are never rewritten.
 
+## Naming
+
+A series' page (and, from there, its library's) has **naming**: the plan of renaming its books to the naming
+standard, `(Event) [Circle (Author)] Series - Ch. 003 [EN].cbz`, numbers padded to the series' largest (see
+[naming.md](naming.md)). Untick what you want left; applying it is one journaled change with undo. Books
+Koma-1 cannot name safely (no number in a series of several, or two that would get one name) go to the
+**fix-up queue** (`/fixup`): fill what it could not read and rename, or keep the name a file has.
+
+A **cosplay library** (by its name or its settings) is kept in `Cosplayer / Set /` folders by the worker
+itself, after each scan and after each change: a journaled change of its own on `/jobs`, with undo. A set
+with no cosplayer in its name is left where it is, in the fix-up queue. A tidy undone is not done again.
+
 ## Scanning
 
 The worker scans when it starts and then every 15 minutes (`--rescan`), so

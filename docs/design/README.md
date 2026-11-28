@@ -297,7 +297,8 @@ Chosen with the owner:
   journaled change (on `/jobs`, with undo). Anything it cannot place goes to
   the fix-up queue and stays where it is.
 
-Proposed, for review with these mockups:
+Also chosen with the owner, and built as proposed (the plan is on a
+series' “naming” button and `/naming?l=` for a library):
 
 - **Renaming is asked for**, per series or per library, from its page
   (“naming”): a plan as a dry run, each row ticked by default, then one

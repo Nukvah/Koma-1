@@ -33,7 +33,7 @@ pub fn may_organise(me: &Viewer, library: &str) -> bool {
     }
 }
 
-fn refuse(me: &Viewer) -> Failure {
+pub(crate) fn refuse(me: &Viewer) -> Failure {
     Failure::Forbidden(format!(
         "Only curators and the admin can organise the shared libraries. You are signed in as {}, a {}.",
         me.name,
@@ -42,19 +42,19 @@ fn refuse(me: &Viewer) -> Failure {
 }
 
 /// All values of `key` in a form.
-fn all(f: &[(String, String)], key: &str) -> Vec<String> {
+pub(crate) fn all(f: &[(String, String)], key: &str) -> Vec<String> {
     f.iter()
         .filter(|(k, _)| k == key)
         .map(|(_, v)| v.clone())
         .collect()
 }
 
-fn all_ids(f: &[(String, String)], key: &str) -> Vec<i64> {
+pub(crate) fn all_ids(f: &[(String, String)], key: &str) -> Vec<i64> {
     all(f, key).iter().filter_map(|v| v.parse().ok()).collect()
 }
 
 /// The values of `key` in a query string.
-fn query_all(q: Option<&str>, key: &str) -> Vec<String> {
+pub(crate) fn query_all(q: Option<&str>, key: &str) -> Vec<String> {
     q.unwrap_or_default()
         .split('&')
         .filter_map(|pair| {
@@ -66,7 +66,7 @@ fn query_all(q: Option<&str>, key: &str) -> Vec<String> {
         .collect()
 }
 
-fn query_ids(q: Option<&str>, key: &str) -> Vec<i64> {
+pub(crate) fn query_ids(q: Option<&str>, key: &str) -> Vec<i64> {
     query_all(q, key)
         .iter()
         .filter_map(|v| v.parse().ok())
@@ -75,7 +75,7 @@ fn query_ids(q: Option<&str>, key: &str) -> Vec<i64> {
 
 /// Queues a change and waits up to a few seconds for the worker to finish
 /// it. Returns its id and, if it finished, its state.
-async fn queue(
+pub(crate) async fn queue(
     state: &AppState,
     me: &Viewer,
     kind: &str,
@@ -109,7 +109,7 @@ async fn queue(
 }
 
 /// Where to go after a change: `back` with `?done=<op>`.
-fn back_to(back: &str, op: i64) -> Response {
+pub(crate) fn back_to(back: &str, op: i64) -> Response {
     let back = crate::auth::safe_next(Some(back));
     let sep = if back.contains('?') { '&' } else { '?' };
     see_other(&format!("{back}{sep}done={op}"))
@@ -184,14 +184,14 @@ pub async fn progress(
 }
 
 /// Every library, and those the viewer sees.
-fn libraries(c: &Catalog, me: &Viewer) -> Result<Vec<Library>, Failure> {
+pub(crate) fn libraries(c: &Catalog, me: &Viewer) -> Result<Vec<Library>, Failure> {
     Ok(Library::all(c.library_keys()?, &c.library_settings()?)
         .into_iter()
         .filter(|l| l.visible_to(&me.name))
         .collect())
 }
 
-fn here<'a>(me: &'a crate::pages::Me<'a>, go: &'static str) -> Here<'a> {
+pub(crate) fn here<'a>(me: &'a crate::pages::Me<'a>, go: &'static str) -> Here<'a> {
     Here {
         library: None,
         collections: &[],
@@ -303,7 +303,7 @@ pub async fn organise(
 }
 
 /// `A, B and 3 more`.
-fn list_names(names: &[&str]) -> String {
+pub(crate) fn list_names(names: &[&str]) -> String {
     match names.len() {
         0 => "nothing".into(),
         1..=3 => names.join(", "),
@@ -1298,13 +1298,37 @@ async fn visible_ops(state: &AppState, me: &Viewer) -> Result<Vec<(Op, Option<Op
         Err(Failure::NotScanned) => HashMap::new(),
         other => other?,
     };
-    Ok(ops
+    let mut out: Vec<(Op, Option<OpState>)> = ops
         .into_iter()
         .map(|o| {
             let s = states.get(&o.id).cloned();
             (o, s)
         })
-        .collect())
+        .collect();
+    // The worker's own changes (the cosplay tidy), for those who organise.
+    if me.role >= Role::Curator {
+        let worker = match state.query(|c| Ok(c.worker_ops(10)?)).await {
+            Err(Failure::NotScanned) => Vec::new(),
+            other => other?,
+        };
+        for (s, kind, title) in worker {
+            out.push((
+                Op {
+                    id: s.id,
+                    account: None,
+                    by: "the worker".into(),
+                    kind,
+                    payload: String::new(),
+                    title,
+                    control: String::new(),
+                    created: s.started,
+                },
+                Some(s),
+            ));
+        }
+        out.sort_by_key(|(o, _)| std::cmp::Reverse(o.created));
+    }
+    Ok(out)
 }
 
 /// `GET /jobs`.
@@ -1466,11 +1490,32 @@ pub async fn job_action(
     Extension(me): Extension<Viewer>,
     UrlPath((id, action)): UrlPath<(i64, String)>,
 ) -> Result<Response, Failure> {
-    let op = state
-        .accounts(move |a| Ok(a.op(id)?))
-        .await?
-        .ok_or(Failure::NotFound)?;
-    if op.account != Some(me.id) && !me.is_admin() {
+    let op = if id < 0 {
+        // One of the worker's own changes: undo only, by those who organise.
+        if me.role < Role::Curator || action != "undo" {
+            return Err(Failure::NotFound);
+        }
+        let (kind, title) = state
+            .query(move |c| Ok(c.worker_op_kind(id)?))
+            .await?
+            .ok_or(Failure::NotFound)?;
+        Op {
+            id,
+            account: None,
+            by: "the worker".into(),
+            kind,
+            payload: String::new(),
+            title,
+            control: String::new(),
+            created: 0,
+        }
+    } else {
+        state
+            .accounts(move |a| Ok(a.op(id)?))
+            .await?
+            .ok_or(Failure::NotFound)?
+    };
+    if id > 0 && op.account != Some(me.id) && !me.is_admin() {
         return Err(Failure::NotFound);
     }
     match action.as_str() {

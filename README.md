@@ -4,7 +4,7 @@ A self-hosted manga and comics server: one small Rust binary, a plain web
 library and reader, built to stay fast on small hardware.
 Why and how: [MANIFESTO.md](MANIFESTO.md). Contributing: [AGENTS.md](AGENTS.md).
 
-**Status: Milestone 6 (organising, trash) in place; the naming standard comes with M7.**
+**Status: Milestone 7 (naming standard) in place; uploads come with M8.**
 `koma worker` indexes a library of CBZ, ZIP, CB7 and EPUB files and photo
 folders into SQLite and keeps it up to date, and `koma serve` shows it in a
 browser: libraries and collections as an endless grid or a sortable table,
@@ -15,7 +15,10 @@ large page, once. Everyone signs in (a password, a passkey, or a sign-in proxy);
 keeps its own reading positions and reader settings across devices, and has a private folder,
 `/library/~name`, that nobody else sees. Curators move, merge, rename and delete series
 and books, and edit their details: each change is planned first, journaled, and undoable, and
-a delete goes to a trash that keeps it for 30 days.
+a delete goes to a trash that keeps it for 30 days. A series or a library can be renamed to the
+naming standard (`(Event) [Circle (Author)] Series - Ch. 003 [EN].cbz`) from a plan, with a
+fix-up queue for what is ambiguous, and cosplay libraries keep themselves in
+`Cosplayer / Set /` folders.
 
 ## Run
 

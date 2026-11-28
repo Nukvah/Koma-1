@@ -14,7 +14,7 @@ pub use crate::archive::size::Size;
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 
 /// How long a book whose file vanished is remembered, so that a folder that
 /// comes back (a drive mounted late, a move noticed in two steps) keeps its
@@ -245,7 +245,9 @@ const ORGANISE: &str = "CREATE TABLE IF NOT EXISTS ops (
     total     INTEGER NOT NULL,
     message   TEXT NOT NULL,          -- what it is doing, or why it failed
     started   INTEGER NOT NULL,
-    finished  INTEGER
+    finished  INTEGER,
+    kind      TEXT,                   -- the worker's own changes (negative ids) only
+    title     TEXT
 );
 CREATE TABLE IF NOT EXISTS journal (
     seq       INTEGER PRIMARY KEY AUTOINCREMENT,  -- only ever appended
@@ -280,6 +282,16 @@ CREATE TABLE IF NOT EXISTS edits (
     PRIMARY KEY (book_id, field)
 ) WITHOUT ROWID;";
 
+/// Schema 13 to 14: the worker's own changes (the cosplay tidy) carry their
+/// kind and title, and names the tidy must leave alone.
+const MIGRATE_13_TO_14: &str = "ALTER TABLE ops ADD COLUMN kind TEXT;
+ALTER TABLE ops ADD COLUMN title TEXT;";
+
+/// Names to keep as they are (a tidy undone).
+const NAMING: &str = "CREATE TABLE IF NOT EXISTS name_keep (
+    path      TEXT PRIMARY KEY        -- relative to the library
+) WITHOUT ROWID;";
+
 /// Schema 12 to 13: organising the library.
 const MIGRATE_12_TO_13: &str = "ALTER TABLE books ADD COLUMN trash INTEGER;";
 
@@ -303,6 +315,7 @@ DROP TABLE IF EXISTS ops;
 DROP TABLE IF EXISTS journal;
 DROP TABLE IF EXISTS trash;
 DROP TABLE IF EXISTS edits;
+DROP TABLE IF EXISTS name_keep;
 DROP TABLE IF EXISTS sqlite_sequence;
 ";
 
@@ -522,7 +535,7 @@ impl Catalog {
         match version {
             // From 7 on the catalogue is upgraded in place, one step at a
             // time: remaking page variants is too costly to start over.
-            7..=12 => {
+            7..=13 => {
                 let mut steps = String::new();
                 if version == 7 {
                     steps.push_str(&migrate_7_to_8());
@@ -547,7 +560,16 @@ impl Catalog {
                 if !has_trash {
                     steps.push_str(MIGRATE_12_TO_13);
                 }
+                let has_kind: bool = self.conn.query_row(
+                    "SELECT count(*) > 0 FROM pragma_table_info('ops') WHERE name = 'kind'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                if version == 13 && !has_kind {
+                    steps.push_str(MIGRATE_13_TO_14);
+                }
                 steps.push_str(ORGANISE);
+                steps.push_str(NAMING);
                 self.conn.execute_batch(&format!(
                     "BEGIN; {steps} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
                 ))?;
@@ -560,7 +582,8 @@ impl Catalog {
                     .replace("{LIBRARY_OF_PATH}", LIBRARY_OF_PATH)
                     .replace("{COLLECTION_OF_PATH}", COLLECTION_OF_PATH)
                     + LIBRARY_SETTINGS
-                    + ORGANISE;
+                    + ORGANISE
+                    + NAMING;
                 self.conn.execute_batch(&format!(
                     "BEGIN; {drop} {schema} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
                 ))?;
