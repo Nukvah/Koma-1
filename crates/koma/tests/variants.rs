@@ -103,6 +103,20 @@ fn size_of(bytes: &[u8]) -> (u32, u32) {
     (s.width, s.height)
 }
 
+/// An image's average of each channel, as Koma decodes it.
+fn mean(bytes: &[u8]) -> Vec<f64> {
+    let p = variants::decode(bytes, &variants::Limits::default()).unwrap();
+    let n = if p.gray { 1 } else { 3 };
+    let mut sum = vec![0f64; n];
+    for px in p.data.chunks_exact(n) {
+        for (s, v) in sum.iter_mut().zip(px) {
+            *s += f64::from(*v);
+        }
+    }
+    let count = (p.data.len() / n) as f64;
+    sum.into_iter().map(|s| s / count).collect()
+}
+
 fn db(data: &Path) -> PathBuf {
     data.join("koma.db")
 }
@@ -167,14 +181,15 @@ fn every_big_page_gets_its_variants_once() {
 }
 
 #[test]
-fn pages_made_before_thumbnails_get_theirs_from_the_720_copy() {
+fn pages_made_before_thumbnails_get_theirs_from_the_720_webp() {
     let root = temp_root("thumbs");
     let lib = library(&root);
     let data = root.join("data");
     let mut catalog = Catalog::open(&db(&data)).unwrap();
     scan(&lib, &data, &mut catalog).unwrap();
 
-    // As a catalogue made before thumbnails: every page's variants without them.
+    // As a catalogue made before thumbnails, or upgraded to schema 17: every
+    // page's variants without them, and maybe a wrong thumbnail file left.
     let blobs = BlobStore::new(&data);
     let mut before = Vec::new();
     for (_, page) in all_pages(&catalog) {
@@ -206,6 +221,12 @@ fn pages_made_before_thumbnails_get_theirs_from_the_720_copy() {
                 None,
             )
             .unwrap();
+        for f in ["jpg", "webp"] {
+            let left = blobs.variant_path(&page.hash, variants::THUMB, VERSION, f);
+            if left.exists() {
+                fs::write(left, b"a thumbnail made wrong").unwrap();
+            }
+        }
         before.push(page);
     }
     before.dedup_by_key(|p| p.hash);
@@ -226,9 +247,96 @@ fn pages_made_before_thumbnails_get_theirs_from_the_720_copy() {
             let bytes = fs::read(blobs.variant_path(&page.hash, *w, VERSION, format)).unwrap();
             assert_eq!(size_of(&bytes), (*w, *h));
         }
+        // The same picture, colour pages too. (Only the WebP one is looked
+        // at: `image` misreads the colour JPEGs `jpeg-encoder` writes.)
+        let thumb = blobs.variant_path(&page.hash, variants::THUMB, VERSION, "webp");
+        let from = blobs.variant_path(&page.hash, 720, VERSION, "webp");
+        let (thumb, from) = (fs::read(thumb).unwrap(), fs::read(from).unwrap());
+        for (t, f) in mean(&thumb).iter().zip(mean(&from)) {
+            assert!((t - f).abs() < 4.0, "thumbnail: {t} against {f}");
+        }
     }
     assert_eq!(scan(&lib, &data, &mut catalog).unwrap().variant_pages, 0);
     let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_new_version_makes_every_page_again_and_removes_the_old_files() {
+    let root = temp_root("version");
+    let lib = library(&root);
+    let data = root.join("data");
+    let mut catalog = Catalog::open(&db(&data)).unwrap();
+    scan(&lib, &data, &mut catalog).unwrap();
+
+    // As if made by the version before: the same files under its name.
+    let (old, blobs) = (VERSION - 1, BlobStore::new(&data));
+    let mut pages = Vec::new();
+    for (_, page) in all_pages(&catalog) {
+        let made = catalog.variants_of(&page.hash).unwrap();
+        if made.is_empty() || pages.contains(&page.hash) {
+            continue;
+        }
+        let mut rows = Vec::new();
+        for (w, h, f) in &made {
+            let now = blobs.variant_path(&page.hash, *w, VERSION, f);
+            let before = blobs.variant_path(&page.hash, *w, old, f);
+            fs::rename(&now, &before).unwrap();
+            rows.push((*w, *h, f.clone(), fs::metadata(&before).unwrap().len()));
+        }
+        let rows: Vec<(u32, u32, &str, u64)> = rows
+            .iter()
+            .map(|(w, h, f, l)| (*w, *h, f.as_str(), *l))
+            .collect();
+        catalog
+            .store_variants(
+                &page.hash,
+                old,
+                (variants::FORMATS, variants::ALL_WIDTHS),
+                &rows,
+                None,
+            )
+            .unwrap();
+        pages.push(page.hash);
+    }
+    assert_eq!(pages.len(), 4);
+    let count = |dir: &Path, version: i64| -> usize {
+        let suffix = format!(".v{version}.");
+        walk(dir)
+            .iter()
+            .filter(|p| p.to_string_lossy().contains(&suffix))
+            .count()
+    };
+    let old_files = count(&data.join("blobs"), old);
+    assert!(old_files >= 4 * 6, "{old_files}");
+
+    // The next pass makes each page again under this version, and leaves
+    // no file of the old one.
+    let report = scan(&lib, &data, &mut catalog).unwrap();
+    assert_eq!(report.variant_pages, 4);
+    assert_eq!(catalog.variant_page_count(VERSION).unwrap(), 4);
+    assert_eq!(count(&data.join("blobs"), old), 0);
+    assert_eq!(count(&data.join("blobs"), VERSION), old_files);
+    for hash in &pages {
+        for (w, h, f) in catalog.variants_of(hash).unwrap() {
+            let bytes = fs::read(blobs.variant_path(hash, w, VERSION, &f)).unwrap();
+            assert_eq!(size_of(&bytes), (w, h));
+        }
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Every file under `dir`.
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for e in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.extend(walk(&p));
+        } else {
+            out.push(p);
+        }
+    }
+    out
 }
 
 #[test]
@@ -270,6 +378,12 @@ fn pages_made_before_avif_get_avif_ones_from_the_original() {
                 None,
             )
             .unwrap();
+        for f in ["jpg", "webp"] {
+            let left = blobs.variant_path(&page.hash, variants::THUMB, VERSION, f);
+            if left.exists() {
+                fs::write(left, b"a thumbnail made wrong").unwrap();
+            }
+        }
         before.push(page);
     }
     before.dedup_by_key(|p| p.hash);

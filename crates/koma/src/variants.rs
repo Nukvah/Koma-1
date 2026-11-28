@@ -46,7 +46,10 @@ pub const WIDTHS: [u32; 3] = [720, 1080, 1440];
 /// phone screen, a few KB where the 720 copy of a photo is a hundred.
 pub const THUMB: u32 = 240;
 
-pub const JPEG_QUALITY: u8 = 82;
+/// JPEG variants through jpegli, progressive: at 85 every made-up page of
+/// docs/m9-progress.md looked as good as `jpeg-encoder`'s at 82 or better,
+/// gray ones 6% smaller and photos a quarter to a third.
+pub const JPEG_QUALITY: f32 = 85.0;
 pub const WEBP_QUALITY: f32 = 80.0;
 
 /// AVIF variants through rav1e: the optimize presets' quality, at rav1e's
@@ -64,7 +67,7 @@ pub const GRAY_TOLERANCE: u8 = 8;
 /// Changes whenever what [`make`] produces changes (widths, formats,
 /// qualities): pages made under an older version are made again, with new
 /// file names and URLs (see [`url`]).
-pub const VERSION: i64 = 1;
+pub const VERSION: i64 = 2;
 
 /// A variant's format.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -365,14 +368,17 @@ pub fn make_some(
 }
 
 /// The thumbnail of a page whose variants were made before thumbnails
-/// were, from `bytes`, its narrowest variant: a small picture to decode,
-/// where the original may be a 50-megapixel photo.
+/// were, from `bytes`, its narrowest WebP variant: a small picture to
+/// decode, where the original may be a 50-megapixel photo.
 pub fn thumb_from(bytes: &[u8], limits: &Limits) -> Result<Vec<Variant>, Error> {
     let pixels = decode(bytes, limits)?;
     if pixels.width <= THUMB {
         return Ok(Vec::new());
     }
-    resized(pixels, &[THUMB], &[Format::Jpeg, Format::Webp], bytes.len())
+    // No size limit: without a thumbnail the reader loads a 720 copy, which
+    // is bigger, and the WebP decoded here can be smaller than a JPEG
+    // thumbnail.
+    resized(pixels, &[THUMB], &[Format::Jpeg, Format::Webp], usize::MAX)
 }
 
 /// `pixels` at each of `widths`, in each of `formats`, but for those no
@@ -430,21 +436,10 @@ fn resized(
 }
 
 fn encode_jpeg(data: &[u8], width: u32, height: u32, gray: bool) -> Result<Vec<u8>, Error> {
-    let (Ok(w), Ok(h)) = (u16::try_from(width), u16::try_from(height)) else {
-        return Err(Error::Limit("too tall for JPEG"));
-    };
-    let mut out = Vec::new();
-    let mut encoder = jpeg_encoder::Encoder::new(&mut out, JPEG_QUALITY);
-    encoder.set_optimized_huffman_tables(true);
-    let color = if gray {
-        jpeg_encoder::ColorType::Luma
-    } else {
-        jpeg_encoder::ColorType::Rgb
-    };
-    encoder
-        .encode(data, w, h, color)
-        .map_err(|e| Error::Encode(e.to_string()))?;
-    Ok(out)
+    koma_jpegli::encode(data, width, height, gray, JPEG_QUALITY).map_err(|e| match e {
+        koma_jpegli::Error::Dimensions => Error::Limit("too tall for JPEG"),
+        e => Error::Encode(e.to_string()),
+    })
 }
 
 fn encode_avif(data: &[u8], width: u32, height: u32, gray: bool) -> Result<Vec<u8>, Error> {
@@ -517,6 +512,7 @@ pub fn run_job(
                 continue;
             }
         };
+        remove_older(blobs, catalog, &hash)?;
         let widths = catalog.wanted_widths(&hash)?;
         let made = make_some(&bytes, &limits, widths, true, &Format::ALL);
         drop(bytes);
@@ -605,6 +601,29 @@ pub fn run_job(
     Ok((JobEnd::Done, done))
 }
 
+/// Removes the files of a page's variants made under an older [`VERSION`]:
+/// they are never served again (their URLs name their version), and are
+/// about to be made again. Removed first, so that a worker killed now leaves
+/// nothing behind; the rows go when the new ones are stored.
+fn remove_older(
+    blobs: &BlobStore,
+    catalog: &Catalog,
+    hash: &blake3::Hash,
+) -> Result<(), ScanError> {
+    let Some(old) = catalog.variants_version(hash)?.filter(|&v| v != VERSION) else {
+        return Ok(());
+    };
+    for (width, _, format) in catalog.variants_of(hash)? {
+        let path = blobs.variant_path(hash, width, old, &format);
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(ScanError::Io(path, e)),
+        }
+    }
+    Ok(())
+}
+
 /// Brings a page made for the widths `made` to those its libraries want
 /// now, `wanted`: the copies at widths no longer wanted are removed, those
 /// newly wanted made from the page itself, in the formats it has (`formats`).
@@ -677,15 +696,28 @@ fn other_widths(
 }
 
 /// Adds the thumbnail of a page made before thumbnails were, from its 720
-/// JPEG. A page whose JPEG cannot be read or decoded stays without one (the
+/// WebP. A page whose WebP cannot be read or decoded stays without one (the
 /// reader uses the 720 copy instead) and is tried again on the next pass.
+///
+/// Not from the 720 JPEG: `image`'s JPEG decoder misreads the colour JPEGs
+/// `jpeg-encoder` wrote for version 1 (one scan per component, 4:2:0), where
+/// browsers read them right. Schema 17 dropped the thumbnails made from
+/// them; any thumbnail file found here is such a leftover, and replaced.
 fn add_thumb(
     blobs: &BlobStore,
     catalog: &mut Catalog,
     hash: &blake3::Hash,
     limits: &Limits,
 ) -> Result<(), ScanError> {
-    let from = blobs.variant_path(hash, WIDTHS[0], VERSION, Format::Jpeg.ext());
+    for f in Format::ALL {
+        let path = blobs.variant_path(hash, THUMB, VERSION, f.ext());
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(ScanError::Io(path, e)),
+        }
+    }
+    let from = blobs.variant_path(hash, WIDTHS[0], VERSION, Format::Webp.ext());
     let made = fs::read(&from)
         .map_err(|e| e.to_string())
         .and_then(|b| thumb_from(&b, limits).map_err(|e| e.to_string()));
@@ -851,6 +883,19 @@ mod tests {
         }
         e.encode(&rgb, w, h, jpeg_encoder::ColorType::Rgb).unwrap();
         out
+    }
+
+    /// The average red, green and blue of a picture, as Koma decodes it.
+    fn mean_rgb(bytes: &[u8]) -> [f64; 3] {
+        let p = decode(bytes, &Limits::default()).unwrap();
+        let mut sum = [0f64; 3];
+        for px in p.data.chunks_exact(3) {
+            for c in 0..3 {
+                sum[c] += f64::from(px[c]);
+            }
+        }
+        let n = (p.data.len() / 3) as f64;
+        sum.map(|s| s / n)
     }
 
     fn components_of_jpeg(j: &[u8]) -> u8 {
@@ -1084,10 +1129,10 @@ mod tests {
         let vs = make(&page, &Limits::default()).unwrap();
         let from = vs
             .iter()
-            .find(|v| v.width == 720 && v.format == Format::Jpeg)
+            .find(|v| v.width == 720 && v.format == Format::Webp)
             .unwrap();
-        let got: Vec<_> = thumb_from(&from.bytes, &Limits::default())
-            .unwrap()
+        let thumbs = thumb_from(&from.bytes, &Limits::default()).unwrap();
+        let got: Vec<_> = thumbs
             .iter()
             .map(|v| (v.width, v.height, v.format))
             .collect();
@@ -1095,6 +1140,24 @@ mod tests {
             got,
             [(THUMB, 360, Format::Jpeg), (THUMB, 360, Format::Webp)]
         );
+        // And it is the same picture, in every format `image` decodes: the
+        // 720 JPEG too (those of version 1 it misread, see `add_thumb`).
+        let jpeg_720 = vs
+            .iter()
+            .find(|v| v.width == 720 && v.format == Format::Jpeg)
+            .unwrap();
+        let page_mean = mean_rgb(&page);
+        for t in [
+            &jpeg_720.bytes,
+            &from.bytes,
+            &thumbs[0].bytes,
+            &thumbs[1].bytes,
+        ] {
+            let m = mean_rgb(t);
+            for c in 0..3 {
+                assert!((m[c] - page_mean[c]).abs() < 4.0, "{m:?} != {page_mean:?}");
+            }
+        }
         // Nothing to make from a picture no wider than a thumbnail.
         let small = jpeg(200, 300, None, |_, _| [9; 3]);
         assert!(thumb_from(&small, &Limits::default()).unwrap().is_empty());
