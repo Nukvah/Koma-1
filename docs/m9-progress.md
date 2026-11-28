@@ -226,10 +226,35 @@ of `libraries.rs` go: the default `""` library for books loose at the top,
   makes its first library, private by default with "shared" as a choice;
   until then every page leads there, as for the account today. Then the
   library page offers upload, or import into it.
-- Who sees and organises what stays as `curate::may_organise` has it: a
-  private library is seen and organised by its owner alone, whatever their
-  role (the admin does not see others' private libraries); a shared one is
-  seen by everyone and organised by curators and the admin.
+- Roles (owner's decision), replacing `reader` and `curator`:
+
+  | | Admin (one) | Manager | User |
+  |---|---|---|---|
+  | Read and download shared libraries | yes | yes | yes |
+  | Organise shared ones (upload, import, rename, move, edit, convert) | yes | yes | no |
+  | Make, rename and remove shared libraries, their settings | yes | no | no |
+  | Own private libraries | yes | yes | no |
+  | Make managers, add and remove accounts | yes | no | no |
+
+  A private library is seen and organised by its owner alone (the admin does
+  not see others'). Every account after the admin starts as a user. The
+  admin hands the role to another account and becomes a manager, in one step:
+  there is always exactly one admin, who cannot be removed or demoted
+  otherwise. `curate::may_organise` becomes: own private library, or a shared
+  one and manager or admin. accounts.db can start over like the catalogue
+  (no installs), so the role names change without a migration.
+- Proposed, to confirm with the owner:
+  - Only the admin makes shared libraries and changes their settings
+    (kind, page copies); managers organise what is in them.
+  - A manager made a user again keeps their private libraries, read-only
+    and still seen by them alone, until made a manager again; nothing is
+    removed.
+  - Removing an account sends its private libraries to the trash with the
+    usual keep time, offering its owner a takeout first; the admin sees only
+    that, and how much space, not what is in them.
+  - Takeout of a library: its owner for a private one, managers and the
+    admin for shared ones; users download book by book (OPDS, the reader).
+  - The admin hands the role over only to an existing manager.
 - Every upload and import goes into a library chosen first.
 - A book stored once for two libraries is never mentioned to anyone: saying
   "already there" across accounts would tell what is in a private library.
