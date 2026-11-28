@@ -528,7 +528,9 @@ fn a_page_that_kills_the_worker_each_time_is_given_up_alone() {
 fn killing_the_worker_mid_job_then_restarting_finishes_cleanly() {
     let root = temp_root("kill");
     let lib = root.join("library");
-    let pages: Vec<Vec<u8>> = (0..12).map(|n| big_page(100 + n)).collect();
+    // Pages just over 720 wide: a 720 copy and a thumbnail each, the
+    // quickest to make (AVIF is slow in test builds).
+    let pages: Vec<Vec<u8>> = (0..12).map(|n| png::page(780, 1100, 100 + n)).collect();
     cbz(
         &lib.join("Starfall/Starfall v01.cbz"),
         &pages,
@@ -555,8 +557,10 @@ fn killing_the_worker_mid_job_then_restarting_finishes_cleanly() {
         if done >= 2 {
             break done;
         }
+        // The worker runs at nice 19: while the other tests here keep every
+        // CPU busy, it gets little time, as it should.
         assert!(
-            started.elapsed() < Duration::from_secs(120),
+            started.elapsed() < Duration::from_secs(600),
             "no variants made"
         );
         assert!(worker.try_wait().unwrap().is_none(), "worker exited early");
