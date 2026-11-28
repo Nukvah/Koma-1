@@ -15,6 +15,7 @@ pub mod catalog;
 pub mod cli;
 pub mod curate;
 pub mod download;
+pub mod drops;
 pub mod epub;
 pub mod health;
 pub mod html;

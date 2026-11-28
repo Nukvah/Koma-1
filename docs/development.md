@@ -572,6 +572,28 @@ docs/design (select, move, jobs, trash, details).
   page, then undone, give back byte-identical paths, contents and folders. It also covers padding, clashes,
   the fix-up queue, and the tidy.
 
+## Uploads
+
+`koma::drops` plans what a drop becomes (rules in docs/design/README.md, "Uploads"): a pure function of
+the dropped paths and sizes, the text of any `metadata.json` or `ComicInfo.xml` among them, where it was
+dropped (a library, a collection or cosplayer, a series or set) and the library's kind. Nothing is read
+from the disk, so the plan the browser shows is the one the worker carries out.
+
+- `drops::plan` gives the jobs: a dropped file sent as it is (`File`), or images packed into one archive
+  (`Pack`: pages in natural order, metadata files after), each with its place (an existing series, or
+  `[collection/]folder` in the library); and the files refused (CBR until M11, videos outside cosplay
+  libraries) and ignored (hidden, `__MACOSX`, `Thumbs.db`, `..`, other files). Folders are read in natural
+  order, so the plan does not depend on the order the browser listed them in.
+- Cosplay sets are placed by `drops::where_set` from the folders down to them: the first name that says
+  `Cosplayer - Set`, else the last three folders as cosplayer, set and variant.
+- `drops::name_to_standard` gives each job its name under the naming standard, from its own name, its
+  metadata, the other files landing with it and what the library already knows there (`Known`), or a note
+  why it keeps its dropped name (no number in a series of several, two files alike, a set with no
+  cosplayer). A cosplay name reads back through `names::cosplay_name` as the place it lands in, so the tidy
+  leaves it there. CB7 lands as CBZ either way.
+- `tests/drops.rs` is half of M8's exit check: the golden set `tests/drops_golden.json` (25 made-up drops)
+  gives exactly the expected plans; it also checks the standard names.
+
 ## Serving
 
 `koma serve` (`koma::serve`) opens the catalogue read-only and renders HTML
