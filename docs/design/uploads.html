@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upload log · Koma-1</title>
+<link rel="stylesheet" href="koma.css">
+</head>
+<body>
+<input type="checkbox" id="menu" class="menu" aria-label="show the menu">
+<header class="top">
+<a class="brand" href="library.html">KOMA-1</a>
+<form class="search" role="search" action="search.html">
+<label for="q">/</label>
+<input id="q" name="q" type="search" value="" placeholder="search all libraries: title, author:, tag:">
+</form>
+<label for="menu" class="menu-btn" aria-hidden="true">menu</label>
+<details class="umenu">
+<summary><span class="avatar" aria-hidden="true">T</span><span>tamsin ▾</span></summary>
+<ul>
+<li><span><small>signed in as</small> tamsin <span class="role">curator</span></span></li>
+<li><hr></li>
+<li><a href="account.html">account</a></li>
+<li><a href="settings.html">libraries</a></li>
+<li><hr></li>
+<li><form method="post" action="signin.html"><button type="submit">sign out</button></form></li>
+</ul>
+</details>
+</header>
+
+<div class="layout">
+<aside class="side" aria-label="Navigation and libraries">
+<nav aria-label="Main">
+<h2>// go</h2>
+<ul>
+<li><a href="library.html" aria-current="page">&gt; library<span class="n">g l</span></a></li>
+<li><a href="#">&nbsp; recent<span class="n">g r</span></a></li>
+<li><a href="collections.html">&nbsp; collections<span class="n">g c</span></a></li>
+<li><a href="upload.html">&nbsp; add files<span class="n">g a</span></a></li>
+<li><a href="jobs.html">&nbsp; jobs<span class="n">g j</span></a></li>
+<li><a href="trash.html">&nbsp; trash<span class="n">g t</span></a></li>
+<li><a href="settings.html">&nbsp; settings<span class="n">g s</span></a></li>
+</ul>
+</nav>
+<hr>
+<section class="tree">
+<h2>// libraries</h2>
+<ul>
+<li><a class="on" href="library.html" aria-current="true">▾ ~/manga<span class="n">214</span></a></li>
+<li><a class="sub" href="#">  ├─ Starfall Saga</a></li>
+<li><a class="sub" href="#">  └─ Unsorted</a></li>
+<li><a href="#">▸ ~/webtoons<span class="n">38</span></a></li>
+<li><a href="#">▸ ~/comics<span class="n">61</span></a></li>
+</ul>
+</section>
+<hr>
+<p class="status"><span class="ok">●</span> 1 job running · <a href="jobs.html">42%</a><br>trash: 3 items · 1.9 GB</p>
+</aside>
+
+<main>
+<div class="toolbar"><h1>upload log · <b>November 2026</b></h1>
+<nav class="seg" aria-label="Month"><a href="#">October</a><a href="#" aria-current="page">November</a></nav></div>
+
+<p class="hint">One entry per drop. Files that went in fine are only counted; every one that did not is written out with its reason, so a failure can still be traced after the message is gone. Kept as <code>uploads-2026-11.log</code> in the data folder.</p>
+
+<section class="job done">
+<div><b>28 Nov 14:20 · tamsin → ~/manga</b><br><small>5 out of 7 added without problems (1 already there) · 1 not taken</small></div>
+<div class="row"><a href="jobs.html">job #231</a></div>
+<small>✗ Harbor Lights/old scans.cbr: CBR is read from M11 on</small>
+</section>
+
+<section class="job done">
+<div><b>27 Nov 21:05 · mirelle → ~/cosplay</b><br><small>12 out of 14 added without problems · 2 failed</small></div>
+<div class="row"><a href="jobs.html">job #224</a></div>
+<small>✗ Mirelle/Moon Maid/Bonus.zip: this archive is damaged: 014.jpg, stored checksum 1c0ffee5, content gives 0badf00d (same size: the bytes themselves differ)<br>
+✗ Mirelle/Moon Maid/Extra.zip: never finished: the browser stopped sending at 1.1 of 2.0 GB and did not come back within a day</small>
+</section>
+
+<section class="job done">
+<div><b>27 Nov 09:12 · tamsin → ~/manga/Starfall</b><br><small>3 out of 3 added without problems</small></div>
+<div class="row"><a href="jobs.html">job #219</a></div>
+</section>
+</main>
+</div>
+</body>
+</html>

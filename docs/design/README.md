@@ -23,6 +23,8 @@ Open any `.html` file here in a browser; they share `koma.css` and use no JavaSc
 | `details.html` | editing a book's (or several books') details and cover; writing `metadata.json` on request |
 | `rename.html` | the naming standard: a series' (or library's) rename plan as a dry run, and the cosplay tidy |
 | `fixup.html` | the fix-up queue: files too ambiguous to name by themselves, with what was read and the new name |
+| `upload.html` | adding files: the drop, the review sheet the server plans, sending with resume, and the undo note |
+| `uploads.html` | the upload log: one entry per drop, failures written out with their reason |
 | `states.html` | empty and error states, one block per screen |
 | `reader.html` | reading: the page only, with the tap zones shown once on the first open |
 | `reader-bars.html` | the bars a tap shows: title and back; scrubber with page preview, thumbnails, mode, fit, direction |
@@ -133,7 +135,6 @@ Font: `ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace`.
 - `koma.css` is about 7.7 KB raw (2.4 KB gzipped), over the 5 KB CSS budget.
   It carries both pages plus the dotted fill and light theme; it needs trimming
   when it becomes the real stylesheet.
-- Not designed yet: ingest.
 - Phone layout is only the stacked fallback; a dedicated phone design is still to do.
 
 ## Libraries and collections (M3)
@@ -311,3 +312,40 @@ series' “naming” button and `/naming?l=` for a library):
   until the file changes.
 - **What a rename writes** is also kept as the book's details (your
   answers in the fix-up queue are edits), so a later scan reads the same.
+
+## Uploads (M8)
+
+Proposed, with the choices put to the owner (the recommendation is built
+until they answer):
+
+- **Drop anywhere.** Files or whole folders dropped on a library, collection
+  or series page (or picked on `add files`) are read in the browser by name
+  only, and the server answers with a plan: each row what it is, where it
+  goes and the name it gets. Ready-made books dropped on their own go
+  straight in; a drop that makes folders, packs images or has something to
+  decide shows the review sheet first. Nothing is sent before.
+- **What a drop becomes** follows the earlier reader's rules: a folder of
+  images is one chapter, packed into a CBZ (a ZIP in a cosplay library); a
+  folder of image folders is a series with a chapter each; `Name 1`,
+  `Name 2` side by side are one series; unrelated archives or series
+  folders make a collection; a cosplay drop goes to `Cosplayer / Set /`.
+- **Packed on the server.** Images are sent one by one and written straight
+  into the archive being built, pages stored as they are; CB7 becomes CBZ
+  the same way. CBR waits for M11's sandbox (proposed): it is not taken,
+  with the reason.
+- **Uploads wait outside the library** (proposed): in `/data/uploads`, so
+  `koma serve` still never writes to `/library`; the worker checks each file
+  like ingest does and files it as one journaled change, with undo. Put that
+  folder on the library's drive and filing is a rename.
+- **Resumable.** Large files go in pieces; after a dropped connection the
+  browser asks where the server got to and carries on from there.
+- **Names to the standard** (proposed), shown on each row before anything is
+  sent, with a switch to keep the dropped names.
+- **Duplicates** (the same bytes already in the series) are skipped and
+  counted as already there; a different file with a taken name gets `(2)`.
+- **Upload log**: one entry per drop and month, in the data folder and on
+  `/uploads`; files that went in fine are counted, every failure is written
+  out with its reason. A drop whose browser never reports the end is written
+  once it has been quiet for 30 minutes.
+- Videos dropped into a cosplay set are kept in its ZIP, in their place
+  between the photos; M10 shows them.
