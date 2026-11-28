@@ -109,7 +109,7 @@ pub(crate) fn shell(title: &str, libraries: &[Library], here: &Here<'_>, main: &
          <form class=search role=search action=\"/search\"><label for=q>/</label>\
          <input id=q name=q type=search value=\"{}\" \
          placeholder=\"search all libraries: title, author:, tag:\"></form>\
-         <label for=menu class=menu-btn aria-hidden=true>menu</label>{}</header>\
+         <label for=menu class=menu-btn aria-hidden=true>≡</label>{}</header>\
          <div class=layout><aside class=side aria-label=\"Navigation and libraries\">\
          <nav aria-label=Main><h2>// go</h2><ul>",
         escape(here.query),
@@ -162,9 +162,24 @@ pub(crate) fn shell(title: &str, libraries: &[Library], here: &Here<'_>, main: &
     )
 }
 
-/// A library in the side panel; the open one with its collections.
+/// A library in the side panel; the open one with its collections. On the
+/// library itself (no collection picked) its name folds the collections
+/// away and back, in place: a link to the page already open would only
+/// load it again.
 fn tree_entry(b: &mut String, l: &Library, here: &Here<'_>) {
     let open = here.library.is_some_and(|h| h.folder == l.folder);
+    if open && here.collection.is_none() {
+        let _ = write!(
+            b,
+            "<li><details open><summary class=on aria-current=true>{}<span class=n>{}</span>\
+             </summary><ul>",
+            escape(&l.name),
+            l.series
+        );
+        collections(b, l, here);
+        b.push_str("</ul></details></li>");
+        return;
+    }
     let _ = write!(
         b,
         "<li><a{} href=\"{}\">{} {}<span class=n>{}</span></a></li>",
@@ -179,21 +194,26 @@ fn tree_entry(b: &mut String, l: &Library, here: &Here<'_>) {
         l.series
     );
     if open {
-        let last = here.collections.len().saturating_sub(1);
-        for (i, c) in here.collections.iter().enumerate() {
-            let _ = write!(
-                b,
-                "<li><a class=sub href=\"{}\"{}>  {} {}</a></li>",
-                collection_url(l, c),
-                if here.collection == Some(c.as_str()) {
-                    " aria-current=page"
-                } else {
-                    ""
-                },
-                if i == last { "└─" } else { "├─" },
-                escape(c)
-            );
-        }
+        collections(b, l, here);
+    }
+}
+
+/// The open library's collections, under it in the side panel.
+fn collections(b: &mut String, l: &Library, here: &Here<'_>) {
+    let last = here.collections.len().saturating_sub(1);
+    for (i, c) in here.collections.iter().enumerate() {
+        let _ = write!(
+            b,
+            "<li><a class=sub href=\"{}\"{}>  {} {}</a></li>",
+            collection_url(l, c),
+            if here.collection == Some(c.as_str()) {
+                " aria-current=page"
+            } else {
+                ""
+            },
+            if i == last { "└─" } else { "├─" },
+            escape(c)
+        );
     }
 }
 

@@ -200,7 +200,9 @@ async fn each_library_has_its_page() {
         let (status, home) = get(addr, "/");
         assert_eq!(status, 200);
         assert!(
-            home.contains("<a class=on aria-current=true href=\"/\">▾ Library"),
+            home.contains(
+                "<details open><summary class=on aria-current=true>Library<span class=n>"
+            ),
             "{home}"
         );
         assert!(home.contains("<a href=\"/l/manga\">▸ Manga<span class=n>3</span>"));
