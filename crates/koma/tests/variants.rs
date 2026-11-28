@@ -198,7 +198,13 @@ fn pages_made_before_thumbnails_get_theirs_from_the_720_copy() {
             .map(|(w, h, f, l)| (*w, *h, f.as_str(), *l))
             .collect();
         catalog
-            .store_variants(&page.hash, VERSION, variants::FORMATS, &rows, None)
+            .store_variants(
+                &page.hash,
+                VERSION,
+                (variants::FORMATS, variants::ALL_WIDTHS),
+                &rows,
+                None,
+            )
             .unwrap();
         before.push(page);
     }
@@ -256,7 +262,13 @@ fn pages_made_before_avif_get_avif_ones_from_the_original() {
             .collect();
         let old = Format::Jpeg.bit() | Format::Webp.bit();
         catalog
-            .store_variants(&page.hash, VERSION, old, &rows, None)
+            .store_variants(
+                &page.hash,
+                VERSION,
+                (old, variants::ALL_WIDTHS),
+                &rows,
+                None,
+            )
             .unwrap();
         before.push(page);
     }
@@ -580,5 +592,100 @@ async fn variants_are_served_at_their_own_immutable_urls() {
 
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// The library's page-copies setting, as the worker applies it.
+fn set_widths(catalog: &Catalog, id: i64, widths: u8) {
+    catalog
+        .apply_setting(&koma::accounts::SettingChange {
+            id,
+            folder: String::new(),
+            name: "Library".into(),
+            kind: "manga".into(),
+            direction: "rtl".into(),
+            colour: "rose".into(),
+            widths,
+        })
+        .unwrap();
+}
+
+#[test]
+fn fewer_widths_remove_copies_and_more_make_them_again() {
+    let root = temp_root("widths");
+    let lib = library(&root);
+    let data = root.join("data");
+    let mut catalog = Catalog::open(&db(&data)).unwrap();
+    scan(&lib, &data, &mut catalog).unwrap();
+    let blobs = BlobStore::new(&data);
+    let big: Vec<_> = {
+        let mut pages: Vec<_> = all_pages(&catalog)
+            .into_iter()
+            .map(|(_, p)| p)
+            .filter(|p| p.size.unwrap().width > 720)
+            .collect();
+        pages.dedup_by_key(|p| p.hash);
+        pages
+    };
+    assert_eq!(big.len(), 4);
+
+    // 720 only: the 1080 and 1440 copies go, files and all.
+    set_widths(&catalog, 1, 1);
+    let report = scan(&lib, &data, &mut catalog).unwrap();
+    assert_eq!(report.variant_pages, 4);
+    for page in &big {
+        let size = page.size.unwrap();
+        let got = catalog.variants_of(&page.hash).unwrap();
+        let want: Vec<u32> = variants::widths_in(size.width, 1).collect();
+        assert!(got.iter().all(|(w, _, _)| want.contains(w)), "{got:?}");
+        assert_eq!(got.len(), 3 * want.len());
+        for w in [1080, 1440] {
+            for f in Format::ALL {
+                assert!(!blobs.variant_path(&page.hash, w, VERSION, f.ext()).exists());
+            }
+        }
+    }
+    assert_eq!(scan(&lib, &data, &mut catalog).unwrap().variant_pages, 0);
+
+    // All three again: made from the pages, the others kept.
+    let kept = fs::metadata(blobs.variant_path(&big[0].hash, 720, VERSION, "jpg"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    set_widths(&catalog, 2, variants::ALL_WIDTHS);
+    let report = scan(&lib, &data, &mut catalog).unwrap();
+    assert_eq!(report.variant_pages, 4);
+    for page in &big {
+        let size = page.size.unwrap();
+        let got = catalog.variants_of(&page.hash).unwrap();
+        assert_eq!(got.len(), 3 * variants::widths_for(size.width).count());
+        for (w, h, f) in got {
+            let bytes = fs::read(blobs.variant_path(&page.hash, w, VERSION, &f)).unwrap();
+            assert_eq!(size_of(&bytes), (w, h));
+        }
+    }
+    let again = fs::metadata(blobs.variant_path(&big[0].hash, 720, VERSION, "jpg"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    assert_eq!(kept, again);
+    assert_eq!(scan(&lib, &data, &mut catalog).unwrap().variant_pages, 0);
+
+    // A new book in a library set to no copies gets only its thumbnail.
+    set_widths(&catalog, 3, 0);
+    cbz(
+        &lib.join("Starfall/Starfall v03.cbz"),
+        &[big_page(9)],
+        Compression::Stored,
+    );
+    scan(&lib, &data, &mut catalog).unwrap();
+    let new = all_pages(&catalog)
+        .into_iter()
+        .find(|(p, _)| p.ends_with("v03.cbz"))
+        .unwrap()
+        .1;
+    let got = catalog.variants_of(&new.hash).unwrap();
+    assert!(!got.is_empty());
+    assert!(got.iter().all(|(w, _, _)| *w == variants::THUMB), "{got:?}");
     let _ = fs::remove_dir_all(&root);
 }

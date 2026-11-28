@@ -458,7 +458,7 @@ async fn settings_with(
     Ok((status, Html(html)).into_response())
 }
 
-/// `POST /settings`: folder, name, kind, dir, colour. Queued; the worker
+/// `POST /settings`: folder, name, kind, dir, colour, widths. Queued; the worker
 /// writes it into the catalogue.
 pub async fn settings_save(
     State(state): State<AppState>,
@@ -480,12 +480,21 @@ pub async fn settings_save(
         )));
     }
     let name = field(&f, "name").trim().to_owned();
+    // A form from before the setting keeps what the library has.
+    let widths = match field(&f, "widths") {
+        "" => Some(library.widths),
+        w => w
+            .parse::<u8>()
+            .ok()
+            .filter(|w| crate::libraries::WIDTH_CHOICES.iter().any(|c| c.0 == *w)),
+    };
     let change = match (
         Kind::parse(field(&f, "kind")),
         Direction::from_code(field(&f, "dir")),
         colour(field(&f, "colour")),
+        widths,
     ) {
-        (Some(kind), Some(dir), Some(c))
+        (Some(kind), Some(dir), Some(c), Some(widths))
             if !name.is_empty()
                 && name.chars().count() <= 64
                 && !name.chars().any(char::is_control) =>
@@ -497,13 +506,14 @@ pub async fn settings_save(
                 kind: kind.as_str().to_owned(),
                 direction: dir.code().to_owned(),
                 colour: c.0.to_owned(),
+                widths,
             }
         }
         _ => {
             return settings_with(
                 &state,
                 &me,
-                Some("A name (at most 64 characters), a type, a direction and a colour, please."),
+                Some("A name (at most 64 characters), a type, a direction, a colour and page copies, please."),
                 StatusCode::BAD_REQUEST,
             )
             .await;

@@ -96,8 +96,12 @@ fn send(
 }
 
 /// Where the server got to, once nothing is being written any more.
+///
+/// The cut request stays busy until its writer has synced what arrived,
+/// hundreds of MB here: that can take a while on a slow, shared CI disk.
 fn received(addr: SocketAddr, user: &str, id: &str) -> u64 {
-    for _ in 0..400 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(180);
+    while std::time::Instant::now() < deadline {
         // A zero-byte piece at a wrong offset answers 409 with the real one,
         // or 409 "busy" while the cut request is still being written.
         let r = request(

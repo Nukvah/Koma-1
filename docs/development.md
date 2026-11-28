@@ -145,6 +145,16 @@ serving never resizes or transcodes (`koma::variants`):
   AVIF variants on the worker's next pass, from the original, at the widths
   they already have; their JPEG and WebP ones stay as they are, at the same
   URLs.
+- Widths are a library setting (Settings, “page copies”: 720 · 1080 · 1440,
+  720 · 1440, 720 · 1080, 720, or none), stored as bits (1: 720, 2: 1080,
+  4: 1440; `variants::width_bit`) in `library_settings.widths`. The
+  thumbnail is always made. A page in books of several libraries is made
+  for every width any of them keeps. `variant_pages.widths` records what a
+  page was made for; once the queue is empty, books with pages made for
+  other widths than wanted get a variants job: copies no longer wanted are
+  removed (rows, then blobs), new ones made from the page itself, the others
+  kept as they are. While no library's setting was ever changed this check
+  costs two lookups.
 - The reader offers AVIF, then WebP, then JPEG through `<picture>`. Covers
   stay WebP and JPEG: at 240 wide AVIF saves little, and another `<source>`
   on every card costs the library page's 15 KiB. Its

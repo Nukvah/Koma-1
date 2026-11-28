@@ -16,7 +16,10 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
+
+/// Schema 3 to 4: variant widths in library settings.
+const WIDTHS: &str = "ALTER TABLE setting_changes ADD COLUMN widths INTEGER NOT NULL DEFAULT 7;";
 
 const SCHEMA: &str = "
 CREATE TABLE meta (
@@ -87,7 +90,8 @@ CREATE TABLE setting_changes (
     direction TEXT NOT NULL,         -- 'rtl' or 'ltr'
     colour    TEXT NOT NULL,         -- a name from crate::libraries::COLOURS
     account   INTEGER,
-    at        INTEGER NOT NULL
+    at        INTEGER NOT NULL,
+    widths    INTEGER NOT NULL DEFAULT 7 -- page variant widths (crate::variants::width_bit)
 );
 ";
 
@@ -213,6 +217,8 @@ pub struct SettingChange {
     pub kind: String,
     pub direction: String,
     pub colour: String,
+    /// Bits of [`crate::variants::width_bit`].
+    pub widths: u8,
 }
 
 /// Why an account could not be made.
@@ -277,10 +283,13 @@ impl Accounts {
                 "BEGIN; {SCHEMA} {OPS} {KEPT_NAMES} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))?,
             1 => conn.execute_batch(&format!(
-                "BEGIN; {OPS} {KEPT_NAMES} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                "BEGIN; {OPS} {KEPT_NAMES} {WIDTHS} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))?,
             2 => conn.execute_batch(&format!(
-                "BEGIN; {KEPT_NAMES} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+                "BEGIN; {KEPT_NAMES} {WIDTHS} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
+            ))?,
+            3 => conn.execute_batch(&format!(
+                "BEGIN; {WIDTHS} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
             ))?,
             SCHEMA_VERSION => {}
             _ => return Err(Error::InvalidQuery),
@@ -949,8 +958,8 @@ impl Accounts {
 
     pub fn queue_change(&self, c: &SettingChange, account: i64) -> Result<i64, Error> {
         self.conn.execute(
-            "INSERT INTO setting_changes (folder, name, kind, direction, colour, account, at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO setting_changes (folder, name, kind, direction, colour, account, at, widths) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 c.folder,
                 c.name,
@@ -958,7 +967,8 @@ impl Accounts {
                 c.direction,
                 c.colour,
                 account,
-                now()
+                now(),
+                c.widths
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -967,7 +977,7 @@ impl Accounts {
     /// Changes queued after `id`, oldest first.
     pub fn changes_after(&self, id: i64) -> Result<Vec<SettingChange>, Error> {
         let mut st = self.conn.prepare(
-            "SELECT id, folder, name, kind, direction, colour FROM setting_changes \
+            "SELECT id, folder, name, kind, direction, colour, widths FROM setting_changes \
              WHERE id > ?1 ORDER BY id",
         )?;
         st.query_map([id], |r| {
@@ -978,6 +988,7 @@ impl Accounts {
                 kind: r.get(3)?,
                 direction: r.get(4)?,
                 colour: r.get(5)?,
+                widths: r.get(6)?,
             })
         })?
         .collect()
