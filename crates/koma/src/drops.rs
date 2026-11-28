@@ -162,6 +162,11 @@ fn sort_of(name: &str) -> Sort {
     }
 }
 
+/// Whether a file can go into a pack: an image, a video or a metadata file.
+pub fn packs_member(name: &str) -> bool {
+    matches!(sort_of(name), Sort::Image | Sort::Video | Sort::Meta)
+}
+
 /// Files nobody means to upload: hidden ones, macOS and Windows leftovers.
 fn is_junk(path: &str) -> bool {
     archive::is_hidden(path)

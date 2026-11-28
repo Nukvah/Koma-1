@@ -35,6 +35,8 @@ pub mod scan;
 pub mod search;
 pub mod serve;
 mod signal;
+pub mod staging;
+pub mod upload;
 pub mod variants;
 pub mod webauthn;
 

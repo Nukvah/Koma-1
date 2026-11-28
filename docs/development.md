@@ -591,6 +591,18 @@ from the disk, so the plan the browser shows is the one the worker carries out.
   why it keeps its dropped name (no number in a series of several, two files alike, a set with no
   cosplayer). A cosplay name reads back through `names::cosplay_name` as the place it lands in, so the tidy
   leaves it there. CB7 lands as CBZ either way.
+- `koma::staging` keeps uploads in `<data>/uploads` until the worker files them: `<id>.part` (the bytes so
+  far) and `<id>.json` (owner, library, kind, name, size, drop). A file is sent in pieces, each at the
+  offset the server has; a body cut off keeps what arrived. A pack is a stored ZIP built as its images
+  arrive (`archive::zipout`, ZIP64 when an offset or the directory needs it): each image goes to a file of
+  its own first (its CRC and size go before it), so one cut off is dropped and sent again. Uploads
+  untouched for a day are swept when the next starts.
+- `koma::upload` is the JSON API over it (`/up`, see the module). Only the account that started an upload
+  sees it; adding needs a library the viewer may organise. Bytes are written by a task of their own, so a
+  dropped request leaves the upload whole; until it ends the upload answers 409 “busy”.
+- `tests/upload.rs` is the other half of M8's exit check: a 2 GB upload cut twice (at 700 MB and 1.5 GB)
+  and resumed arrives byte for byte (`koma_fixtures::bulk` makes bytes from their offset, so nothing is
+  kept in memory); also packs, refusals and privacy.
 - `tests/drops.rs` is half of M8's exit check: the golden set `tests/drops_golden.json` (25 made-up drops)
   gives exactly the expected plans; it also checks the standard names.
 
