@@ -336,6 +336,188 @@ fn worker_container(
     Ok(ok)
 }
 
+/// Pages of each book of the throughput measure, and their size: wide
+/// enough for every width of copy. Books, not pages, are made one after
+/// another, so a book has many pages, as real ones do.
+const THROUGHPUT_BOOKS: u32 = 2;
+const THROUGHPUT_PAGES: u32 = 16;
+const THROUGHPUT_SIZE: (u32, u32) = (1600, 2400);
+
+/// The worker's speed on more CPUs: `koma scan` makes the page copies of a
+/// made-up library at 2 CPUs, then at all of the host's, with 1 GB each
+/// time, and the speed-up per CPU is held to `budgets.worker.scaling_min`.
+pub fn throughput(image: &str, budgets: &Budgets, report: &mut Report) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let cpus = thread::available_parallelism().map_or(1, |n| n.get());
+    let root = std::env::temp_dir().join(format!("koma-budgets-throughput-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    eprintln!(
+        "writing {} made-up pages for the worker's speed...",
+        THROUGHPUT_BOOKS * THROUGHPUT_PAGES
+    );
+    write_throughput_library(&root.join("library")).map_err(|e| e.to_string())?;
+    let meta = fs::metadata(&root).map_err(|e| e.to_string())?;
+    let user = format!("{}:{}", meta.uid(), meta.gid());
+    let measured = (|| {
+        let two = timed_scan(image, &root, &user, 2)?;
+        let per_minute = |(pages, took): (u64, Duration)| pages as f64 * 60.0 / took.as_secs_f64();
+        report.info(
+            "Worker speed (2 CPUs, 1 GB)",
+            format!(
+                "{:.0} pages a minute ({} in {:.1} s)",
+                per_minute(two),
+                two.0,
+                two.1.as_secs_f64()
+            ),
+        );
+        if cpus <= 2 {
+            report.check(
+                "Worker speed grows with CPUs",
+                true,
+                format!("this machine has {cpus} CPUs: nothing to compare"),
+            );
+            return Ok(());
+        }
+        let all = timed_scan(image, &root, &user, cpus)?;
+        let scaling = (per_minute(all) / per_minute(two)) / (cpus as f64 / 2.0);
+        report.at_least(
+            &format!("Worker speed-up per CPU ({cpus} CPUs against 2)"),
+            scaling,
+            budgets.worker.scaling_min,
+            "",
+            &format!(
+                "{:.0} against {:.0} pages a minute",
+                per_minute(all),
+                per_minute(two)
+            ),
+        );
+        Ok(())
+    })();
+    let _ = fs::remove_dir_all(&root);
+    measured
+}
+
+/// Two books of big pages: gray line art with screentone, and colour.
+fn write_throughput_library(library: &Path) -> io::Result<()> {
+    use koma_fixtures::zip::{Compression, ZipWriter};
+
+    let (w, h) = THROUGHPUT_SIZE;
+    for book in 0..THROUGHPUT_BOOKS {
+        let mut z = ZipWriter::new();
+        for n in 0..THROUGHPUT_PAGES {
+            let seed = book * THROUGHPUT_PAGES + n;
+            let page = if n % 2 == 0 {
+                line_art(w, h, seed)
+            } else {
+                colour_page(w, h, seed)
+            };
+            z.add(&format!("{:03}.png", n + 1), &page, Compression::Stored);
+        }
+        let path = library.join(format!("Starfall/Starfall v{:02}.cbz", book + 1));
+        fs::create_dir_all(path.parent().unwrap_or(library))?;
+        fs::write(path, z.finish())?;
+    }
+    Ok(())
+}
+
+/// A small hash of a position and a seed: grain that compresses like a scan.
+fn grain(x: u32, y: u32, seed: u32) -> u32 {
+    let mut v =
+        x.wrapping_mul(0x9E37_79B1) ^ y.wrapping_mul(0x85EB_CA77) ^ seed.wrapping_mul(0xC2B2_AE3D);
+    v ^= v >> 15;
+    v = v.wrapping_mul(0x2C1B_3C6D);
+    v ^ (v >> 12)
+}
+
+/// Gray line art: panel borders, circles, a screentone and text-like strokes.
+fn line_art(w: u32, h: u32, seed: u32) -> Vec<u8> {
+    let (cx, cy, r) = (w / 2 + seed % 97, h / 3 + seed % 89, w / 4);
+    koma_fixtures::png::gray(w, h, |x, y| {
+        let (dx, dy) = (x.abs_diff(cx), y.abs_diff(cy));
+        let d = ((dx * dx + dy * dy) as f64).sqrt() as u32;
+        let border = x % (w / 2) < 8 || y % (h / 3) < 8;
+        let ring = d.abs_diff(r) < 4;
+        let tone = d < r && (x / 6 + y / 6) % 2 == 0;
+        let text = y % 40 < 22
+            && y / 40 % 9 == 5
+            && (x + seed) % 14 < 9
+            && !grain(x / 3, y / 3, seed).is_multiple_of(3);
+        if border || ring || text {
+            20
+        } else if tone {
+            110
+        } else {
+            (245 - grain(x, y, seed) % 12) as u8
+        }
+    })
+}
+
+/// Colour: gradients, a disc and fine grain.
+fn colour_page(w: u32, h: u32, seed: u32) -> Vec<u8> {
+    let (cx, cy, r) = (w / 3 + seed % 101, h / 2, w / 5);
+    koma_fixtures::png::rgb(w, h, |x, y| {
+        let g = (grain(x, y, seed) % 24) as u8;
+        let (dx, dy) = (x.abs_diff(cx), y.abs_diff(cy));
+        if dx * dx + dy * dy < r * r {
+            [200u8.saturating_add(g / 2), 60 + g, 70]
+        } else {
+            [
+                (x * 180 / w) as u8 + g,
+                (y * 160 / h) as u8 + g,
+                120 + ((x + y + seed) % 64) as u8,
+            ]
+        }
+    })
+}
+
+/// Runs `koma scan` on the throughput library into a new data folder, at
+/// `cpus` CPUs and 1 GB, and returns the page copies it made and how long
+/// its scan took (its `scan: done` line).
+fn timed_scan(
+    image: &str,
+    root: &Path,
+    user: &str,
+    cpus: usize,
+) -> Result<(u64, Duration), String> {
+    eprintln!("timing koma scan at {cpus} CPUs...");
+    let data = root.join(format!("data-{cpus}"));
+    let _ = fs::remove_dir_all(&data);
+    fs::create_dir_all(&data).map_err(|e| e.to_string())?;
+    let library = format!("{}:/library:ro", root.join("library").display());
+    let volume = format!("{}:/data", data.display());
+    let cpus_arg = cpus.to_string();
+    let mut args = vec![
+        "run", "--rm", "--user", user, "--volume", &library, "--volume", &volume, "--cpus",
+        &cpus_arg, "--memory", "1g",
+    ];
+    args.extend(HARDENING);
+    args.extend([image, "scan"]);
+    let out = Command::new("docker")
+        .args(&args)
+        .output()
+        .map_err(|e| format!("cannot run docker: {e}"))?;
+    let log = String::from_utf8_lossy(&out.stderr);
+    let _ = fs::remove_dir_all(&data);
+    let done = log
+        .lines()
+        .find(|l| l.contains("\"scan: done\""))
+        .ok_or_else(|| format!("koma scan at {cpus} CPUs: no \"scan: done\"\n{log}"))?;
+    let pages: u64 = log_field(done, "variant_pages")
+        .parse()
+        .map_err(|_| format!("koma scan at {cpus} CPUs: {done}"))?;
+    let ms: u64 = log_field(done, "ms")
+        .parse()
+        .map_err(|_| format!("koma scan at {cpus} CPUs: {done}"))?;
+    let want = u64::from(THROUGHPUT_BOOKS * THROUGHPUT_PAGES);
+    if pages != want || !out.status.success() {
+        return Err(format!(
+            "koma scan at {cpus} CPUs made copies of {pages} pages, not {want}: {done}"
+        ));
+    }
+    Ok((pages, Duration::from_millis(ms.max(1))))
+}
+
 /// `path` cut to fit a report line: page image names are 64-digit hashes.
 fn short(path: &str) -> String {
     match path.char_indices().nth(16) {
@@ -506,13 +688,31 @@ mod tests {
     }
 
     #[test]
+    fn a_floor_passes_at_or_above_it() {
+        let mut report = Report::default();
+        report.at_least("speed-up", 0.7, 0.7, "", "");
+        assert!(report.passed());
+        report.at_least("speed-up", 0.69, 0.7, "", "");
+        assert!(!report.passed());
+    }
+
+    #[test]
+    fn made_up_pages_differ_and_are_png() {
+        let a = line_art(64, 96, 1);
+        let b = colour_page(64, 96, 1);
+        assert!(a.starts_with(b"\x89PNG") && b.starts_with(b"\x89PNG"));
+        assert_ne!(line_art(64, 96, 1), line_art(64, 96, 2));
+        assert_ne!(colour_page(64, 96, 1), colour_page(64, 96, 2));
+    }
+
+    #[test]
     fn oversized_asset_fails_the_budget() {
         let root = std::env::temp_dir().join(format!("koma-xtask-over-{}", std::process::id()));
         fs::create_dir_all(root.join("assets")).unwrap();
         fs::write(root.join("assets/big.css"), vec![b' '; 11 * 1024]).unwrap();
         let budgets = Budgets::parse(
             "[image]\nmax_mib = 1\n[memory]\nserve_idle_mib = 1\nworker_idle_mib = 1\n\
-             [latency]\nttfb_p99_ms = 1\ncold_start_ms = 1\n\
+             [latency]\nttfb_p99_ms = 1\ncold_start_ms = 1\n[worker]\nscaling_min = 0.5\n\
              [[assets]]\nname = \"CSS\"\ndir = \"assets\"\nsuffix = \".css\"\nmax_kib = 10\n",
         )
         .unwrap();

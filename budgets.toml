@@ -19,6 +19,13 @@ worker_idle_mib = 64  # resident memory of an idle `koma worker`
 ttfb_p99_ms = 10      # time to first byte, p99, of a reader page and a page image (2 CPU / 1 GB)
 cold_start_ms = 200   # process start to first successful health check (median of 5)
 
+[worker]
+# `koma scan` makes page copies of made-up pages (two books of 16, 1600 x 2400,
+# gray and colour) at 2 CPUs, then at all of the runner's, 1 GB each time.
+# Speed-up per CPU: (pages a second on all of them / on 2) / (CPUs / 2).
+# 1 is perfect; indexing and each book's last pages run on fewer threads.
+scaling_min = 0.7
+
 # Static assets, summed per group. Groups with no files yet pass at 0.
 [[assets]]
 name = "Library CSS"  # every page but the readers: library, series, search, settings, accounts, organising

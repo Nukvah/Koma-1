@@ -29,7 +29,8 @@ docker build -t koma:dev . && cargo xtask budgets --image koma:dev
 ## Budgets
 
 [budgets.toml](../budgets.toml) holds every budget: image size, idle memory, time
-to first byte, cold start, CSS and JavaScript sizes, page size. CI builds the
+to first byte, cold start, CSS and JavaScript sizes, page size, and how the
+worker's speed grows with CPUs. CI builds the
 image on ARM64 and x86_64 and runs `cargo xtask budgets` in a container capped
 at 2 CPUs and 1 GB; any budget exceeded fails the pull request. A budget may be
 raised only with a `Budget change:` line in the pull request saying why.
@@ -40,6 +41,17 @@ folder. Time to first byte is timed on a reader page and on a page image found
 by following links from `/`, and the `[[pages]]` sizes are those of the pages
 it serves. The containers run as the host's user so the runner can clean up
 what they write.
+
+The worker's speed is timed apart, on a library of its own: two books of 16
+made-up pages, 1600 x 2400, gray line art and colour, so every width of copy
+is made. `koma scan` makes their copies at 2 CPUs, then at all of the
+runner's, with 1 GB both times; the report shows pages a minute at each, and
+the budget holds the speed-up per CPU (`[worker] scaling_min`: the speed-up
+divided by the ratio of CPUs, 1 being perfect). On a 4-CPU machine:
+45 pages a minute at 2 CPUs, 85 at 4, a speed-up per CPU of 0.94. Pages run
+in parallel within a book, and books one after another, so a book's last
+pages run on fewer threads than there are CPUs: books of a few pages scale
+less well.
 
 ## Test libraries
 
