@@ -575,6 +575,32 @@ fn index_job(
     Ok(())
 }
 
+/// Indexes the one book at `rel` at once (an upload just filed), without
+/// waiting for the next scan; its page variants follow at the next pass.
+/// Returns its id, or why it could not be read.
+pub fn index_now(
+    library: &Path,
+    data: &Path,
+    catalog: &mut Catalog,
+    rel: &str,
+) -> Result<i64, String> {
+    let blobs = BlobStore::new(data);
+    let mut report = ScanReport::default();
+    index_job(library, &blobs, catalog, rel, &mut report).map_err(|e| e.to_string())?;
+    if report.failed > 0 {
+        let why = catalog
+            .errors()
+            .ok()
+            .and_then(|all| all.into_iter().find(|(p, _)| p == rel).map(|(_, e)| e))
+            .unwrap_or_else(|| "it could not be read".into());
+        return Err(why);
+    }
+    match catalog.book_at(rel).map_err(|e| e.to_string())? {
+        Some((id, _, _)) => Ok(id),
+        None => Err("it could not be read".into()),
+    }
+}
+
 /// Where a book at `rel` belongs, as the scan would place it: its folder,
 /// name, and series `(key, name)`. `photos`: a photo folder.
 pub(crate) fn place_of(rel: &str, photos: bool) -> (String, String, (String, String)) {

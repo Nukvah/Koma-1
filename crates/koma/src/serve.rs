@@ -62,6 +62,8 @@ pub struct AppState {
 
 struct Inner {
     library: PathBuf,
+    /// The data folder (`/data`).
+    data: PathBuf,
     blobs: BlobStore,
     db: PathBuf,
     /// Idle read-only connections; one is opened whenever none is free.
@@ -71,6 +73,9 @@ struct Inner {
     accounts_idle: Mutex<Vec<Accounts>>,
     auth: auth::Config,
     setup_code: OnceLock<String>,
+    /// Where uploads wait for the worker, and those being written.
+    staging: crate::staging::Staging,
+    upload_busy: crate::upload::Busy,
 }
 
 impl AppState {
@@ -83,6 +88,7 @@ impl AppState {
         Self {
             inner: Arc::new(Inner {
                 library: paths.library.clone(),
+                data: paths.data.clone(),
                 blobs: BlobStore::new(&paths.data),
                 db: paths.data.join("koma.db"),
                 idle: Mutex::new(Vec::new()),
@@ -90,6 +96,8 @@ impl AppState {
                 accounts_idle: Mutex::new(Vec::new()),
                 auth,
                 setup_code: OnceLock::new(),
+                staging: crate::staging::Staging::new(&paths.data),
+                upload_busy: crate::upload::Busy::default(),
             }),
         }
     }
@@ -97,6 +105,19 @@ impl AppState {
     /// The library folder, for plans that look at the disk.
     pub(crate) fn library_root(&self) -> PathBuf {
         self.inner.library.clone()
+    }
+
+    /// The data folder: the upload log is in it.
+    pub(crate) fn data_dir(&self) -> &Path {
+        &self.inner.data
+    }
+
+    pub(crate) fn staging(&self) -> &crate::staging::Staging {
+        &self.inner.staging
+    }
+
+    pub(crate) fn upload_busy(&self) -> &crate::upload::Busy {
+        &self.inner.upload_busy
     }
 
     pub(crate) fn auth(&self) -> &auth::Config {
@@ -248,6 +269,19 @@ pub fn router(state: AppState) -> Router {
         .route("/jobs", get(curate::jobs_page))
         .route("/jobs/events", get(curate::job_events))
         .route("/jobs/{id}/{action}", post(curate::job_action))
+        .route("/add", get(crate::upload::add_page))
+        .route("/uploads", get(crate::upload::log_page))
+        .route("/up", post(crate::upload::start))
+        .route("/up/plan", post(crate::upload::plan))
+        .route("/up/commit", post(crate::upload::commit))
+        .route(
+            "/up/{id}",
+            get(crate::upload::status)
+                .patch(crate::upload::append)
+                .delete(crate::upload::cancel),
+        )
+        .route("/up/{id}/m", axum::routing::put(crate::upload::member))
+        .route("/up/{id}/done", post(crate::upload::finish))
         .route("/search", get(search))
         .route("/a/{file}", get(stylesheet))
         .route("/s/{id}", get(series))
@@ -645,6 +679,8 @@ async fn stylesheet(UrlPath(file): UrlPath<String>) -> Result<Response, Failure>
         ("text/javascript; charset=utf-8", html::EPUB_JS)
     } else if url == curate::curator_js_url() {
         ("text/javascript; charset=utf-8", curate::CURATOR_JS)
+    } else if url == crate::upload::upload_js_url() {
+        ("text/javascript; charset=utf-8", crate::upload::UPLOAD_JS)
     } else if url == crate::pages::account_js_url() {
         ("text/javascript; charset=utf-8", crate::pages::ACCOUNT_JS)
     } else {

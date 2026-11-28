@@ -9,6 +9,7 @@ pub mod page;
 pub mod sevenz;
 pub mod size;
 pub mod zip;
+pub mod zipout;
 
 use std::io;
 

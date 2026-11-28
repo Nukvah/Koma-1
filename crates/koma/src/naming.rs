@@ -135,7 +135,7 @@ pub fn build(p: &Parts, widths: Widths) -> String {
 }
 
 /// A name with characters no file name may hold replaced.
-fn clean(s: &str) -> String {
+pub fn clean(s: &str) -> String {
     s.chars()
         .map(|c| {
             if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() {
@@ -179,7 +179,7 @@ pub struct Row {
 }
 
 /// The most common value of a list, if any.
-fn most_common(values: impl IntoIterator<Item = String>) -> Option<String> {
+pub fn most_common(values: impl IntoIterator<Item = String>) -> Option<String> {
     let mut counts: HashMap<String, usize> = HashMap::new();
     let mut order = Vec::new();
     for v in values {

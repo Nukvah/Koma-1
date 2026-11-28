@@ -182,6 +182,7 @@ button:focus-visible,select:focus-visible,summary:focus-visible{outline:2px soli
 .plan td{padding:5px 10px;border-bottom:1px dashed var(--line);vertical-align:top;overflow-wrap:anywhere}
 .plan .from{color:var(--dim);text-decoration:line-through}
 .plan .to{color:var(--bright)}
+.plan th{padding:12px 10px 4px;text-align:left}
 .plan .warn td{background:color-mix(in srgb,#E5534B 12%,transparent)}
 .meter{height:10px;background:var(--bg);border:1px solid var(--line2)}
 .meter i{display:block;height:100%;width:var(--p);background:var(--accent)}

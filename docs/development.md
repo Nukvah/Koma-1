@@ -572,6 +572,63 @@ docs/design (select, move, jobs, trash, details).
   page, then undone, give back byte-identical paths, contents and folders. It also covers padding, clashes,
   the fix-up queue, and the tidy.
 
+## Uploads
+
+`koma::drops` plans what a drop becomes (rules in docs/design/README.md, "Uploads"): a pure function of
+the dropped paths and sizes, the text of any `metadata.json` or `ComicInfo.xml` among them, where it was
+dropped (a library, a collection or cosplayer, a series or set) and the library's kind. Nothing is read
+from the disk, so the plan the browser shows is the one the worker carries out.
+
+- `drops::plan` gives the jobs: a dropped file sent as it is (`File`), or images packed into one archive
+  (`Pack`: pages in natural order, metadata files after), each with its place (an existing series, or
+  `[collection/]folder` in the library); and the files refused (CBR until M11, videos outside cosplay
+  libraries) and ignored (hidden, `__MACOSX`, `Thumbs.db`, `..`, other files). Folders are read in natural
+  order, so the plan does not depend on the order the browser listed them in.
+- Cosplay sets are placed by `drops::where_set` from the folders down to them: the first name that says
+  `Cosplayer - Set`, else the last three folders as cosplayer, set and variant.
+- `drops::name_to_standard` gives each job its name under the naming standard, from its own name, its
+  metadata, the other files landing with it and what the library already knows there (`Known`), or a note
+  why it keeps its dropped name (no number in a series of several, two files alike, a set with no
+  cosplayer). A cosplay name reads back through `names::cosplay_name` as the place it lands in, so the tidy
+  leaves it there. CB7 lands as CBZ either way.
+- `koma::staging` keeps uploads in `<data>/uploads` until the worker files them: `<id>.part` (the bytes so
+  far) and `<id>.json` (owner, library, kind, name, size, drop). A file is sent in pieces, each at the
+  offset the server has; a body cut off keeps what arrived. A pack is a stored ZIP built as its images
+  arrive (`archive::zipout`, ZIP64 when an offset or the directory needs it): each image goes to a file of
+  its own first (its CRC and size go before it), so one cut off is dropped and sent again. Uploads
+  untouched for a day are swept when the next starts.
+- `koma::upload` is the JSON API over it (`/up`, see the module). Only the account that started an upload
+  sees it; adding needs a library the viewer may organise. Bytes are written by a task of their own, so a
+  dropped request leaves the upload whole; until it ends the upload answers 409 “busy”.
+- `POST /up/plan` answers the plan for a drop with, for each file, the folder it lands in (`path`), whether
+  that series is new, and its standard name (`to`) from what the catalogue knows there (`Known`: the
+  series' name, its most common author, circle and language, its numbers). `POST /up/commit` hands
+  finished uploads to the worker as one `upload` change (`{upload, path, name}` each, checked: a safe place
+  in the library, an upload of the viewer's for that library), with what failed in the browser.
+- The worker files a drop (`organise`, kind `upload`; `koma::filing`): each upload checked as ingest reads
+  a book (the ZIP index, every page's size and CRC; an EPUB's container), a CB7 rewritten as a stored CBZ
+  first, skipped when a file with the same bytes is in the folder already (sizes, then BLAKE3), numbered
+  `(2)` on a clash of names, moved in (a rename, or a copy synced to disk across drives), indexed at once
+  (`scan::index_now`) and journaled as `add`. Undo sends each added book to the trash. A damaged archive
+  says what is wrong: an index that points to the wrong places, a page cut off, or a page whose bytes
+  differ from its checksum.
+- `koma::uplog` writes the upload log, `<data>/logs/uploads-YYYY-MM.log`: one entry per drop, files that
+  went in fine only counted, every failure (the worker's and the browser's) on a line with its reason.
+  The change's message on `/jobs` is the same summary.
+- The pages: `GET /add?l=<library>[&c=<collection>]` or `?s=<series>` is the drop zone (also file and
+  folder pickers); `assets/curator/upload.js` reads the drop by name, asks `/up/plan`, shows the review
+  sheet (each file's place and name, a switch for the standard names, a box per file), then sends files in
+  8 MiB pieces and packs image by image, retrying with backoff and resuming at the server's offset, and
+  commits. `GET /uploads[?m=YYYY-MM]` shows the log: each account its own drops and those to libraries it
+  may organise. Not built yet: dropping straight onto a library or series page (the series page links to
+  `/add?s=`), and a log entry for an upload the browser never finished (it is swept after a day).
+- `tests/upload.rs` is the other half of M8's exit check: a 2 GB upload cut twice (at 700 MB and 1.5 GB)
+  and resumed arrives byte for byte (`koma_fixtures::bulk` makes bytes from their offset, so nothing is
+  kept in memory); also packs, refusals and privacy, and a drop planned, sent, filed (CB7 converted, a
+  duplicate skipped, a damaged archive refused, the log written), shown on the pages and undone.
+- `tests/drops.rs` is half of M8's exit check: the golden set `tests/drops_golden.json` (25 made-up drops)
+  gives exactly the expected plans; it also checks the standard names.
+
 ## Serving
 
 `koma serve` (`koma::serve`) opens the catalogue read-only and renders HTML

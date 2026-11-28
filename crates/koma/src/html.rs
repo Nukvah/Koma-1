@@ -117,6 +117,7 @@ pub(crate) fn shell(title: &str, libraries: &[Library], here: &Here<'_>, main: &
     );
     for (name, href) in [
         ("library", "/"),
+        ("add files", "/add"),
         ("jobs", "/jobs"),
         ("trash", "/trash"),
         ("settings", "/settings"),
@@ -757,7 +758,7 @@ pub fn series(
     if view.organise && !view.select {
         let _ = write!(
             m,
-            "<a class=btn href=\"/move?s={id}\">move or rename</a><a class=btn href=\"/naming?s={id}\">naming</a>\
+            "<a class=btn href=\"/move?s={id}\">move or rename</a><a class=btn href=\"/naming?s={id}\">naming</a><a class=btn href=\"/add?s={id}\">add files</a>\
              <form method=post action=/organise><input type=hidden name=s value={id}>\
              <button class=\"btn danger\" type=submit name=action value=trash-series>delete series</button></form>",
             id = series.id

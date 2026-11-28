@@ -7,11 +7,13 @@
 //! - [`sevenz`]: 7z archives (CB7). Writing LZMA from scratch is out of scope,
 //!   so these use the same crate Koma-1 reads them with; the reading order and
 //!   bytes they are checked against still come from here;
+//! - [`bulk`]: large files whose bytes follow from their offset;
 //! - [`library`]: a whole library of made-up series, with the reading order
 //!   every book is expected to have.
 //!
 //! Every title and name here is invented.
 
+pub mod bulk;
 pub mod checksum;
 pub mod epub;
 pub mod library;
