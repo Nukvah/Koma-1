@@ -12,10 +12,12 @@ Each wave is a few small pull requests, each green before the next starts.
 | 1a | AVIF page variants next to WebP and JPEG | done (PR 35) |
 | 1b | Variant widths as a library setting | done (PR 35) |
 | 1c | jpegli (`koma-jpegli`) against `jpeg-encoder`, measured on made-up pages; switch only if it wins | done: switched (variants version 2) |
-| 1d | The worker in parallel: pages on every core it is given, at low priority (see [Threading](#threading)) | next |
-| 2a | Managed storage: originals in the blob store by hash; uploads stored there; folders and names in the catalogue (see [Managed storage](#managed-storage)) | to do |
-| 2b | Import of a folder: a job the admin starts, dry run first; hard links or copies | to do |
-| 2c | Takeout: stored ZIPs under 4 GiB with a checksum manifest, resumable; imports back | to do |
+| 1d | The worker in parallel: `--concurrency`, low priority, pages on every core with the same bytes; a throughput budget (see [Threading](#threading)) | next |
+| 2a | Roles: admin, user, guest (see [Libraries](#managed-storage)) | to do |
+| 2b | Koma-1 owns the library folder: under `/data`, nothing else writes there; the import job (dry run; hard links or copies); no more following outside changes | to do |
+| 2c | Explicit libraries: catalogue rows, setup's second step, library pages; taking libraries away (trash, notice) | to do |
+| 2d | Originals by hash: names and folders only in the catalogue, organising moves no bytes, duplicates stored once and never reported | to do |
+| 2e | Takeout: stored ZIPs under 4 GiB, checksum manifest, byte ranges; the takeout offers of 2c; the exit check | to do |
 | 3a | Presets and the book converter, with kept originals and Undo | to do |
 | 3b | Auto-convert new uploads; a night window with Run now | to do |
 | 4a | The optimize sheet: per series, collection, selection or library; estimates per preset from sample pages; a before-and-after compare | to do |
@@ -271,7 +273,7 @@ always current. No mirror folder, no WebDAV; nothing outside Koma-1 sees the
 stored files. Takeout's resumable downloads and M12's download API share the
 same byte ranges.
 
-**Takeout (2c).** The plan of a takeout puts books into chunks of under
+**Takeout (2e).** The plan of a takeout puts books into chunks of under
 4 GiB (classic ZIP, stored: books are compressed already), in library and
 series order, with fewer than 65,535 entries each; a book bigger than a chunk
 gets a chunk of its own, in ZIP64. In each chunk: the folder tree with the
@@ -286,6 +288,59 @@ and ZIP64 already.
 **Exit check.** A made-up library imported by hard links takes no new space
 for originals; its takeout, imported into an empty Koma-1, gives the same
 books (hashes), names and metadata.
+
+## The next pull requests
+
+One pull request a row, each green and leaving Koma-1 working, in this
+order. Each screen that is new or changed gets its design page in
+`docs/design/` first, in the same pull request (the roadmap's "design
+before build").
+
+1. **1d, parallel worker.** `--concurrency` / `KOMA_CONCURRENCY` (default
+   `available_parallelism()`); nice 19 and the idle I/O class at start
+   (`rustix`); `variants::run_job` makes pages on a thread pool, admitted by
+   their decoded size, the catalogue written by one thread. Tests: one
+   thread and four make the same bytes; the kill test still finishes. A
+   throughput measure in `cargo xtask budgets` at 2 CPUs and all of them.
+   Small, and nothing depends on it, so it goes first: `VERSION` 2's remake
+   then runs on every core.
+2. **2a, roles.** `Role` becomes admin, user, guest; a new account is a
+   guest; the admin hands the role to any account and becomes a user;
+   `may_organise`: shared is the admin's, private its owner's (while
+   private libraries are still `~name` folders, a guest owns none).
+   accounts.db starts over. Pages: users and setup. Independent of storage.
+3. **2b, Koma-1 owns the library folder.** The library moves under the data
+   (`<data>/library`) and only the worker writes it; `/library` is no longer
+   mounted. Books arrive by upload (as now) or by the import job (dry run:
+   books, whether hard links work and why not, the space a copy takes).
+   Rescans that follow outside changes go: `scan.rs`'s matching of moved and
+   renamed books, the grace period, `tests/stable_ids.rs`; the periodic scan
+   becomes `scrub`. Everything else works as before, on a tree Koma-1 owns:
+   organising and renames still move files, through the journal.
+4. **2c, explicit libraries.** A `libraries` table (name, kind, owner
+   account or shared, the settings now in `library_settings`); series point
+   at a library id, and `libraries.rs`' folder rules go. Setup's second
+   step; pages to make, rename and remove libraries (shared ones the
+   admin's, private ones their owner's). Making a user a guest, or removing
+   an account, sends their private libraries to the trash with the warning
+   and the notice; the takeout offer waits for 2e.
+5. **2d, originals by hash.** Books point at their original's blob; folders
+   and names live only in the catalogue, so `organise.rs` and `rename.rs`
+   change rows, and the journal records rows. The trash keeps rows; a blob
+   goes when nothing points at it after the keep time. A book already
+   stored is stored once, and never reported across libraries. Pages are
+   served from the blob as they were from the file.
+6. **2e, takeout.** Byte ranges in `download.rs` (shared with M12); the
+   takeout job, its chunks and manifest; the takeout offers of 2c; import
+   reads a takeout. M9's storage exit check: a library imported by hard
+   links takes no new space; its takeout, imported into an empty Koma-1,
+   gives the same books, names and metadata.
+
+Then wave 3 (the converter, on 2d's blobs) and wave 4.
+
+Why 2b before 2c and 2d: owning the folder first keeps every M6 to M8
+feature working unchanged, and deletes the guessing code early; 2c and 2d
+then change how libraries and names are kept, one at a time.
 
 ## Notes for the converter (wave 3)
 
