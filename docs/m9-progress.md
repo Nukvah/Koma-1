@@ -217,6 +217,24 @@ test books are imported again. Its catalogue schema can start over too:
 older catalogues are dropped and rebuilt, as those before schema 7 were, so
 no in-place migration is written for it.
 
+**Libraries (owner's decision).** A library is a catalogue row, not a
+folder: name, kind (manga, comics, cosplay: how names are read, the reading
+direction) and either an owner (an account id) or shared. The folder rules
+of `libraries.rs` go: the default `""` library for books loose at the top,
+`~name` folders for private libraries, the kind read from the folder name.
+- Setup (`docs/design/setup.html`): after the admin's account, a second step
+  makes its first library, private by default with "shared" as a choice;
+  until then every page leads there, as for the account today. Then the
+  library page offers upload, or import into it.
+- Who sees and organises what stays as `curate::may_organise` has it: a
+  private library is seen and organised by its owner alone, whatever their
+  role (the admin does not see others' private libraries); a shared one is
+  seen by everyone and organised by curators and the admin.
+- Every upload and import goes into a library chosen first.
+- A book stored once for two libraries is never mentioned to anyone: saying
+  "already there" across accounts would tell what is in a private library.
+  Duplicates are only reported within the library being added to.
+
 **Other apps (owner's decision).** Two ways out, nothing else: takeout, for
 everything at once, and OPDS (M12), for reader apps, one book at a time and
 always current. No mirror folder, no WebDAV; nothing outside Koma-1 sees the

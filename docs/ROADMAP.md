@@ -196,6 +196,9 @@ Goal: save disk space when you decide to, and see where it went.
 - Managed storage (manifesto, principle 9): originals stored by hash in the blob store,
   where only the worker writes; folders and names become the catalogue's, so organising,
   renames and the trash move no bytes. The M6 to M8 features keep working on it.
+- Libraries are explicit: setup makes the admin, then its first library (name, kind,
+  private or shared; private by default), and every book is in one. An owner is an account,
+  not a `~name` folder, so it survives a rename; there is no default library.
 - Import of a folder as a job the admin starts, with a dry run first: how many books,
   whether hard links will work (or why not) and the space a copy would take. Hard links on
   the same mount, copies otherwise; a book already stored is not stored again *(proven)*.
