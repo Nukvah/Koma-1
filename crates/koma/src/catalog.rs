@@ -1997,6 +1997,15 @@ impl Catalog {
         rows.collect()
     }
 
+    /// A page's pixels (width times height), if its size is known: what
+    /// decoding it will take (`variants::run_job`).
+    pub fn page_pixels(&self, hash: &blake3::Hash) -> Result<Option<u64>, Error> {
+        self.conn
+            .prepare_cached("SELECT MAX(width * height) FROM pages WHERE hash = ?1")?
+            .query_row([hash.as_bytes()], |r| r.get::<_, Option<i64>>(0))
+            .map(|p| p.map(|p| p.max(0) as u64))
+    }
+
     /// Records a page's variants (`(width, height, format, length)`; their
     /// blobs already written), made with `version` in `formats` (bits of
     /// `variants::Format::bit`) for `widths` (bits of `variants::width_bit`),

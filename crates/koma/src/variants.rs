@@ -5,7 +5,7 @@
 //!   always served as it is, so a page no wider than 720 pixels has none.
 //! - A page that gets those also gets a thumbnail, [`THUMB`] wide, for the
 //!   reader's thumbnails and scrubber. Pages made before thumbnails get
-//!   theirs from their 720 JPEG ([`run_job`]), not from the original again.
+//!   theirs from their 720 WebP ([`run_job`]), not from the original again.
 //! - A variant no smaller than the original is dropped: the original serves.
 //! - Each width in JPEG (quality [`JPEG_QUALITY`]), WebP (quality
 //!   [`WEBP_QUALITY`]) and AVIF (quality [`AVIF_QUALITY`], speed
@@ -28,6 +28,8 @@ use std::fs::{self, File};
 use std::io::{self, Cursor, Write};
 use std::os::unix::fs::FileExt;
 use std::path::{Component, Path};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, mpsc};
 
 use fast_image_resize::images::Image;
 use fast_image_resize::{FilterType, PixelType, ResizeAlg, ResizeOptions, Resizer};
@@ -56,7 +58,9 @@ pub const WEBP_QUALITY: f32 = 80.0;
 /// fastest speed. On a made-up line-art page 1440 wide, speed 10 took a
 /// fifth of speed 6's time for a file 13% bigger, still smaller than the
 /// WebP one; variants are made for every page, so time wins here. One
-/// thread, as for everything else the worker makes.
+/// thread per encode: ravif would make as many tiles as threads, so the
+/// bytes would depend on the machine. Pages run in parallel instead
+/// ([`run_job`]).
 pub const AVIF_QUALITY: f32 = 70.0;
 pub const AVIF_SPEED: u8 = 10;
 
@@ -455,6 +459,8 @@ fn encode_avif(data: &[u8], width: u32, height: u32, gray: bool) -> Result<Vec<u
     ravif::Encoder::new()
         .with_quality(AVIF_QUALITY)
         .with_speed(AVIF_SPEED)
+        // One thread, so one tile: the same bytes on every machine.
+        .with_num_threads(Some(1))
         .encode_rgb(ravif::Img::new(&rgb[..], w, h))
         .map(|e| e.avif_file)
         .map_err(|e| Error::Encode(e.to_string()))
@@ -483,64 +489,248 @@ pub enum JobEnd {
     Stopped,
 }
 
-/// Makes the variants of every page of the book at `rel` that lacks them,
-/// one page at a time. Each page's variants are written and recorded before
-/// the next is started, so a worker killed mid-book only redoes that page.
-/// Returns the job's end and how many pages were done.
+/// How many pages the worker makes at once: 0 (the default) for one per CPU
+/// the process may use ([`std::thread::available_parallelism`], which
+/// follows a container's CPU quota). Set once at start, from
+/// `--concurrency`.
+static WORKERS: AtomicUsize = AtomicUsize::new(0);
+
+/// Sets how many pages are made at once; 0: one per CPU.
+pub fn set_workers(n: usize) {
+    WORKERS.store(n, Ordering::Relaxed);
+}
+
+/// How many pages are made at once.
+pub fn workers() -> usize {
+    match WORKERS.load(Ordering::Relaxed) {
+        0 => std::thread::available_parallelism().map_or(1, |n| n.get()),
+        n => n,
+    }
+}
+
+/// What making a page in flight may cost in memory: twice its decoded
+/// pixels (the decoded page, and the resized copy and encoder buffers next
+/// to it). A page of unknown size counts as the largest allowed.
+fn page_cost(pixels: Option<u64>, limits: &Limits) -> u64 {
+    pixels.unwrap_or(limits.max_pixels).saturating_mul(3 * 2)
+}
+
+/// The memory pages in flight may take together: half of what the process
+/// may use (its cgroup's limit, else the machine's memory), so the
+/// catalogue, the page cache and `koma serve` keep the rest. One page always
+/// runs, whatever it costs.
+fn memory_budget() -> u64 {
+    let limit = [
+        "/sys/fs/cgroup/memory.max",
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+    ]
+    .iter()
+    .filter_map(|p| fs::read_to_string(p).ok())
+    .find_map(|s| s.trim().parse::<u64>().ok());
+    let total = fs::read_to_string("/proc/meminfo").ok().and_then(|m| {
+        m.lines()
+            .find_map(|l| l.strip_prefix("MemTotal:"))
+            .and_then(|v| v.trim().trim_end_matches("kB").trim().parse::<u64>().ok())
+            .map(|kb| kb * 1024)
+    });
+    match (limit, total) {
+        (Some(l), Some(t)) => l.min(t),
+        (Some(l), None) => l,
+        (None, Some(t)) => t,
+        (None, None) => 1 << 30,
+    }
+    .max(1 << 20)
+        / 2
+}
+
+/// A page handed to a thread that makes variants.
+struct Task {
+    hash: blake3::Hash,
+    place: PageLocation,
+    widths: u8,
+    cost: u64,
+}
+
+/// What a thread made of a page.
+enum Made {
+    /// Its file could not be read (changed or gone since it was indexed).
+    Unreadable(String),
+    /// Its variants, written to the blob store: `(width, height, format,
+    /// length)` each, or why it has none.
+    Done(Result<Vec<(u32, u32, &'static str, u64)>, Error>),
+    /// A variant could not be written.
+    Failed(ScanError),
+}
+
+/// Reads one page, makes its variants and writes their blobs: everything
+/// but the catalogue, so that it can run on any thread. A panic in a decoder
+/// or an encoder is the page's error, not the worker's end.
+fn make_page(library: &Path, blobs: &BlobStore, limits: &Limits, task: &Task) -> Made {
+    let bytes = match read_page(library, blobs, &task.hash, &task.place) {
+        Ok(b) => b,
+        Err(e) => return Made::Unreadable(e.to_string()),
+    };
+    let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        make_some(&bytes, limits, task.widths, true, &Format::ALL)
+    }))
+    .unwrap_or_else(|_| Err(Error::Encode("the encoder failed".into())));
+    drop(bytes);
+    let variants = match made {
+        Ok(v) => v,
+        Err(e) => return Made::Done(Err(e)),
+    };
+    let mut rows = Vec::with_capacity(variants.len());
+    for v in &variants {
+        if let Err(e) = write_blob(blobs, &task.hash, v) {
+            let path = blobs.variant_path(&task.hash, v.width, VERSION, v.format.ext());
+            return Made::Failed(ScanError::Io(path, e));
+        }
+        rows.push((v.width, v.height, v.format.ext(), v.bytes.len() as u64));
+    }
+    Made::Done(Ok(rows))
+}
+
+/// Makes the variants of every page of the book at `rel` that lacks them.
+/// Pages are made [`workers`] at a time, as long as their decoded sizes fit
+/// [`memory_budget`]; each page is still made on one thread, so its variants
+/// are the same bytes however many run. The catalogue is written here alone:
+/// each page's variants are recorded as soon as it is done, so a worker
+/// killed mid-book redoes only the pages it was on. `one_at_a_time` makes
+/// them in order, one by one: a job the worker died on is run that way, so
+/// that the page that kills it is the first one left (see
+/// [`give_up_page`]). A stop is honoured between pages: those started are
+/// finished first. Returns the job's end and how many pages were done.
 pub fn run_job(
     library: &Path,
     blobs: &BlobStore,
     catalog: &mut Catalog,
     rel: &str,
     should_stop: &dyn Fn() -> bool,
+    one_at_a_time: bool,
 ) -> Result<(JobEnd, usize), ScanError> {
     let limits = Limits::default();
-    let mut done = 0;
-    for (hash, place) in catalog.pages_lacking_variants(rel, VERSION, WIDTHS[0])? {
-        if should_stop() {
-            return Ok((JobEnd::Stopped, done));
+    let pages = catalog.pages_lacking_variants(rel, VERSION, WIDTHS[0])?;
+    let threads = if one_at_a_time { 1 } else { workers() };
+    let threads = threads.clamp(1, pages.len().max(1));
+    let budget = memory_budget();
+    let (task_tx, task_rx) = mpsc::channel::<Task>();
+    let task_rx = Mutex::new(task_rx);
+    let (made_tx, made_rx) = mpsc::channel::<(Task, Made)>();
+    let (done, stopped) = std::thread::scope(|scope| {
+        for _ in 0..threads {
+            let (task_rx, made_tx, limits) = (&task_rx, made_tx.clone(), &limits);
+            scope.spawn(move || {
+                loop {
+                    let next = task_rx.lock().map(|rx| rx.recv());
+                    let Ok(Ok(task)) = next else { return };
+                    let made = make_page(library, blobs, limits, &task);
+                    if made_tx.send((task, made)).is_err() {
+                        return;
+                    }
+                }
+            });
         }
-        let bytes = match read_page(library, blobs, &hash, &place) {
-            Ok(b) => b,
-            Err(e) => {
-                // The book changed or vanished since it was indexed: the
-                // next scan reads it again, and its new pages get variants.
-                log::info(
-                    "variants: cannot read a page",
-                    &[("path", &place.book_path), ("error", &e.to_string())],
-                );
+        drop(made_tx);
+        let mut pages = pages.into_iter().peekable();
+        let (mut in_flight, mut in_flight_cost) = (0usize, 0u64);
+        let (mut done, mut stopped) = (0, false);
+        let mut failed: Option<ScanError> = None;
+        loop {
+            // Start pages while there is a thread and memory for them.
+            while failed.is_none() && !stopped && in_flight < threads {
+                let Some((hash, _)) = pages.peek() else { break };
+                let cost = match catalog.page_pixels(hash) {
+                    Ok(p) => page_cost(p, &limits),
+                    Err(e) => {
+                        failed = Some(e.into());
+                        break;
+                    }
+                };
+                if in_flight > 0 && in_flight_cost + cost > budget {
+                    break;
+                }
+                if should_stop() {
+                    stopped = true;
+                    break;
+                }
+                let Some((hash, place)) = pages.next() else {
+                    break;
+                };
+                let widths = match remove_older(blobs, catalog, &hash)
+                    .and_then(|()| catalog.wanted_widths(&hash).map_err(ScanError::from))
+                {
+                    Ok(w) => w,
+                    Err(e) => {
+                        failed = Some(e);
+                        break;
+                    }
+                };
+                let task = Task {
+                    hash,
+                    place,
+                    widths,
+                    cost,
+                };
+                if task_tx.send(task).is_err() {
+                    break;
+                }
+                in_flight += 1;
+                in_flight_cost += cost;
+            }
+            if in_flight == 0 {
+                break;
+            }
+            let Ok((task, made)) = made_rx.recv() else {
+                break;
+            };
+            in_flight -= 1;
+            in_flight_cost -= task.cost;
+            if failed.is_some() {
                 continue;
             }
-        };
-        remove_older(blobs, catalog, &hash)?;
-        let widths = catalog.wanted_widths(&hash)?;
-        let made = make_some(&bytes, &limits, widths, true, &Format::ALL);
-        drop(bytes);
-        match made {
-            Ok(variants) => {
-                let mut rows = Vec::with_capacity(variants.len());
-                for v in &variants {
-                    write_blob(blobs, &hash, v).map_err(|e| {
-                        let path = blobs.variant_path(&hash, v.width, VERSION, v.format.ext());
-                        ScanError::Io(path, e)
-                    })?;
-                    rows.push((v.width, v.height, v.format.ext(), v.bytes.len() as u64));
-                }
-                catalog.store_variants(&hash, VERSION, (FORMATS, widths), &rows, None)?;
-            }
-            Err(e) => {
-                if !matches!(e, Error::Unsupported(_)) {
-                    log::error(
-                        "variants: page left as it is",
-                        &[("path", &place.book_path), ("error", &e.to_string())],
+            let (hash, widths) = (&task.hash, task.widths);
+            let stored = match made {
+                Made::Unreadable(e) => {
+                    // The book changed or vanished since it was indexed: the
+                    // next scan reads it again, and its new pages get variants.
+                    log::info(
+                        "variants: cannot read a page",
+                        &[("path", &task.place.book_path), ("error", &e)],
                     );
+                    continue;
                 }
-                let e = e.to_string();
-                catalog.store_variants(&hash, VERSION, (FORMATS, widths), &[], Some(&e))?;
+                Made::Failed(e) => Err(e),
+                Made::Done(Ok(rows)) => catalog
+                    .store_variants(hash, VERSION, (FORMATS, widths), &rows, None)
+                    .map_err(ScanError::from),
+                Made::Done(Err(e)) => {
+                    if !matches!(e, Error::Unsupported(_)) {
+                        log::error(
+                            "variants: page left as it is",
+                            &[("path", &task.place.book_path), ("error", &e.to_string())],
+                        );
+                    }
+                    let e = e.to_string();
+                    catalog
+                        .store_variants(hash, VERSION, (FORMATS, widths), &[], Some(&e))
+                        .map_err(ScanError::from)
+                }
+            };
+            match stored {
+                Ok(()) => done += 1,
+                Err(e) => failed = Some(e),
             }
         }
-        done += 1;
+        drop(task_tx);
+        match failed {
+            Some(e) => Err(e),
+            None => Ok((done, stopped)),
+        }
+    })?;
+    if stopped {
+        return Ok((JobEnd::Stopped, done));
     }
+    let mut done = done;
     let avif = Format::Avif.bit();
     for (hash, place) in catalog.pages_lacking_format(rel, VERSION, WIDTHS[0], avif)? {
         if should_stop() {

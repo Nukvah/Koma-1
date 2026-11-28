@@ -437,8 +437,10 @@ fn a_stop_between_pages_keeps_what_is_done() {
     let mut catalog = Catalog::open(&db(&data)).unwrap();
 
     // Index only, then queue v01's variants alone (two big pages) and stop
-    // after its first: the order books are found in depends on the file
-    // system, so the test picks the book itself.
+    // once one is done: the order books are found in depends on the file
+    // system, so the test picks the book itself. Pages are made several at
+    // once, so its second may be under way by then: it is finished, and
+    // kept, before the job stops.
     let mut report = discover(&lib, &mut catalog, Check::Files).unwrap();
     let db_path = db(&data);
     run_jobs(&lib, &data, &mut catalog, &mut report, &|| {
@@ -454,21 +456,24 @@ fn a_stop_between_pages_keeps_what_is_done() {
         variant_pages_done(&db_path) >= 1
     })
     .unwrap();
-    assert_eq!(report.variant_pages, 1);
-    assert_eq!(catalog.variant_page_count(VERSION).unwrap(), 1);
-    // v01's job is back in the queue, its attempt not counted.
-    assert_eq!(catalog.job_count().unwrap(), 1);
-    let job = catalog.claim_job().unwrap().unwrap();
-    assert_eq!(job.kind, JobKind::Variants);
-    assert_eq!(job.path, "Starfall/Starfall v01.cbz");
-    assert_eq!(job.attempts, 1);
-    catalog.requeue_running().unwrap();
+    let first = report.variant_pages;
+    assert!((1..=2).contains(&first), "{first}");
+    assert_eq!(catalog.variant_page_count(VERSION).unwrap(), first as i64);
+    if first == 1 {
+        // v01's job is back in the queue, its attempt not counted.
+        assert_eq!(catalog.job_count().unwrap(), 1);
+        let job = catalog.claim_job().unwrap().unwrap();
+        assert_eq!(job.kind, JobKind::Variants);
+        assert_eq!(job.path, "Starfall/Starfall v01.cbz");
+        assert_eq!(job.attempts, 1);
+        catalog.requeue_running().unwrap();
+    }
 
     let mut rest = discover(&lib, &mut catalog, Check::Files).unwrap();
     run_jobs(&lib, &data, &mut catalog, &mut rest, &|| false).unwrap();
-    // v01's second page first, then Mirelle Set's page and v02's JPEG; the
-    // page v02 shares with v01 is done by then.
-    assert_eq!(rest.variant_pages, 3);
+    // What v01 had left, then Mirelle Set's page and v02's JPEG; the page
+    // v02 shares with v01 is done by then. Nothing is made twice.
+    assert_eq!(first + rest.variant_pages, 4);
     assert_eq!(catalog.variant_page_count(VERSION).unwrap(), 4);
     assert_eq!(catalog.job_count().unwrap(), 0);
     let _ = fs::remove_dir_all(&root);
@@ -523,7 +528,9 @@ fn a_page_that_kills_the_worker_each_time_is_given_up_alone() {
 fn killing_the_worker_mid_job_then_restarting_finishes_cleanly() {
     let root = temp_root("kill");
     let lib = root.join("library");
-    let pages: Vec<Vec<u8>> = (0..12).map(|n| big_page(100 + n)).collect();
+    // Pages just over 720 wide: a 720 copy and a thumbnail each, the
+    // quickest to make (AVIF is slow in test builds).
+    let pages: Vec<Vec<u8>> = (0..12).map(|n| png::page(780, 1100, 100 + n)).collect();
     cbz(
         &lib.join("Starfall/Starfall v01.cbz"),
         &pages,
@@ -550,8 +557,10 @@ fn killing_the_worker_mid_job_then_restarting_finishes_cleanly() {
         if done >= 2 {
             break done;
         }
+        // The worker runs at nice 19: while the other tests here keep every
+        // CPU busy, it gets little time, as it should.
         assert!(
-            started.elapsed() < Duration::from_secs(120),
+            started.elapsed() < Duration::from_secs(600),
             "no variants made"
         );
         assert!(worker.try_wait().unwrap().is_none(), "worker exited early");

@@ -12,7 +12,8 @@ Each wave is a few small pull requests, each green before the next starts.
 | 1a | AVIF page variants next to WebP and JPEG | done (PR 35) |
 | 1b | Variant widths as a library setting | done (PR 35) |
 | 1c | jpegli (`koma-jpegli`) against `jpeg-encoder`, measured on made-up pages; switch only if it wins | done: switched (variants version 2) |
-| 1d | The worker in parallel: `--concurrency`, low priority, pages on every core with the same bytes; a throughput budget (see [Threading](#threading)) | next |
+| 1d | The worker in parallel: `--concurrency`, low priority, pages on every core with the same bytes (see [Threading](#threading)) | done |
+| 1e | A worker throughput budget: pages a minute at 2 CPUs and at all of them | next |
 | 2a | Roles: admin, user, guest (see [Libraries](#managed-storage)) | to do |
 | 2b | Koma-1 owns the library folder: under `/data`, nothing else writes there; the import job (dry run; hard links or copies); no more following outside changes | to do |
 | 2c | Explicit libraries: catalogue rows, setup's second step, library pages; taking libraries away (trash, notice) | to do |
@@ -153,8 +154,8 @@ What changes, in order:
    the floor.
 2. **The worker yields to `serve`.** Lower the worker's CPU and I/O priority
    at start (nice 19, idle I/O class), so more worker threads never slow a
-   reader down. Needs a safe wrapper for `setpriority` and `ioprio_set`
-   (the workspace forbids `unsafe` outside `koma-webp`); `rustix` has both.
+   reader down. The workspace forbids `unsafe` outside `koma-webp`:
+   `rustix` has a safe `setpriority`, not `ioprio_set` (see "As built").
 3. **Budgets.** The 2 CPU / 1 GB checks stay as they are, as the floor. Add
    a measure of worker throughput (pages a minute on a made-up library) at 2
    CPUs and at all the runner's cores, and a budget that it grows with them.
@@ -166,6 +167,33 @@ What changes, in order:
    whose parallel loop filters give the same bytes as one thread. Measure
    then; it needs rav1e's threading on and a tile count ravif does not take
    from its thread count.
+
+**As built (1d).**
+- `--concurrency` / `KOMA_CONCURRENCY` on `worker` and `scan`: `auto` (one
+  per CPU, `available_parallelism()`) or 1 to 1024 pages at once.
+- The memory budget is half the cgroup's limit (else the machine's memory);
+  a page counts twice its decoded pixels (3 bytes each), one of unknown size
+  as the largest allowed, and one page always runs.
+- A job the worker died on (its second attempt on) runs one page at a time,
+  so `give_up_page` still gives up the page that kills it.
+- A decoder or encoder that panics is that page's error, not the worker's
+  end.
+- Priority: nice 19 at the worker's start, before any thread. The idle I/O
+  class is not set: `ioprio_set` has no safe wrapper (`rustix` lacks it, the
+  `ioprio` crate pulls in `nix`), and with no class set Linux gives a nice 19
+  thread the lowest best-effort I/O priority anyway. Between containers,
+  CPU goes by weight, not nice: docs/running.md gives the worker
+  `cpu_shares: 256`.
+- **Found: AVIF tiles followed the machine.** Without its `threading`
+  feature, ravif still cut each picture into as many tiles as
+  `available_parallelism()`, encoded one after another: AVIF bytes depended
+  on the CPUs of the machine making them, and were a little bigger
+  (251,826 bytes in one tile against 253,117 in four, on a made-up page).
+  `encode_avif` now asks for one thread, so one tile. No `VERSION` change:
+  version 2 is not deployed anywhere yet.
+- `tests/parallel.rs`: one page at a time and four at once make the same
+  rows and bytes. AVIF is slow in test builds (no assembly: about 25 s for a
+  page 1440 wide), so its pages are just over 720 wide.
 
 Consequences: step 1 changes no output, so the library is not made again for
 it. `VERSION` 2 (wave 1c) makes every page again anyway: landing 1d before
@@ -296,14 +324,9 @@ order. Each screen that is new or changed gets its design page in
 `docs/design/` first, in the same pull request (the roadmap's "design
 before build").
 
-1. **1d, parallel worker.** `--concurrency` / `KOMA_CONCURRENCY` (default
-   `available_parallelism()`); nice 19 and the idle I/O class at start
-   (`rustix`); `variants::run_job` makes pages on a thread pool, admitted by
-   their decoded size, the catalogue written by one thread. Tests: one
-   thread and four make the same bytes; the kill test still finishes. A
-   throughput measure in `cargo xtask budgets` at 2 CPUs and all of them.
-   Small, and nothing depends on it, so it goes first: `VERSION` 2's remake
-   then runs on every core.
+1. **1d, parallel worker (done)** and **1e, its throughput budget**: a
+   measure in `cargo xtask budgets`, pages a minute on a made-up library at
+   2 CPUs and at all of the runner's, and a budget that it grows with them.
 2. **2a, roles.** `Role` becomes admin, user, guest; a new account is a
    guest; the admin hands the role to any account and becomes a user;
    `may_organise`: shared is the admin's, private its owner's (while

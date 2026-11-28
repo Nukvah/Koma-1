@@ -61,12 +61,22 @@ where
             auth,
         }) => serve::run(listen, &paths, auth),
         Ok(Command::AccountLink { data, name }) => account_link(&data, &name),
-        Ok(Command::Worker { paths, rescan }) => worker(paths, rescan),
-        Ok(Command::Scan(paths)) => match scan_once(&paths) {
-            Ok(true) => ExitCode::SUCCESS,
-            Ok(false) => ExitCode::from(3),
-            Err(()) => ExitCode::FAILURE,
-        },
+        Ok(Command::Worker {
+            paths,
+            rescan,
+            concurrency,
+        }) => {
+            variants::set_workers(concurrency);
+            worker(paths, rescan)
+        }
+        Ok(Command::Scan { paths, concurrency }) => {
+            variants::set_workers(concurrency);
+            match scan_once(&paths) {
+                Ok(true) => ExitCode::SUCCESS,
+                Ok(false) => ExitCode::from(3),
+                Err(()) => ExitCode::FAILURE,
+            }
+        }
         Ok(Command::Scrub) => {
             log::info("scrub: nothing to check yet", &[]);
             ExitCode::SUCCESS
@@ -314,6 +324,30 @@ fn pass(
     Ok(())
 }
 
+/// Lowers the worker's priority to nice 19 before it starts any thread
+/// (threads take their nice from the one that starts them), so that
+/// `koma serve`, and anything else on the machine, comes first. Linux takes
+/// a thread's I/O priority from its nice when none is set, so this is also
+/// the lowest best-effort I/O priority; the idle I/O class would need a
+/// system call with no safe wrapper. Between containers the kernel shares
+/// CPU by their weight, not by nice: give the worker's a lower one
+/// (docs/running.md). A failure is logged, not fatal.
+fn yield_to_serve() {
+    match rustix::process::setpriority_process(None, 19) {
+        Ok(()) => log::info(
+            "worker: low priority",
+            &[
+                ("nice", "19"),
+                ("pages_at_once", &variants::workers().to_string()),
+            ],
+        ),
+        Err(e) => log::error(
+            "worker: cannot lower its priority",
+            &[("error", &e.to_string())],
+        ),
+    }
+}
+
 /// Known books are checked one by one at most this often; between those
 /// checks a rescan only looks at folder modification times.
 const FILE_CHECK_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
@@ -323,6 +357,7 @@ const FILE_CHECK_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 /// A stop is honoured between jobs; a job cut short by a kill runs again on
 /// the next start.
 fn worker(paths: cli::Paths, rescan: Option<Duration>) -> ExitCode {
+    yield_to_serve();
     let Ok((mut catalog, lock)) = open_for_writing(&paths) else {
         return ExitCode::FAILURE;
     };
