@@ -12,11 +12,16 @@ Each wave is a few small pull requests, each green before the next starts.
 | 1a | AVIF page variants next to WebP and JPEG | done (PR 35) |
 | 1b | Variant widths as a library setting | done (PR 35) |
 | 1c | jpegli (`koma-jpegli`) against `jpeg-encoder`, measured on made-up pages; switch only if it wins | done: switched (variants version 2) |
-| 1d | The worker in parallel: pages on every core it is given, at low priority (see [Threading](#threading)) | next |
-| 2a | Presets and the book converter, with kept originals and Undo | to do |
-| 2b | Auto-convert new uploads; a night window with Run now | to do |
-| 3a | The optimize sheet: per series, collection, selection or library; estimates per preset from sample pages; a before-and-after compare | to do |
-| 3b | The storage page; README, roadmap and docs | to do |
+| 1d | The worker in parallel: `--concurrency`, low priority, pages on every core with the same bytes; a throughput budget (see [Threading](#threading)) | next |
+| 2a | Roles: admin, user, guest (see [Libraries](#managed-storage)) | to do |
+| 2b | Koma-1 owns the library folder: under `/data`, nothing else writes there; the import job (dry run; hard links or copies); no more following outside changes | to do |
+| 2c | Explicit libraries: catalogue rows, setup's second step, library pages; taking libraries away (trash, notice) | to do |
+| 2d | Originals by hash: names and folders only in the catalogue, organising moves no bytes, duplicates stored once and never reported | to do |
+| 2e | Takeout: stored ZIPs under 4 GiB, checksum manifest, byte ranges; the takeout offers of 2c; the exit check | to do |
+| 3a | Presets and the book converter, with kept originals and Undo | to do |
+| 3b | Auto-convert new uploads; a night window with Run now | to do |
+| 4a | The optimize sheet: per series, collection, selection or library; estimates per preset from sample pages; a before-and-after compare | to do |
+| 4b | The storage page; README, roadmap and docs | to do |
 
 ## Decisions already taken
 
@@ -27,7 +32,7 @@ Each wave is a few small pull requests, each green before the next starts.
   in parallel from wave 1d). On a made-up
   1440-wide line-art page speed 10 took 0.8 s against 4.1 s for speed 6,
   for a file 13% bigger that is still smaller than the WebP one. The
-  converter (wave 2) uses the presets' speed 6.
+  converter (wave 3) uses the presets' speed 6.
 - **Covers** stay WebP and JPEG: another `<source>` on every card costs the
   library page's 15 KiB budget.
 - **Kept originals** (owner's choice): kept like the trash. The admin picks
@@ -153,7 +158,7 @@ What changes, in order:
 3. **Budgets.** The 2 CPU / 1 GB checks stay as they are, as the floor. Add
    a measure of worker throughput (pages a minute on a made-up library) at 2
    CPUs and at all the runner's cores, and a budget that it grows with them.
-4. **Within one encode (converter, wave 2, and M10 photo sets).** Not for
+4. **Within one encode (converter, wave 3, and M10 photo sets).** Not for
    variants: ravif sets as many AVIF tiles as threads, so the bytes would
    depend on the machine and files grow a little. Where one huge page is
    the whole job (a 50 MP photo converted at speed 6), use threads inside
@@ -171,7 +176,173 @@ Code that says "one thread" today, to update with step 1: `variants::run_job`
 `crates/koma/src/variants.rs`, `scan::run_jobs` (one job at a time), and
 docs/development.md (page variants).
 
-## Notes for wave 2
+## Managed storage
+
+Owner's decision (manifesto, principle 9): Koma-1 keeps the books, stored by
+hash where nothing else writes; plain files come back through takeout. No
+folder is mounted for Koma-1 to follow: what came from outside comes in once,
+by import.
+
+**What it removes.** Koma-1 no longer guesses what changed while it was not
+looking: no rescans to find changes, no stable ids through outside renames
+and moves (`scan.rs`'s matching, `tests/stable_ids.rs`), no grace period for
+missing folders. Every change is one Koma-1 made, in the journal. The
+periodic scan becomes `scrub`: rehash and repair.
+
+**What changes.**
+- Originals are blobs (`blobs/ab/<hash>.<ext>`), next to the variants. Zero
+  copy serving stays: a stored CBZ is still a file to `sendfile()` a byte
+  range of.
+- A book is a catalogue row pointing at its original's hash, with its
+  library, folder and file name. Organising and the naming standard (M6, M7)
+  edit rows; the journal records old and new rows; the trash is rows with a
+  date, and their blob goes when no row points at it after the keep time.
+- Uploads (M8): `filing.rs` stores into the blob store instead of moving into
+  `/library`.
+- The converter (wave 3) gets simpler: a converted book is a new blob, the
+  book row points at it, the old blob is the kept original; Undo points back.
+- Identical books, uploaded twice or in two libraries, are stored once.
+
+**Import (2b).** A job the admin starts (CLI or the jobs page) reads a
+mounted folder once, with today's reading of folders and names. Its dry run
+says how many books, whether hard links will work or why not ("the folder and
+/data are separate mounts"), and the space a copy would take. Then it stores
+each book: `link()` when the folder is on the
+same mount as `/data`, a copy otherwise (`link()` fails across mount points,
+two Docker bind mounts included, with `EXDEV`). A hard-linked file is still
+the user's: one edited in place changes the stored book, which `scrub` finds
+by its hash.
+
+**No upgrade path (owner's decision).** There are no installs: the only
+library holds test books. Managed storage starts from an empty catalogue, and
+test books are imported again. Its catalogue schema can start over too:
+older catalogues are dropped and rebuilt, as those before schema 7 were, so
+no in-place migration is written for it.
+
+**Libraries (owner's decision).** A library is a catalogue row, not a
+folder: name, kind (manga, comics, cosplay: how names are read, the reading
+direction) and either an owner (an account id) or shared. The folder rules
+of `libraries.rs` go: the default `""` library for books loose at the top,
+`~name` folders for private libraries, the kind read from the folder name.
+- Setup (`docs/design/setup.html`): after the admin's account, a second step
+  makes its first library, private by default with "shared" as a choice;
+  until then every page leads there, as for the account today. Then the
+  library page offers upload, or import into it.
+- Roles (owner's decision), replacing `reader` and `curator`. The read-only
+  role is "guest", not "reader": the reader is the page-reading screen. One rule
+  under them: a shared library is the admin's to keep, a private one its
+  owner's.
+
+  | | Admin (one) | User | Guest |
+  |---|---|---|---|
+  | Read and download shared libraries | yes | yes | yes |
+  | Make, organise and set up shared libraries (upload, import, rename, move, edit, convert, settings) | yes | no | no |
+  | Own private libraries and do anything in them (upload, rename, move, edit, convert, takeout) | yes | yes | no |
+  | Take out a shared library | yes | no | no |
+  | Add and remove accounts, make guests users and users guests | yes | no | no |
+
+  - A private library is seen by its owner alone; the admin does not see
+    others'.
+  - Every account after the admin starts as a guest.
+  - The admin hands the role to any account, a guest included, and becomes
+    a user, in one step. There is always exactly one admin, who cannot be
+    removed or demoted any other way.
+  - Import reads a folder on the server, so it is the admin's, into a shared
+    library or the admin's own; users add books by upload.
+  - `curate::may_organise` becomes: the library is the viewer's own private
+    one, or it is shared and the viewer is the admin.
+  - accounts.db can start over like the catalogue (no installs), so the role
+    names change without a migration.
+- Taking libraries away (owner's decision). Nothing is deleted outright:
+  - Making a user a guest: if they have private libraries, the admin is
+    warned first, with how many and their size (never what is in them):
+    they go to the trash for the keep time. The guest is told at next
+    sign-in that they were made a guest, until when their libraries are
+    kept, and offered a takeout of them meanwhile. Made a user again before
+    the keep time ends, they get them back from the trash.
+  - Removing an account: its private libraries go to the trash for the keep
+    time the same way, and its owner is offered a takeout first.
+- Every upload and import goes into a library chosen first.
+- A book stored once for two libraries is never mentioned to anyone: saying
+  "already there" across accounts would tell what is in a private library.
+  Duplicates are only reported within the library being added to.
+
+**Other apps (owner's decision).** Two ways out, nothing else: takeout, for
+everything at once, and OPDS (M12), for reader apps, one book at a time and
+always current. No mirror folder, no WebDAV; nothing outside Koma-1 sees the
+stored files. Takeout's resumable downloads and M12's download API share the
+same byte ranges.
+
+**Takeout (2e).** The plan of a takeout puts books into chunks of under
+4 GiB (classic ZIP, stored: books are compressed already), in library and
+series order, with fewer than 65,535 entries each; a book bigger than a chunk
+gets a chunk of its own, in ZIP64. In each chunk: the folder tree with the
+standard names and each book's `metadata.json` (edits included). A manifest
+lists the chunks, their files and BLAKE3 hashes. Chunks are streamed, not
+written to disk first: their layout is fixed when planned (CRC-32s computed
+then by the worker), so each can be served with byte ranges and resumed.
+`download.rs` streams whole downloads today, without ranges: ranges are new
+here, and M12's sync API wants them too. `archive::zipout` (M8) writes ZIP
+and ZIP64 already.
+
+**Exit check.** A made-up library imported by hard links takes no new space
+for originals; its takeout, imported into an empty Koma-1, gives the same
+books (hashes), names and metadata.
+
+## The next pull requests
+
+One pull request a row, each green and leaving Koma-1 working, in this
+order. Each screen that is new or changed gets its design page in
+`docs/design/` first, in the same pull request (the roadmap's "design
+before build").
+
+1. **1d, parallel worker.** `--concurrency` / `KOMA_CONCURRENCY` (default
+   `available_parallelism()`); nice 19 and the idle I/O class at start
+   (`rustix`); `variants::run_job` makes pages on a thread pool, admitted by
+   their decoded size, the catalogue written by one thread. Tests: one
+   thread and four make the same bytes; the kill test still finishes. A
+   throughput measure in `cargo xtask budgets` at 2 CPUs and all of them.
+   Small, and nothing depends on it, so it goes first: `VERSION` 2's remake
+   then runs on every core.
+2. **2a, roles.** `Role` becomes admin, user, guest; a new account is a
+   guest; the admin hands the role to any account and becomes a user;
+   `may_organise`: shared is the admin's, private its owner's (while
+   private libraries are still `~name` folders, a guest owns none).
+   accounts.db starts over. Pages: users and setup. Independent of storage.
+3. **2b, Koma-1 owns the library folder.** The library moves under the data
+   (`<data>/library`) and only the worker writes it; `/library` is no longer
+   mounted. Books arrive by upload (as now) or by the import job (dry run:
+   books, whether hard links work and why not, the space a copy takes).
+   Rescans that follow outside changes go: `scan.rs`'s matching of moved and
+   renamed books, the grace period, `tests/stable_ids.rs`; the periodic scan
+   becomes `scrub`. Everything else works as before, on a tree Koma-1 owns:
+   organising and renames still move files, through the journal.
+4. **2c, explicit libraries.** A `libraries` table (name, kind, owner
+   account or shared, the settings now in `library_settings`); series point
+   at a library id, and `libraries.rs`' folder rules go. Setup's second
+   step; pages to make, rename and remove libraries (shared ones the
+   admin's, private ones their owner's). Making a user a guest, or removing
+   an account, sends their private libraries to the trash with the warning
+   and the notice; the takeout offer waits for 2e.
+5. **2d, originals by hash.** Books point at their original's blob; folders
+   and names live only in the catalogue, so `organise.rs` and `rename.rs`
+   change rows, and the journal records rows. The trash keeps rows; a blob
+   goes when nothing points at it after the keep time. A book already
+   stored is stored once, and never reported across libraries. Pages are
+   served from the blob as they were from the file.
+6. **2e, takeout.** Byte ranges in `download.rs` (shared with M12); the
+   takeout job, its chunks and manifest; the takeout offers of 2c; import
+   reads a takeout. M9's storage exit check: a library imported by hard
+   links takes no new space; its takeout, imported into an empty Koma-1,
+   gives the same books, names and metadata.
+
+Then wave 3 (the converter, on 2d's blobs) and wave 4.
+
+Why 2b before 2c and 2d: owning the folder first keeps every M6 to M8
+feature working unchanged, and deletes the guessing code early; 2c and 2d
+then change how libraries and names are kept, one at a time.
+
+## Notes for the converter (wave 3)
 
 - jpegli's JPEGs decode right with `image`; version 1 ones (from
   `jpeg-encoder`) did not in colour (see above). Test pages are still made
@@ -184,5 +355,6 @@ docs/development.md (page variants).
 - Lossless preset: `koma-webp` has lossy encoding only; add a lossless
   function there (libwebp's `WebPEncodeLosslessRGB`).
 - A converted book is a new file with new page hashes: write it to a
-  temporary file, check every page, swap it in through the M6 journal so it
-  keeps its id and progress, and keep the original under the keep time.
+  temporary file, check every page, store it as a blob and point the book at
+  it through the journal, so it keeps its id and progress; the old blob is
+  the kept original (see [Managed storage](#managed-storage)).

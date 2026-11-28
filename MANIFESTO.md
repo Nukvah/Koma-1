@@ -16,7 +16,7 @@ Koma-1 is one statically compiled binary that does almost nothing at request tim
 6. **Archives are hostile input.** Every parser is fuzzed, bounded and sandboxed.
 7. **The UI is a document, not an app.** If an element can be removed without loss, it is removed.
 8. **Boring technology.** SQLite before Postgres, the page cache before Redis, Compose before Kubernetes.
-9. **Your files, carefully.** Koma-1 may rename, add, move and convert files in the library, but only through worker jobs that are planned, previewed, journaled and reversible. Nothing is deleted outright: it goes to a trash with a retention period.
+9. **Koma-1 keeps your books; they stay yours.** Books come in through Koma-1, uploaded or imported once from a folder, and are stored by their hash where nothing else writes. Renames, moves and conversions are worker jobs that are planned, previewed, journaled and reversible. Nothing is deleted outright: it goes to a trash with a retention period. A takeout gives everything back, at any time, as plain files.
 10. **Use the whole machine, run on the smallest.** Work that can run in parallel does, on every core it is given, and gets faster with more of them. 2 CPUs and 1 GB is the floor every release must still meet, not the machine Koma-1 is tuned for. Serving comes first: the worker yields to `serve`, never the reverse.
 
 ---
@@ -57,8 +57,8 @@ Every pull request runs a k6 load test and an image-size check against this tabl
                           koma worker (1+ replicas)
                           scan → hash → index → transcode → write blobs
                                         ▲
-                               /library (CBZ/CB7/CBR/PDF/EPUB/folders;
-                                         read-only for serve, journaled writes by worker)
+                  uploads, one-time imports (CBZ/CB7/CBR/PDF/EPUB/folders)
+                  → originals stored by hash; only the worker writes, through the journal
 ```
 
 ### Runtime
@@ -90,7 +90,9 @@ No cache invalidation, ever. Duplicate pages and archives are stored once.
 - Webtoon strips are sliced into ~2000 px tiles.
 - Width and height are stored for every page so the layout never shifts.
 
-**Library writes.** Only `koma worker` writes to `/library`; `koma serve` mounts it read-only. Every rename, move, upload, conversion or delete is a job: the worker plans it, the UI shows a dry run, the worker applies it and records old and new paths and hashes in an append-only journal, and any batch can be undone from that journal. Uploads land in a separate inbox and pass the same hostile-input checks as ingest before they move in. Books and series keep stable ids through moves and renames, so progress and edits follow them.
+**Managed storage.** Originals are stored like pages, by their BLAKE3 hash, in the blob store, and only `koma worker` writes there; nothing outside Koma-1 changes them, so Koma-1 never has to guess what happened while it was not looking. Books reach it in two ways: uploads, which land in a separate inbox and pass the same hostile-input checks before they are stored, and a one-time import of an existing folder, hard-linked when the folder is on the same mount as the blob store and copied otherwise. Folders, series and file names are the catalogue's: a rename or move changes no bytes. Libraries are the catalogue's too: each has a name, a kind (manga, comics or cosplay) and either an owner, who alone sees and organises it, or is shared, seen by everyone and organised by the admin alone. There is no default library: setup makes the admin's account, then its first library, private unless made shared. Three roles: one **admin** per server, who keeps the shared libraries and the accounts and can hand the role to any account (becoming a user); **users**, who read the shared libraries and keep private libraries of their own, as they please; **guests**, who read and download from the shared libraries. Every account after the admin starts as a guest. Nothing a role change takes away is deleted outright: it goes to the trash, and its owner is told and offered a takeout. Every rename, move, conversion or delete is a job: the worker plans it, the UI shows a dry run, the worker applies it and records old and new names and hashes in an append-only journal, and any batch can be undone from that journal. Books and series keep their ids, so progress and edits follow them.
+
+**Takeout.** A job writes a library, a series or everything out as plain files: the folder tree with the standard names ([docs/naming.md](docs/naming.md)) and each book's `metadata.json`, in ZIP files of under 4 GiB each (stored, classic ZIP, so any tool opens them; a book bigger than that gets one of its own, in ZIP64), with a manifest of checksums. A takeout imports back as it was.
 
 **Metadata** is read at ingest from `metadata.json`, then `ComicInfo.xml` (where both exist, `metadata.json` wins and tags are combined), then the file name. Edits made in Koma-1 are saved in SQLite at once and written into files only on request.
 
@@ -103,9 +105,8 @@ No cache invalidation, ever. Duplicate pages and archives are stored once.
 ## Ingest pipeline
 
 ```
-inotify/fanotify + periodic full scan
-  → quick fingerprint (size + mtime + first/last 64 KB hash)   skip unchanged
-  → full BLAKE3 hash
+upload or import job
+  → full BLAKE3 hash                                           a book already stored is not stored again
   → parse archive (fuzzed parser)
   → page order (natural sort), spread detection (aspect > 1.2 = double page)
   → job queue (SQLite table)
@@ -181,8 +182,7 @@ services:
     user: "65532:65532"
     cap_drop: [ALL]
     volumes:
-      - /srv/manga:/library:ro      # serve never writes
-      - data:/data
+      - data:/data                  # serve never writes
     deploy: { resources: { limits: { memory: 128m } } }
 
   worker:
@@ -190,7 +190,10 @@ services:
     command: ["worker", "--concurrency=auto"]
     read_only: true
     cap_drop: [ALL]
-    volumes: [/srv/manga:/library, data:/data]   # worker applies journaled writes
+    # The only writer of the blob store. To import an existing library with hard
+    # links, the data must be a host folder holding it: /srv/koma:/data, with
+    # the library moved to /srv/koma/import (one mount, so links work).
+    volumes: [data:/data]
     # Any number of CPUs: the worker uses what it is given; 2 is the floor.
     deploy: { resources: { limits: { memory: 512m } } }
 

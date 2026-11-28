@@ -193,6 +193,25 @@ upload survives a dropped connection.
 
 Goal: save disk space when you decide to, and see where it went.
 
+- Managed storage (manifesto, principle 9): originals stored by hash in the blob store,
+  where only the worker writes; folders and names become the catalogue's, so organising,
+  renames and the trash move no bytes. The M6 to M8 features keep working on it.
+- Libraries are explicit: setup makes the admin, then its first library (name, kind,
+  private or shared; private by default), and every book is in one. An owner is an account,
+  not a `~name` folder, so it survives a rename; there is no default library.
+- Roles replace M5's reader and curator, and its folder per account: one admin (the shared
+  libraries and the accounts; hands the role to any account and becomes a user), users
+  (guests with private libraries of their own), guests (read and download the shared
+  ones). A new account is a guest. Making a user a guest sends their private libraries
+  to the trash, after a warning to the admin, and tells them, with a takeout.
+- Import of a folder as a job the admin starts, with a dry run first: how many books,
+  whether hard links will work (or why not) and the space a copy would take. Hard links on
+  the same mount, copies otherwise; a book already stored is not stored again *(proven)*.
+  No upgrade path: there are no installs, so managed storage starts from an empty catalogue.
+- Takeout as a job: a library, series or everything as plain files with the standard
+  names and `metadata.json`, in stored ZIPs under 4 GiB with a checksum manifest,
+  resumable; a takeout imports back as it was *(proven)*. Reader apps get books one at a
+  time, always current, through OPDS (M12); nothing else sees the stored files.
 - Opt-in per series, collection, selection or library; an estimate per preset from sample
   pages and a before-and-after page compare *(proven)*.
 - Presets: Default (AVIF, quality 70, speed 6, full colour, grayscale for black-and-white
@@ -212,7 +231,9 @@ Goal: save disk space when you decide to, and see where it went.
 - A storage page: size per library, space saved, the biggest books not converted yet, kept
   originals and trash *(proven)*.
 
-Exit: converting and undoing a volume restores the original bit for bit, with progress intact.
+Exit: converting and undoing a volume restores the original bit for bit, with progress intact;
+a made-up library imported by hard links takes no new space for its originals, and its
+takeout imported into an empty Koma-1 gives the same books, names and metadata.
 
 ### M10 · Photo sets and video
 
