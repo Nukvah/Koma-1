@@ -226,22 +226,23 @@ of `libraries.rs` go: the default `""` library for books loose at the top,
   makes its first library, private by default with "shared" as a choice;
   until then every page leads there, as for the account today. Then the
   library page offers upload, or import into it.
-- Roles (owner's decision), replacing `reader` and `curator`. One rule
+- Roles (owner's decision), replacing `reader` and `curator`. The read-only
+  role is "guest", not "reader": the reader is the page-reading screen. One rule
   under them: a shared library is the admin's to keep, a private one its
   owner's.
 
-  | | Admin (one) | User | Reader |
+  | | Admin (one) | User | Guest |
   |---|---|---|---|
   | Read and download shared libraries | yes | yes | yes |
   | Make, organise and set up shared libraries (upload, import, rename, move, edit, convert, settings) | yes | no | no |
   | Own private libraries and do anything in them (upload, rename, move, edit, convert, takeout) | yes | yes | no |
   | Take out a shared library | yes | no | no |
-  | Add and remove accounts, make readers users and users readers | yes | no | no |
+  | Add and remove accounts, make guests users and users guests | yes | no | no |
 
   - A private library is seen by its owner alone; the admin does not see
     others'.
-  - Every account after the admin starts as a reader.
-  - The admin hands the role to any account, a reader included, and becomes
+  - Every account after the admin starts as a guest.
+  - The admin hands the role to any account, a guest included, and becomes
     a user, in one step. There is always exactly one admin, who cannot be
     removed or demoted any other way.
   - Import reads a folder on the server, so it is the admin's, into a shared
@@ -251,10 +252,10 @@ of `libraries.rs` go: the default `""` library for books loose at the top,
   - accounts.db can start over like the catalogue (no installs), so the role
     names change without a migration.
 - Taking libraries away (owner's decision). Nothing is deleted outright:
-  - Making a user a reader: if they have private libraries, the admin is
+  - Making a user a guest: if they have private libraries, the admin is
     warned first, with how many and their size (never what is in them):
-    they go to the trash for the keep time. The reader is told at next
-    sign-in that they were made a reader, until when their libraries are
+    they go to the trash for the keep time. The guest is told at next
+    sign-in that they were made a guest, until when their libraries are
     kept, and offered a takeout of them meanwhile. Made a user again before
     the keep time ends, they get them back from the trash.
   - Removing an account: its private libraries go to the trash for the keep

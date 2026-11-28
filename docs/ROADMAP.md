@@ -201,8 +201,8 @@ Goal: save disk space when you decide to, and see where it went.
   not a `~name` folder, so it survives a rename; there is no default library.
 - Roles replace M5's reader and curator, and its folder per account: one admin (the shared
   libraries and the accounts; hands the role to any account and becomes a user), users
-  (readers with private libraries of their own), readers (read and download the shared
-  ones). A new account is a reader. Making a user a reader sends their private libraries
+  (guests with private libraries of their own), guests (read and download the shared
+  ones). A new account is a guest. Making a user a guest sends their private libraries
   to the trash, after a warning to the admin, and tells them, with a takeout.
 - Import of a folder as a job the admin starts, with a dry run first: how many books,
   whether hard links will work (or why not) and the space a copy would take. Hard links on
