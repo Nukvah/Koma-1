@@ -17,6 +17,7 @@ Koma-1 is one statically compiled binary that does almost nothing at request tim
 7. **The UI is a document, not an app.** If an element can be removed without loss, it is removed.
 8. **Boring technology.** SQLite before Postgres, the page cache before Redis, Compose before Kubernetes.
 9. **Your files, carefully.** Koma-1 may rename, add, move and convert files in the library, but only through worker jobs that are planned, previewed, journaled and reversible. Nothing is deleted outright: it goes to a trash with a retention period.
+10. **Use the whole machine, run on the smallest.** Work that can run in parallel does, on every core it is given, and gets faster with more of them. 2 CPUs and 1 GB is the floor every release must still meet, not the machine Koma-1 is tuned for. Serving comes first: the worker yields to `serve`, never the reverse.
 
 ---
 
@@ -30,7 +31,8 @@ Koma-1 is one statically compiled binary that does almost nothing at request tim
 | Page turn felt by the reader | 0 ms (next page is already decoded) |
 | Library HTML page | < 15 KB, with or without JS |
 | Cold start | < 200 ms |
-| Smallest hardware | 50 concurrent readers within 2 CPUs and 1 GB of memory on ARM64 |
+| Smallest hardware (the floor) | 50 concurrent readers within 2 CPUs and 1 GB of memory on ARM64 |
+| More hardware | ingest and conversion throughput grows with the cores the worker is given |
 | Scale-out | add nodes, change nothing else |
 
 Every pull request runs a k6 load test and an image-size check against this table.
@@ -107,7 +109,8 @@ inotify/fanotify + periodic full scan
   → parse archive (fuzzed parser)
   → page order (natural sort), spread detection (aspect > 1.2 = double page)
   → job queue (SQLite table)
-  → variants: decode, resize, encode (one page at a time), nice 19, ionice idle
+  → variants: decode, resize, encode; pages in parallel, one per core the worker
+    is given (--concurrency, default: all of them), nice 19, ionice idle
 ```
 
 Ingest may be slow. Serving never is.
@@ -188,7 +191,8 @@ services:
     read_only: true
     cap_drop: [ALL]
     volumes: [/srv/manga:/library, data:/data]   # worker applies journaled writes
-    deploy: { resources: { limits: { cpus: "2", memory: 512m } } }
+    # Any number of CPUs: the worker uses what it is given; 2 is the floor.
+    deploy: { resources: { limits: { memory: 512m } } }
 
   litestream:
     image: litestream/litestream
