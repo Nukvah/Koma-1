@@ -3,6 +3,9 @@
 //!
 //! - Widths [`WIDTHS`], only those narrower than the page. The original is
 //!   always served as it is, so a page no wider than 720 pixels has none.
+//! - A page that gets those also gets a thumbnail, [`THUMB`] wide, for the
+//!   reader's thumbnails and scrubber. Pages made before thumbnails get
+//!   theirs from their 720 JPEG ([`run_job`]), not from the original again.
 //! - A variant no smaller than the original is dropped: the original serves.
 //! - Each width in JPEG (quality [`JPEG_QUALITY`]) and WebP (quality
 //!   [`WEBP_QUALITY`]). AVIF comes later (M9).
@@ -35,6 +38,11 @@ use crate::scan::ScanError;
 
 /// Widths of the variants; a page gets those narrower than itself.
 pub const WIDTHS: [u32; 3] = [720, 1080, 1440];
+
+/// Width of the thumbnail, made for every page that gets variants: enough
+/// for a 72-pixel-high thumbnail or the scrubber's preview on a sharp
+/// phone screen, a few KB where the 720 copy of a photo is a hundred.
+pub const THUMB: u32 = 240;
 
 pub const JPEG_QUALITY: u8 = 82;
 pub const WEBP_QUALITY: f32 = 80.0;
@@ -137,9 +145,13 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// The widths of the variants a page of `width` pixels gets.
+/// The widths of the variants a page of `width` pixels gets: the
+/// thumbnail, then those of [`WIDTHS`] narrower than the page.
 pub fn widths_for(width: u32) -> impl Iterator<Item = u32> {
-    WIDTHS.into_iter().filter(move |&w| w < width)
+    let thumb = (width > WIDTHS[0]).then_some(THUMB);
+    thumb
+        .into_iter()
+        .chain(WIDTHS.into_iter().filter(move |&w| w < width))
 }
 
 /// The height of a variant `width` pixels wide of a page `page_width` by
@@ -277,8 +289,25 @@ fn luma(r: u8, g: u8, b: u8) -> u8 {
 /// except those that come out no smaller than the page itself. Empty for a
 /// page no wider than the smallest width.
 pub fn make(bytes: &[u8], limits: &Limits) -> Result<Vec<Variant>, Error> {
-    let original_len = bytes.len();
     let pixels = decode(bytes, limits)?;
+    let widths: Vec<u32> = widths_for(pixels.width).collect();
+    resized(pixels, &widths, bytes.len())
+}
+
+/// The thumbnail of a page whose variants were made before thumbnails
+/// were, from `bytes`, its narrowest variant: a small picture to decode,
+/// where the original may be a 50-megapixel photo.
+pub fn thumb_from(bytes: &[u8], limits: &Limits) -> Result<Vec<Variant>, Error> {
+    let pixels = decode(bytes, limits)?;
+    if pixels.width <= THUMB {
+        return Ok(Vec::new());
+    }
+    resized(pixels, &[THUMB], bytes.len())
+}
+
+/// `pixels` at each of `widths`, in each format, but for those no smaller
+/// than `original_len` bytes.
+fn resized(pixels: Pixels, widths: &[u32], original_len: usize) -> Result<Vec<Variant>, Error> {
     let mut out = Vec::new();
     let mut resizer = Resizer::new();
     let options = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Lanczos3));
@@ -290,7 +319,7 @@ pub fn make(bytes: &[u8], limits: &Limits) -> Result<Vec<Variant>, Error> {
     let (page_width, page_height, gray) = (pixels.width, pixels.height, pixels.gray);
     let src = Image::from_vec_u8(page_width, page_height, pixels.data, pixel_type)
         .map_err(|e| Error::Encode(e.to_string()))?;
-    for width in widths_for(page_width) {
+    for &width in widths {
         let height = height_for(page_width, page_height, width);
         let mut dst = Image::new(width, height, pixel_type);
         resizer
@@ -420,7 +449,51 @@ pub fn run_job(
         }
         done += 1;
     }
+    for hash in catalog.pages_lacking_width(rel, VERSION, WIDTHS[0], THUMB)? {
+        if should_stop() {
+            return Ok((JobEnd::Stopped, done));
+        }
+        add_thumb(blobs, catalog, &hash, &limits)?;
+        done += 1;
+    }
     Ok((JobEnd::Done, done))
+}
+
+/// Adds the thumbnail of a page made before thumbnails were, from its 720
+/// JPEG. A page whose JPEG cannot be read or decoded stays without one (the
+/// reader uses the 720 copy instead) and is tried again on the next pass.
+fn add_thumb(
+    blobs: &BlobStore,
+    catalog: &mut Catalog,
+    hash: &blake3::Hash,
+    limits: &Limits,
+) -> Result<(), ScanError> {
+    let from = blobs.variant_path(hash, WIDTHS[0], VERSION, Format::Jpeg.ext());
+    let made = fs::read(&from)
+        .map_err(|e| e.to_string())
+        .and_then(|b| thumb_from(&b, limits).map_err(|e| e.to_string()));
+    let variants = match made {
+        Ok(v) => v,
+        Err(e) => {
+            log::error(
+                "variants: no thumbnail",
+                &[("hash", hash.to_hex().as_ref()), ("error", &e)],
+            );
+            Vec::new()
+        }
+    };
+    let mut rows = Vec::with_capacity(variants.len());
+    for v in &variants {
+        write_blob(blobs, hash, v).map_err(|e| {
+            ScanError::Io(
+                blobs.variant_path(hash, v.width, VERSION, v.format.ext()),
+                e,
+            )
+        })?;
+        rows.push((v.width, v.height, v.format.ext(), v.bytes.len() as u64));
+    }
+    catalog.add_variants(hash, &rows)?;
+    Ok(())
 }
 
 /// After the worker died on a book's variants job each time: the page it
@@ -559,9 +632,12 @@ mod tests {
     #[test]
     fn widths_below_the_page_only() {
         assert_eq!(widths_for(720).count(), 0);
-        assert_eq!(widths_for(721).collect::<Vec<_>>(), [720]);
-        assert_eq!(widths_for(1440).collect::<Vec<_>>(), [720, 1080]);
-        assert_eq!(widths_for(5000).collect::<Vec<_>>(), [720, 1080, 1440]);
+        assert_eq!(widths_for(721).collect::<Vec<_>>(), [THUMB, 720]);
+        assert_eq!(widths_for(1440).collect::<Vec<_>>(), [THUMB, 720, 1080]);
+        assert_eq!(
+            widths_for(5000).collect::<Vec<_>>(),
+            [THUMB, 720, 1080, 1440]
+        );
     }
 
     #[test]
@@ -582,6 +658,8 @@ mod tests {
         assert_eq!(
             got,
             [
+                (THUMB, 360, Format::Jpeg),
+                (THUMB, 360, Format::Webp),
                 (720, 1080, Format::Jpeg),
                 (720, 1080, Format::Webp),
                 (1080, 1620, Format::Jpeg),
@@ -630,9 +708,9 @@ mod tests {
             |x, _| if x < 750 { [0; 3] } else { [255; 3] },
         );
         let vs = make(&page, &Limits::default()).unwrap();
-        assert_eq!((vs[0].width, vs[0].height), (720, 1080));
+        assert_eq!((vs[2].width, vs[2].height), (720, 1080));
         // The stored left half (black) is now the top.
-        let img = decoded(&vs[0]).into_luma8();
+        let img = decoded(&vs[2]).into_luma8();
         assert!(img.get_pixel(360, 100).0[0] < 50);
         assert!(img.get_pixel(360, 980).0[0] > 200);
     }
@@ -641,7 +719,7 @@ mod tests {
     fn gray_pngs_and_transparency() {
         let png = koma_fixtures::png::page(900, 1300, 3);
         let vs = make(&png, &Limits::default()).unwrap();
-        assert_eq!(vs.len(), 2);
+        assert_eq!(vs.len(), 4);
         assert_eq!(components_of_jpeg(first_jpeg(&vs)), 1);
 
         // Fully transparent becomes white.
@@ -661,7 +739,11 @@ mod tests {
         let page = jpeg_q(20, 1000, 1500, None, texture);
         let vs = make(&page, &Limits::default()).unwrap();
         assert!(vs.iter().all(|v| v.bytes.len() < page.len()), "{vs:?}");
-        assert!(vs.iter().all(|v| v.format != Format::Jpeg), "{vs:?}");
+        assert!(
+            vs.iter()
+                .all(|v| v.format != Format::Jpeg || v.width == THUMB),
+            "{vs:?}"
+        );
     }
 
     #[test]
@@ -716,6 +798,37 @@ mod tests {
         let strip = koma_fixtures::png::gray(721, 16_523, |_, y| (y % 256) as u8);
         let vs = make(&strip, &Limits::default()).unwrap();
         let got: Vec<_> = vs.iter().map(|v| (v.width, v.height, v.format)).collect();
-        assert_eq!(got, [(720, 16_500, Format::Jpeg)]);
+        assert_eq!(
+            got,
+            [
+                (THUMB, 5500, Format::Jpeg),
+                (THUMB, 5500, Format::Webp),
+                (720, 16_500, Format::Jpeg)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_thumbnail_from_the_720_copy() {
+        let page = jpeg(1200, 1800, None, |x, y| {
+            [(x % 256) as u8, (y % 256) as u8, 40]
+        });
+        let vs = make(&page, &Limits::default()).unwrap();
+        let from = vs
+            .iter()
+            .find(|v| v.width == 720 && v.format == Format::Jpeg)
+            .unwrap();
+        let got: Vec<_> = thumb_from(&from.bytes, &Limits::default())
+            .unwrap()
+            .iter()
+            .map(|v| (v.width, v.height, v.format))
+            .collect();
+        assert_eq!(
+            got,
+            [(THUMB, 360, Format::Jpeg), (THUMB, 360, Format::Webp)]
+        );
+        // Nothing to make from a picture no wider than a thumbnail.
+        let small = jpeg(200, 300, None, |_, _| [9; 3]);
+        assert!(thumb_from(&small, &Limits::default()).unwrap().is_empty());
     }
 }

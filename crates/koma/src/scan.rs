@@ -429,8 +429,11 @@ pub fn run_jobs(
                 {
                     catalog.rebuild_search()?;
                 }
-                let min_width = variants::WIDTHS[0];
-                if catalog.queue_missing_variants(variants::VERSION, min_width)? > 0 {
+                let (version, min_width) = (variants::VERSION, variants::WIDTHS[0]);
+                if catalog.queue_missing_variants(version, min_width)?
+                    + catalog.queue_missing_width(version, min_width, variants::THUMB)?
+                    > 0
+                {
                     continue;
                 }
             }

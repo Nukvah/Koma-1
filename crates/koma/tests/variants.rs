@@ -151,13 +151,72 @@ fn every_big_page_gets_its_variants_once() {
             files += 1;
         }
     }
-    // v01: 2 + 2 + 0 widths, v02: 2 (the shared page again) + 1, Mirelle: 2;
-    // each in two formats.
-    assert_eq!(files, 2 * (4 + 3 + 2));
+    // v01: 3 + 3 + 0 widths (the thumbnail, 720, 1080), v02: 3 (the shared
+    // page again) + 2, Mirelle: 3; each in two formats.
+    assert_eq!(files, 2 * (6 + 5 + 3));
 
     // Nothing left to do.
     let again = scan(&lib, &data, &mut catalog).unwrap();
     assert_eq!(again.variant_pages, 0);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn pages_made_before_thumbnails_get_theirs_from_the_720_copy() {
+    let root = temp_root("thumbs");
+    let lib = library(&root);
+    let data = root.join("data");
+    let mut catalog = Catalog::open(&db(&data)).unwrap();
+    scan(&lib, &data, &mut catalog).unwrap();
+
+    // As a catalogue made before thumbnails: every page's variants without them.
+    let blobs = BlobStore::new(&data);
+    let mut before = Vec::new();
+    for (_, page) in all_pages(&catalog) {
+        let rows: Vec<(u32, u32, String, u64)> = catalog
+            .variants_of(&page.hash)
+            .unwrap()
+            .into_iter()
+            .filter(|(w, _, _)| *w != variants::THUMB)
+            .map(|(w, h, f)| {
+                let len = fs::metadata(blobs.variant_path(&page.hash, w, VERSION, &f))
+                    .unwrap()
+                    .len();
+                (w, h, f, len)
+            })
+            .collect();
+        if rows.is_empty() {
+            continue;
+        }
+        let rows: Vec<(u32, u32, &str, u64)> = rows
+            .iter()
+            .map(|(w, h, f, l)| (*w, *h, f.as_str(), *l))
+            .collect();
+        catalog
+            .store_variants(&page.hash, VERSION, &rows, None)
+            .unwrap();
+        before.push(page);
+    }
+    before.dedup_by_key(|p| p.hash);
+
+    // The next pass adds a thumbnail to each, and only that.
+    let report = scan(&lib, &data, &mut catalog).unwrap();
+    assert_eq!(report.variant_pages, 4);
+    for page in &before {
+        let got = catalog.variants_of(&page.hash).unwrap();
+        let size = page.size.unwrap();
+        assert_eq!(got.len(), 2 * variants::widths_for(size.width).count());
+        for format in ["jpg", "webp"] {
+            let (w, h, _) = got
+                .iter()
+                .find(|(w, _, f)| *w == variants::THUMB && f == format)
+                .expect("a thumbnail");
+            let bytes = fs::read(blobs.variant_path(&page.hash, *w, VERSION, format)).unwrap();
+            let img = image::load_from_memory(&bytes).unwrap();
+            assert_eq!((img.width(), img.height()), (*w, *h));
+        }
+    }
+    assert_eq!(scan(&lib, &data, &mut catalog).unwrap().variant_pages, 0);
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -264,7 +323,7 @@ fn a_page_that_kills_the_worker_each_time_is_given_up_alone() {
         .map(|(_, p)| p)
         .collect();
     assert!(catalog.variants_of(&pages[0].hash).unwrap().is_empty());
-    assert_eq!(catalog.variants_of(&pages[1].hash).unwrap().len(), 4);
+    assert_eq!(catalog.variants_of(&pages[1].hash).unwrap().len(), 6);
     assert_eq!(catalog.variant_page_count(VERSION).unwrap(), 4);
     assert_eq!(catalog.job_count().unwrap(), 0);
     let _ = fs::remove_dir_all(&root);

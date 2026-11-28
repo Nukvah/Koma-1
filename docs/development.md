@@ -125,6 +125,10 @@ serving never resizes or transcodes (`koma::variants`):
   720 variant may be JPEG only. A variant that comes out no smaller than the
   original is dropped: clean line art saved as PNG is often smaller than any
   lossy copy of it, and the original serves instead.
+- A page that gets those also gets a 240-wide thumbnail, for the reader's
+  thumbnails and scrubber preview: a few KB where a photo's 720 copy is a
+  hundred. Pages made before thumbnails existed get theirs from their 720
+  JPEG on the worker's next pass, not by decoding the original again.
 - On made-up scan-like pages (1600 x 2400, JPEG at quality 90, 1.7 MB each)
   the WebP variants were 7% (720), 23% (1080) and 51% (1440) of the page's
   size, and all six variants together about 1.7 times the originals' space.
