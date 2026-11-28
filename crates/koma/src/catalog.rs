@@ -14,7 +14,7 @@ pub use crate::archive::size::Size;
 
 pub use rusqlite::Error;
 
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
 
 /// How long a book whose file vanished is remembered, so that a folder that
 /// comes back (a drive mounted late, a move noticed in two steps) keeps its
@@ -58,7 +58,8 @@ CREATE TABLE books (
     year       INTEGER,
     language   TEXT NOT NULL DEFAULT '',
     direction  TEXT,                 -- 'ltr' or 'rtl'; NULL: not stated
-    cover_page INTEGER               -- 0-based page to show as the cover; NULL: the first
+    cover_page INTEGER,              -- 0-based page to show as the cover; NULL: the first
+    trash      INTEGER               -- the trash item it is in (crate::journal); NULL: not trashed
 );
 CREATE INDEX books_series ON books(series_id);
 CREATE INDEX books_folder ON books(folder);
@@ -234,6 +235,54 @@ const LIBRARY_SETTINGS: &str = "CREATE TABLE IF NOT EXISTS library_settings (
     change    INTEGER NOT NULL        -- the id of the queued change applied last
 ) WITHOUT ROWID;";
 
+/// What organising the library keeps (crate::journal): the state of each
+/// change, the append-only journal of what it did to files, the trash, and
+/// details edited in the UI.
+const ORGANISE: &str = "CREATE TABLE IF NOT EXISTS ops (
+    id        INTEGER PRIMARY KEY,    -- the change's id in accounts.db
+    state     TEXT NOT NULL,          -- running, paused, done, failed, cancelled
+    done      INTEGER NOT NULL,
+    total     INTEGER NOT NULL,
+    message   TEXT NOT NULL,          -- what it is doing, or why it failed
+    started   INTEGER NOT NULL,
+    finished  INTEGER
+);
+CREATE TABLE IF NOT EXISTS journal (
+    seq       INTEGER PRIMARY KEY AUTOINCREMENT,  -- only ever appended
+    op        INTEGER NOT NULL,
+    action    TEXT NOT NULL,          -- move, folder, trash, restore, erase, edit, write
+    book      INTEGER,
+    series    INTEGER,
+    from_path TEXT NOT NULL,          -- relative to the library ('' when nothing was there)
+    to_path   TEXT NOT NULL,
+    size      INTEGER,                -- of what is at to_path afterwards, for undo
+    mtime     INTEGER,
+    data      TEXT,                   -- what an edit replaced (JSON)
+    at        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS journal_op ON journal(op);
+CREATE TABLE IF NOT EXISTS trash (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    op        INTEGER NOT NULL,
+    kind      TEXT NOT NULL,          -- 'book' or 'series'
+    name      TEXT NOT NULL,
+    series    INTEGER NOT NULL,
+    from_path TEXT NOT NULL,          -- where it was, relative to the library
+    to_path   TEXT NOT NULL,          -- where it is, under .koma-trash
+    size      INTEGER NOT NULL,
+    by        TEXT NOT NULL,
+    at        INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS edits (
+    book_id   INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    field     TEXT NOT NULL,          -- see crate::journal::FIELDS
+    value     TEXT NOT NULL,          -- JSON
+    PRIMARY KEY (book_id, field)
+) WITHOUT ROWID;";
+
+/// Schema 12 to 13: organising the library.
+const MIGRATE_12_TO_13: &str = "ALTER TABLE books ADD COLUMN trash INTEGER;";
+
 /// Tables of schema versions before 7, dropped when upgrading: until then
 /// the catalogue held nothing that the next scan cannot rebuild.
 const DROP_OLD: &str = "
@@ -250,6 +299,10 @@ DROP TABLE IF EXISTS variants;
 DROP TABLE IF EXISTS variant_pages;
 DROP TABLE IF EXISTS search;
 DROP TABLE IF EXISTS library_settings;
+DROP TABLE IF EXISTS ops;
+DROP TABLE IF EXISTS journal;
+DROP TABLE IF EXISTS trash;
+DROP TABLE IF EXISTS edits;
 DROP TABLE IF EXISTS sqlite_sequence;
 ";
 
@@ -267,7 +320,7 @@ fn visible(column: &str, n: usize) -> String {
 pub type Stamp = (u64, i64);
 
 pub struct Catalog {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -469,7 +522,7 @@ impl Catalog {
         match version {
             // From 7 on the catalogue is upgraded in place, one step at a
             // time: remaking page variants is too costly to start over.
-            7..=11 => {
+            7..=12 => {
                 let mut steps = String::new();
                 if version == 7 {
                     steps.push_str(&migrate_7_to_8());
@@ -483,7 +536,18 @@ impl Catalog {
                 if version <= 10 {
                     steps.push_str(MIGRATE_10_TO_11);
                 }
-                steps.push_str(&migrate_11_to_12());
+                if version <= 11 {
+                    steps.push_str(&migrate_11_to_12());
+                }
+                let has_trash: bool = self.conn.query_row(
+                    "SELECT count(*) > 0 FROM pragma_table_info('books') WHERE name = 'trash'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                if !has_trash {
+                    steps.push_str(MIGRATE_12_TO_13);
+                }
+                steps.push_str(ORGANISE);
                 self.conn.execute_batch(&format!(
                     "BEGIN; {steps} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
                 ))?;
@@ -495,7 +559,8 @@ impl Catalog {
                 let schema = SCHEMA
                     .replace("{LIBRARY_OF_PATH}", LIBRARY_OF_PATH)
                     .replace("{COLLECTION_OF_PATH}", COLLECTION_OF_PATH)
-                    + LIBRARY_SETTINGS;
+                    + LIBRARY_SETTINGS
+                    + ORGANISE;
                 self.conn.execute_batch(&format!(
                     "BEGIN; {drop} {schema} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
                 ))?;
@@ -572,7 +637,7 @@ impl Catalog {
         )?;
         tx.execute("DELETE FROM book_terms WHERE book_id = ?1", [book_id])?;
         {
-            let mut insert = tx.prepare(
+            let mut insert = tx.prepare_cached(
                 "INSERT INTO book_terms (book_id, kind, name, pos) VALUES (?1, ?2, ?3, ?4)",
             )?;
             for (kind, names) in
@@ -585,6 +650,8 @@ impl Catalog {
                 }
             }
         }
+        // Details edited in the UI win over what the files say.
+        crate::journal::apply_edits(&tx, book_id)?;
         tx.execute("DELETE FROM pages WHERE book_id = ?1", [book_id])?;
         {
             let mut insert = tx.prepare(
@@ -704,8 +771,8 @@ impl Catalog {
     /// otherwise there must be exactly one candidate.
     pub fn gone_match(&self, path: &str, stamp: Stamp) -> Result<Option<i64>, Error> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT id, path FROM books WHERE gone IS NOT NULL AND size = ?1 AND mtime = ?2
-             ORDER BY gone DESC, id",
+            "SELECT id, path FROM books WHERE gone IS NOT NULL AND trash IS NULL AND size = ?1
+             AND mtime = ?2 ORDER BY gone DESC, id",
         )?;
         let found: Vec<(i64, String)> = stmt
             .query_map(params![stamp.0 as i64, stamp.1], |r| {
@@ -766,7 +833,11 @@ impl Catalog {
     /// with no books. Returns how many books were forgotten.
     pub fn purge_gone(&mut self, before: i64) -> Result<usize, Error> {
         let tx = self.conn.transaction()?;
-        let n = tx.execute("DELETE FROM books WHERE gone < ?1", [before])?;
+        // Books in the trash are kept until the trash lets them go.
+        let n = tx.execute(
+            "DELETE FROM books WHERE gone < ?1 AND trash IS NULL",
+            [before],
+        )?;
         prune_series(&tx)?;
         tx.commit()?;
         Ok(n)
@@ -1778,7 +1849,7 @@ pub struct Job {
 /// being placed and the series it was in: if no other present book is left
 /// there, that series moves to `path` with its id (a series folder renamed or
 /// moved outside Koma-1), unless `path` already has a series.
-fn place_in_series(
+pub(crate) fn place_in_series(
     tx: &rusqlite::Transaction<'_>,
     path: &str,
     name: &str,
@@ -1835,7 +1906,7 @@ fn last_part(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-fn prune_series(tx: &rusqlite::Transaction<'_>) -> Result<(), Error> {
+pub(crate) fn prune_series(tx: &rusqlite::Transaction<'_>) -> Result<(), Error> {
     tx.execute(
         "DELETE FROM series WHERE id NOT IN (SELECT series_id FROM books)",
         [],

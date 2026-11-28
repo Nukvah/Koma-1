@@ -52,7 +52,7 @@ use crate::blobs::BlobStore;
 use crate::catalog::{self, Catalog};
 use crate::cli::Paths;
 use crate::libraries::{self, Library};
-use crate::{admin, auth, download, html, kept, log, signal, variants};
+use crate::{admin, auth, curate, download, html, kept, log, signal, variants};
 
 /// What every request handler shares. Cheap to clone.
 #[derive(Clone)]
@@ -92,6 +92,11 @@ impl AppState {
                 setup_code: OnceLock::new(),
             }),
         }
+    }
+
+    /// The library folder, for plans that look at the disk.
+    pub(crate) fn library_root(&self) -> PathBuf {
+        self.inner.library.clone()
     }
 
     pub(crate) fn auth(&self) -> &auth::Config {
@@ -225,6 +230,16 @@ pub fn router(state: AppState) -> Router {
         .route("/passkey/signin/begin", post(auth::passkey_signin_begin))
         .route("/passkey/signin/finish", post(auth::passkey_signin_finish))
         .route("/kept", post(admin::kept_save))
+        .route("/organise", post(curate::organise))
+        .route("/move", get(curate::move_page).post(curate::move_apply))
+        .route(
+            "/details",
+            get(curate::details_page).post(curate::details_save),
+        )
+        .route("/trash", get(curate::trash_page).post(curate::trash_action))
+        .route("/jobs", get(curate::jobs_page))
+        .route("/jobs/events", get(curate::job_events))
+        .route("/jobs/{id}/{action}", post(curate::job_action))
         .route("/search", get(search))
         .route("/a/{file}", get(stylesheet))
         .route("/s/{id}", get(series))
@@ -620,6 +635,8 @@ async fn stylesheet(UrlPath(file): UrlPath<String>) -> Result<Response, Failure>
         ("text/css; charset=utf-8", html::EPUB_CSS)
     } else if url == html::epub_js_url() {
         ("text/javascript; charset=utf-8", html::EPUB_JS)
+    } else if url == curate::curator_js_url() {
+        ("text/javascript; charset=utf-8", curate::CURATOR_JS)
     } else if url == crate::pages::account_js_url() {
         ("text/javascript; charset=utf-8", crate::pages::ACCOUNT_JS)
     } else {
@@ -635,15 +652,19 @@ async fn stylesheet(UrlPath(file): UrlPath<String>) -> Result<Response, Failure>
         .into_response())
 }
 
-/// `GET /s/<id>`: a series and its books.
+/// `GET /s/<id>`: a series and its books, with the account's progress;
+/// `?select` turns the books into a form, `?done=<change>` notes a change
+/// just made.
 async fn series(
     State(state): State<AppState>,
     Extension(me): Extension<Viewer>,
     UrlPath(id): UrlPath<i64>,
+    RawQuery(q): RawQuery,
 ) -> Result<Html<String>, Failure> {
-    state
+    let viewer = me.clone();
+    let (libraries, series, books, collections) = state
         .query(move |c| {
-            let series = series_for(c, &me, id)?;
+            let series = series_for(c, &viewer, id)?;
             let mut books = Vec::new();
             for book in c.books(id)? {
                 let cover = c.book_cover(book.id, html::COVER_WIDTH, variants::VERSION)?;
@@ -652,23 +673,55 @@ async fn series(
             if books.is_empty() {
                 return Err(Failure::NotFound);
             }
-            let libraries = libraries_for(c, &me)?;
+            let libraries = libraries_for(c, &viewer)?;
             let folder = libraries::library_of(&series.path);
-            let library = libraries
-                .iter()
-                .find(|l| l.folder == folder)
-                .ok_or(Failure::NotFound)?;
-            let collections = collections_of(c, &library.folder)?;
-            Ok(Html(html::series(
-                &me.me(),
-                &libraries,
-                library,
-                &collections,
-                &series,
-                &books,
-            )))
+            let collections = collections_of(c, folder)?;
+            Ok((libraries, series, books, collections))
         })
-        .await
+        .await?;
+    let folder = libraries::library_of(&series.path);
+    let library = libraries
+        .iter()
+        .find(|l| l.folder == folder)
+        .ok_or(Failure::NotFound)?;
+    let list: Vec<(i64, i64, bool)> = books
+        .iter()
+        .map(|(b, _)| (b.id, b.page_count, crate::scan::is_epub(&b.path)))
+        .collect();
+    let progress = curate::progress(&state, &me, &list).await?;
+    let toast = match query_value(q.as_deref(), "done").and_then(|d| d.parse().ok()) {
+        Some(op) => curate::toast(&state, &me, op).await,
+        None => None,
+    };
+    let select = q
+        .as_deref()
+        .is_some_and(|q| q.split('&').any(|p| p == "select"));
+    let page = html::series(
+        &me.me(),
+        &libraries,
+        library,
+        &collections,
+        &series,
+        &books,
+        &html::SeriesView {
+            progress,
+            select,
+            organise: curate::may_organise(&me, folder),
+            toast: toast.as_deref(),
+        },
+    );
+    Ok(Html(if select {
+        page.replacen(
+            "</head>",
+            &format!(
+                "<script defer src=\"{}\"></script></head>",
+                curate::curator_js_url()
+            ),
+            1,
+        )
+    } else {
+        page
+    }))
 }
 
 /// A library's collections, in natural order.

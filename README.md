@@ -4,7 +4,7 @@ A self-hosted manga and comics server: one small Rust binary, a plain web
 library and reader, built to stay fast on small hardware.
 Why and how: [MANIFESTO.md](MANIFESTO.md). Contributing: [AGENTS.md](AGENTS.md).
 
-**Status: Milestone 5 (accounts) in place; organising the library comes with M6.**
+**Status: Milestone 6 (organising, trash) in place; the naming standard comes with M7.**
 `koma worker` indexes a library of CBZ, ZIP, CB7 and EPUB files and photo
 folders into SQLite and keeps it up to date, and `koma serve` shows it in a
 browser: libraries and collections as an endless grid or a sortable table,
@@ -13,7 +13,9 @@ two at a time or as a strip, with a scrubber, thumbnails and zoom, and EPUB
 books as text with their contents. The worker also makes smaller JPEG and WebP copies of each
 large page, once. Everyone signs in (a password, a passkey, or a sign-in proxy); each account
 keeps its own reading positions and reader settings across devices, and has a private folder,
-`/library/~name`, that nobody else sees.
+`/library/~name`, that nobody else sees. Curators move, merge, rename and delete series
+and books, and edit their details: each change is planned first, journaled, and undoable, and
+a delete goes to a trash that keeps it for 30 days.
 
 ## Run
 
@@ -34,7 +36,7 @@ One binary, three modes:
 | Command | Does |
 |---|---|
 | `koma serve` | HTTP server: the library, series and reader pages, page images, `/healthz`. |
-| `koma worker` | Scans the library into the catalogue, then rescans every 15 minutes (`--rescan`). |
+| `koma worker` | Scans the library into the catalogue, then rescans every 15 minutes (`--rescan`); carries out the changes made in the UI. |
 | `koma scan` | Scans the library once and exits (3 if some books could not be read). |
 | `koma scrub` | Integrity checks. Today: nothing to check. |
 | `koma account link <name>` | Prints a sign-in link for an account (made if missing): a lost password, or the first account. |

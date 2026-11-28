@@ -21,10 +21,10 @@ cold_start_ms = 200   # process start to first successful health check (median o
 
 # Static assets, summed per group. Groups with no files yet pass at 0.
 [[assets]]
-name = "Library CSS"  # every page but the readers: library, series, search, settings, accounts
+name = "Library CSS"  # every page but the readers: library, series, search, settings, accounts, organising
 dir = "crates/koma/assets"
 suffix = "koma.css"
-max_kib = 12
+max_kib = 14
 
 [[assets]]
 name = "Reader CSS"   # the picture reader; also under the EPUB reader
@@ -63,7 +63,7 @@ suffix = ".js"
 max_kib = 4
 
 [[assets]]
-name = "Curator pages JS"
+name = "Curator pages JS"  # the jobs page live, select mode
 dir = "crates/koma/assets/curator"
 suffix = ".js"
 max_kib = 24

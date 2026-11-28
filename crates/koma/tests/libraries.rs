@@ -150,7 +150,7 @@ fn schema_7_is_upgraded_in_place() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 12);
+    assert_eq!(version, 13);
     let _ = fs::remove_dir_all(&root);
 }
 

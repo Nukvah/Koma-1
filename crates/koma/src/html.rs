@@ -115,7 +115,12 @@ pub(crate) fn shell(title: &str, libraries: &[Library], here: &Here<'_>, main: &
         escape(here.query),
         crate::pages::user_menu(here.me)
     );
-    for (name, href) in [("library", "/"), ("settings", "/settings")] {
+    for (name, href) in [
+        ("library", "/"),
+        ("jobs", "/jobs"),
+        ("trash", "/trash"),
+        ("settings", "/settings"),
+    ] {
         let on = here.go == name;
         let _ = write!(
             b,
@@ -202,7 +207,19 @@ fn collection_url(library: &Library, collection: &str) -> String {
 /// A cover: the page's variant at [`COVER_WIDTH`] (WebP where the browser
 /// takes it, else JPEG), else the page itself; over a coloured panel with
 /// `label`, seen while it loads or if there is no page.
-fn cover(out: &mut String, cover: Option<&Cover>, shade: &str, label: &str) {
+pub(crate) fn cover(out: &mut String, cover: Option<&Cover>, shade: &str, label: &str) {
+    cover_with(out, cover, shade, label, "");
+}
+
+/// [`cover`] with `extra` inside it, over the picture: a corner tag, the
+/// edge strip of progress.
+pub(crate) fn cover_with(
+    out: &mut String,
+    cover: Option<&Cover>,
+    shade: &str,
+    label: &str,
+    extra: &str,
+) {
     // The label first, so the picture (positioned over the whole cover)
     // hides it once it has loaded.
     let _ = write!(
@@ -227,6 +244,7 @@ fn cover(out: &mut String, cover: Option<&Cover>, shade: &str, label: &str) {
         }
         let _ = write!(out, "<img src=\"{src}\" alt=\"\" loading=lazy></picture>");
     }
+    out.push_str(extra);
     out.push_str("</div>");
 }
 
@@ -247,11 +265,11 @@ pub fn human_size(bytes: u64) -> String {
     unreachable!()
 }
 
-fn shade(id: i64) -> &'static str {
+pub(crate) fn shade(id: i64) -> &'static str {
     SHADES[id.rem_euclid(SHADES.len() as i64) as usize]
 }
 
-fn plural(n: i64, one: &str, many: &str) -> String {
+pub(crate) fn plural(n: i64, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
@@ -618,6 +636,20 @@ pub fn table(t: &Table<'_>) -> String {
     shell(&title, t.libraries, &here, &m)
 }
 
+/// What a series page shows besides the series: the account's progress,
+/// select mode, and what it may do.
+#[derive(Default)]
+pub struct SeriesView<'a> {
+    /// Per book: the page (or chapter) reached, and whether it is read.
+    pub progress: std::collections::HashMap<i64, (i64, bool)>,
+    /// Select mode: the books are a form, with the actions in a bar.
+    pub select: bool,
+    /// The account may organise this series.
+    pub organise: bool,
+    /// A note at the top, HTML (a change just made, with its undo).
+    pub toast: Option<&'a str>,
+}
+
 /// A series: its cover and facts, then its books.
 pub fn series(
     me: &Me<'_>,
@@ -626,6 +658,7 @@ pub fn series(
     collections: &[String],
     series: &Series,
     books: &[(Book, Option<Cover>)],
+    view: &SeriesView<'_>,
 ) -> String {
     let mut m = String::from("<nav class=status aria-label=Breadcrumb>~/");
     let folder = if library.folder.is_empty() {
@@ -645,8 +678,9 @@ pub fn series(
     }
     let _ = write!(
         m,
-        "/{}</nav><div class=series><div class=\"art dots\">",
-        escape(&series.name)
+        "/{}</nav>{}<div class=series><div class=\"art dots\">",
+        escape(&series.name),
+        view.toast.unwrap_or_default()
     );
     cover(
         &mut m,
@@ -683,26 +717,126 @@ pub fn series(
         library.kind.as_str(),
         library.direction.as_str()
     );
-    if let Some((first, _)) = books.first() {
+    // Where to go on: the first book started and not finished, else the
+    // first not read, else the start.
+    let next = books
+        .iter()
+        .find(|(b, _)| view.progress.get(&b.id).is_some_and(|&(_, done)| !done))
+        .or_else(|| {
+            books
+                .iter()
+                .find(|(b, _)| !view.progress.contains_key(&b.id))
+        })
+        .filter(|(b, _)| view.progress.contains_key(&b.id) || !view.progress.is_empty());
+    match (next, books.first()) {
+        (Some((b, _)), _) => {
+            let at = view.progress.get(&b.id).map_or(1, |p| p.0.max(1));
+            let _ = write!(
+                m,
+                "<a class=\"btn primary\" href=\"/r/{}/{at}\">read on: {}</a>",
+                b.id,
+                escape(&b.name)
+            );
+        }
+        (None, Some((first, _))) => {
+            let _ = write!(
+                m,
+                "<a class=\"btn primary\" href=\"{}\">read from the start</a>",
+                read_url(first)
+            );
+        }
+        _ => {}
+    }
+    if !view.select {
         let _ = write!(
             m,
-            "<a class=\"btn primary\" href=\"{}\">read from the start</a>",
-            read_url(first)
+            "<a class=btn href=\"/s/{}?select\">select</a>",
+            series.id
         );
     }
-    let _ = write!(
-        m,
-        "</div></div></div><div class=toolbar><h2 class=section-h>books · {}</h2></div>\
-         <div class=\"grid vols\">",
-        books.len()
-    );
-    for (book, c) in books {
+    if view.organise && !view.select {
         let _ = write!(
             m,
-            "<div class=vol><a class=card href=\"{}\">",
-            read_url(book)
+            "<a class=btn href=\"/move?s={id}\">move or rename</a>\
+             <form method=post action=/organise><input type=hidden name=s value={id}>\
+             <button class=\"btn danger\" type=submit name=action value=trash-series>delete series</button></form>",
+            id = series.id
         );
-        cover(&mut m, c.as_ref(), shade(series.id), &book.name);
+    }
+    let read = books
+        .iter()
+        .filter(|(b, _)| view.progress.get(&b.id).is_some_and(|p| p.1))
+        .count();
+    let _ = write!(
+        m,
+        "</div></div></div>{}<div class=toolbar><h2 class=section-h>books · {}{}</h2>{}</div>\
+         <div class=\"grid vols\">",
+        if view.select {
+            format!(
+                "<form method=post action=/organise><input type=hidden name=s value={}>",
+                series.id
+            )
+        } else {
+            String::new()
+        },
+        books.len(),
+        if read > 0 {
+            format!(" · {read} read")
+        } else {
+            String::new()
+        },
+        if view.select {
+            format!("<a href=\"/s/{}\">done</a>", series.id)
+        } else {
+            String::new()
+        }
+    );
+    for (book, c) in books {
+        let progress = view.progress.get(&book.id).copied();
+        let (class, extra) = match progress {
+            Some((_, true)) => (
+                " done",
+                "<span class=tag>READ</span><span class=bar><i style=\"--p:100%\"></i></span>"
+                    .to_owned(),
+            ),
+            Some((at, false)) => {
+                let pct = (at * 100 / book.page_count.max(1)).clamp(1, 99);
+                (
+                    "",
+                    format!(
+                        "<span class=tag>{pct}%</span><span class=bar><i style=\"--p:{pct}%\"></i></span>"
+                    ),
+                )
+            }
+            None => ("", String::new()),
+        };
+        if view.select {
+            let _ = write!(
+                m,
+                "<label class=\"pick{class}\"><input type=checkbox name=b value={} aria-label=\"{}\">",
+                book.id,
+                escape(&book.name)
+            );
+            cover_with(&mut m, c.as_ref(), shade(series.id), &book.name, &extra);
+            let _ = write!(
+                m,
+                "<b>{}</b><span>{}</span></label>",
+                escape(&book.name),
+                length(book)
+            );
+            continue;
+        }
+        let href = match progress {
+            Some((at, false)) if at > 1 && !crate::scan::is_epub(&book.path) => {
+                format!("/r/{}/{at}", book.id)
+            }
+            _ => read_url(book),
+        };
+        let _ = write!(
+            m,
+            "<div class=\"vol{class}\"><a class=card href=\"{href}\">"
+        );
+        cover_with(&mut m, c.as_ref(), shade(series.id), &book.name, &extra);
         let _ = write!(
             m,
             "<b>{}</b><span>{}</span></a><a class=dl href=\"/d/{}\" download>download · {}{}</a></div>",
@@ -714,6 +848,21 @@ pub fn series(
         );
     }
     m.push_str("</div>");
+    if view.select {
+        m.push_str(
+            "<div class=actbar><b>select books, then</b>\
+             <button class=btn type=submit name=action value=read>mark read</button>\
+             <button class=btn type=submit name=action value=unread>mark unread</button>",
+        );
+        if view.organise {
+            m.push_str(
+                "<button class=\"btn primary\" type=submit name=action value=move>move to…</button>\
+                 <button class=btn type=submit name=action value=details>edit details</button>\
+                 <button class=\"btn danger\" type=submit name=action value=trash>delete</button>",
+            );
+        }
+        m.push_str("</div></form>");
+    }
     let here = Here {
         library: Some(library),
         collections,
