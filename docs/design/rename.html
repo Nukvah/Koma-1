@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Naming · Koma-1</title>
+<link rel="stylesheet" href="koma.css">
+</head>
+<body>
+<input type="checkbox" id="menu" class="menu" aria-label="show the menu">
+<header class="top">
+<a class="brand" href="library.html">KOMA-1</a>
+<form class="search" role="search" action="search.html">
+<label for="q">/</label>
+<input id="q" name="q" type="search" value="" placeholder="search all libraries: title, author:, tag:">
+</form>
+<label for="menu" class="menu-btn" aria-hidden="true">menu</label>
+<details class="umenu">
+<summary><span class="avatar" aria-hidden="true">T</span><span>tamsin ▾</span></summary>
+<ul>
+<li><span><small>signed in as</small> tamsin <span class="role">curator</span></span></li>
+<li><hr></li>
+<li><a href="account.html">account</a></li>
+<li><a href="settings.html">libraries</a></li>
+<li><hr></li>
+<li><form method="post" action="signin.html"><button type="submit">sign out</button></form></li>
+</ul>
+</details>
+</header>
+
+<div class="layout">
+<aside class="side" aria-label="Navigation and libraries">
+<nav aria-label="Main">
+<h2>// go</h2>
+<ul>
+<li><a href="library.html" aria-current="page">&gt; library<span class="n">g l</span></a></li>
+<li><a href="#">&nbsp; recent<span class="n">g r</span></a></li>
+<li><a href="collections.html">&nbsp; collections<span class="n">g c</span></a></li>
+<li><a href="jobs.html">&nbsp; jobs<span class="n">g j</span></a></li>
+<li><a href="trash.html">&nbsp; trash<span class="n">g t</span></a></li>
+<li><a href="settings.html">&nbsp; settings<span class="n">g s</span></a></li>
+</ul>
+</nav>
+<hr>
+<section class="tree">
+<h2>// libraries</h2>
+<ul>
+<li><a class="on" href="library.html" aria-current="true">▾ ~/manga<span class="n">214</span></a></li>
+<li><a class="sub" href="#">  ├─ Starfall Saga</a></li>
+<li><a class="sub" href="#">  └─ Unsorted</a></li>
+<li><a href="#">▸ ~/webtoons<span class="n">38</span></a></li>
+<li><a href="#">▸ ~/comics<span class="n">61</span></a></li>
+</ul>
+</section>
+<hr>
+<p class="status"><span class="ok">●</span> 1 job running · <a href="jobs.html">42%</a><br>trash: 3 items · 1.9 GB</p>
+</aside>
+
+<main>
+<div class="toolbar"><h1>naming · <b>Starfall Academy</b></h1>
+<nav class="seg" aria-label="Scope"><a href="#" aria-current="page">this series</a><a href="#">all of Manga</a></nav></div>
+
+<div class="pair">
+<section class="box">
+<h2>the name a book gets · manga and comics</h2>
+<p><code>(Event) [Circle (Author)] Series - Ch. 003 [EN].cbz</code></p>
+<div class="status">
+<p>Each part only when known: from the book's details (its metadata, your edits), else from the series' other books. A volume is <code>Vol. 2</code>.</p>
+<p>Numbers are padded to the series' largest: <code>Ch. 3</code> in a series that stops at 9, <code>Ch. 003</code> in one that reaches 120.</p>
+<p>Only the file name changes; the folder is the series. Nothing Koma-1 knows is lost: it is all in the new name.</p>
+</div>
+</section>
+<section class="box">
+<h2>this plan</h2>
+<div class="status">
+<p><b>4</b> to rename · 1 already right · <span class="pending">2 for the fix-up queue</span></p>
+<p>A dry run: nothing changes until you apply it. Applying it is one journaled change, with undo; books keep their ids, progress and edits.</p>
+</div>
+</section>
+</div>
+
+<h2 class="section-h">plan · dry run</h2>
+<form method="post">
+<table class="plan"><tbody>
+<tr><td><label class="hint"><input type="checkbox" checked aria-label="rename"> rename</label></td><td><div class="from">manga/Starfall Academy/starfall_academy_c3_[eng].cbz</div><div class="to">manga/Starfall Academy/(SF12) [Moonforge (Mirelle)] Starfall Academy - Ch. 03 [EN].cbz</div></td><td></td></tr>
+<tr><td><label class="hint"><input type="checkbox" checked aria-label="rename"> rename</label></td><td><div class="from">manga/Starfall Academy/Starfall Academy ch10.5.cbz</div><div class="to">manga/Starfall Academy/[Moonforge (Mirelle)] Starfall Academy - Ch. 10.5 [EN].cbz</div><div class="hint">author and circle from the series' other books</div></td><td></td></tr>
+<tr><td><span class="hint">as it is</span></td><td><div class="to">manga/Starfall Academy/[Moonforge (Mirelle)] Starfall Academy - Ch. 11 [EN].cbz</div></td><td></td></tr>
+<tr><td><label class="hint"><input type="checkbox" checked aria-label="rename"> rename</label></td><td><div class="from">manga/Starfall Academy/SA_v2.cbz</div><div class="to">manga/Starfall Academy/[Moonforge (Mirelle)] Starfall Academy - Vol. 2 [EN].cbz</div><div class="hint">series from the folder; volumes stop at 2, so one digit</div></td><td></td></tr>
+<tr class="warn"><td><span class="pending">clash</span></td><td><div class="from">manga/Starfall Academy/Starfall Academy - Ch. 12.cbz</div><div class="to">manga/Starfall Academy/[Moonforge (Mirelle)] Starfall Academy - Ch. 12 [EN].cbz</div><div class="hint">another file gets this name too: both go to fix-up</div></td><td><a href="fixup.html">fix…</a></td></tr>
+<tr class="warn"><td><span class="pending">fix-up</span></td><td><div class="to">manga/Starfall Academy/extras.cbz</div><div class="hint">no number, and not the series' only book</div></td><td><a href="fixup.html">fix…</a></td></tr>
+</tbody></table>
+<div class="actbar">
+<button class="btn primary" type="submit">rename 4 <kbd>↵</kbd></button>
+<a class="btn" href="fixup.html">fix-up queue · 2</a>
+<a class="btn" href="series.html">cancel</a>
+</div>
+</form>
+
+<h2 class="section-h">cosplay libraries · kept tidy by themselves</h2>
+<div class="status">
+<p>In a cosplay library the worker keeps every set in <code>Cosplayer / Set / variant</code> folders after each scan, as a journaled change you see on <a href="jobs.html">jobs</a> and can undo:</p>
+</div>
+<table class="plan"><tbody>
+<tr><td>1</td><td><div class="from">cosplay/[Lumen Studio] Mirelle - Starfall Bunny - Bonus.zip</div><div class="to">cosplay/Mirelle/Starfall Bunny/[Lumen Studio] Mirelle - Starfall Bunny - Bonus.zip</div></td><td>tidy</td></tr>
+<tr><td>2</td><td><div class="from">cosplay/Mirelle - Starfall Bunny/</div><div class="to">cosplay/Mirelle/Starfall Bunny/Mirelle - Starfall Bunny/</div></td><td>tidy</td></tr>
+<tr class="warn"><td>3</td><td><div class="to">cosplay/Summer Beach/</div><div class="hint">no cosplayer in the name: left as it is, in the fix-up queue</div></td><td><a href="fixup.html">fix…</a></td></tr>
+</tbody></table>
+</main>
+</div>
+</body>
+</html>

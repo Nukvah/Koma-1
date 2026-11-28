@@ -21,6 +21,8 @@ Open any `.html` file here in a browser; they share `koma.css` and use no JavaSc
 | `jobs.html` | jobs: live progress, pause and cancel, undo of finished ones, the journal |
 | `trash.html` | the trash: where each thing was, size, days left; restore, delete for good, keep time |
 | `details.html` | editing a book's (or several books') details and cover; writing `metadata.json` on request |
+| `rename.html` | the naming standard: a series' (or library's) rename plan as a dry run, and the cosplay tidy |
+| `fixup.html` | the fix-up queue: files too ambiguous to name by themselves, with what was read and the new name |
 | `states.html` | empty and error states, one block per screen |
 | `reader.html` | reading: the page only, with the tap zones shown once on the first open |
 | `reader-bars.html` | the bars a tap shows: title and back; scrubber with page preview, thumbnails, mode, fit, direction |
@@ -276,3 +278,35 @@ Chosen with the owner, and built:
   book started.
 - Not built yet: select mode on library pages (whole series at once), and
   the mockup's keys (`x`, `m`, `e`, `u`).
+
+## Naming standard (M7)
+
+Chosen with the owner:
+
+- **Full names.** A manga or comics book is named
+  `(Event) [Circle (Author)] Series - Ch. 003 [EN].cbz`, each part only when
+  known (from its details, else the series' other books); a volume
+  `Series - Vol. 2`. Everything Koma-1 reads from a name goes back into it,
+  so a rename never loses information. Only the file name changes: the
+  folder is the series.
+- **Numbers padded to the series' largest**: `Ch. 3` in a series that stops
+  at 9, `Ch. 003` in one that reaches 120; the same for volumes. Decimals
+  keep their part (`Ch. 010.5`).
+- **The cosplay tidy is automatic**: after each scan the worker keeps a
+  cosplay library in `Cosplayer / Set / variant` folders, as an ordinary
+  journaled change (on `/jobs`, with undo). Anything it cannot place goes to
+  the fix-up queue and stays where it is.
+
+Proposed, for review with these mockups:
+
+- **Renaming is asked for**, per series or per library, from its page
+  (“naming”): a plan as a dry run, each row ticked by default, then one
+  journaled change with undo. Nothing is renamed behind your back except
+  the cosplay tidy.
+- **The fix-up queue** holds what cannot be named safely: no number in a
+  series of several books, two files that would get the same name, a set
+  with no cosplayer. Each shows what Koma-1 read, as fields to fill in, and
+  the name it would get. “Keep the name it has” takes it out of the queue
+  until the file changes.
+- **What a rename writes** is also kept as the book's details (your
+  answers in the fix-up queue are edits), so a later scan reads the same.

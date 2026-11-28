@@ -160,7 +160,8 @@ back with its progress after its folder was removed.
 Goal: straighten up file names without ever losing a file.
 
 - Naming templates for the manga and cosplay patterns, for example
-  `(Event) [Moonforge (Mirelle)] Starfall - Ch. 03 [EN].cbz`.
+  `(Event) [Moonforge (Mirelle)] Starfall - Ch. 03 [EN].cbz`, numbers padded to the series'
+  largest.
 - A rename plan through the M6 journal, with a preview, conflicts and undo.
 - A background tidy that keeps a cosplay library in Cosplayer / Set / variant form *(proven)*.
 - A fix-up queue for files too ambiguous to rename automatically.

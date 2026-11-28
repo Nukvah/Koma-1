@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fix-up · Koma-1</title>
+<link rel="stylesheet" href="koma.css">
+</head>
+<body>
+<input type="checkbox" id="menu" class="menu" aria-label="show the menu">
+<header class="top">
+<a class="brand" href="library.html">KOMA-1</a>
+<form class="search" role="search" action="search.html">
+<label for="q">/</label>
+<input id="q" name="q" type="search" value="" placeholder="search all libraries: title, author:, tag:">
+</form>
+<label for="menu" class="menu-btn" aria-hidden="true">menu</label>
+<details class="umenu">
+<summary><span class="avatar" aria-hidden="true">T</span><span>tamsin ▾</span></summary>
+<ul>
+<li><span><small>signed in as</small> tamsin <span class="role">curator</span></span></li>
+<li><hr></li>
+<li><a href="account.html">account</a></li>
+<li><a href="settings.html">libraries</a></li>
+<li><hr></li>
+<li><form method="post" action="signin.html"><button type="submit">sign out</button></form></li>
+</ul>
+</details>
+</header>
+
+<div class="layout">
+<aside class="side" aria-label="Navigation and libraries">
+<nav aria-label="Main">
+<h2>// go</h2>
+<ul>
+<li><a href="library.html" aria-current="page">&gt; library<span class="n">g l</span></a></li>
+<li><a href="#">&nbsp; recent<span class="n">g r</span></a></li>
+<li><a href="collections.html">&nbsp; collections<span class="n">g c</span></a></li>
+<li><a href="jobs.html">&nbsp; jobs<span class="n">g j</span></a></li>
+<li><a href="trash.html">&nbsp; trash<span class="n">g t</span></a></li>
+<li><a href="settings.html">&nbsp; settings<span class="n">g s</span></a></li>
+</ul>
+</nav>
+<hr>
+<section class="tree">
+<h2>// libraries</h2>
+<ul>
+<li><a class="on" href="library.html" aria-current="true">▾ ~/manga<span class="n">214</span></a></li>
+<li><a class="sub" href="#">  ├─ Starfall Saga</a></li>
+<li><a class="sub" href="#">  └─ Unsorted</a></li>
+<li><a href="#">▸ ~/webtoons<span class="n">38</span></a></li>
+<li><a href="#">▸ ~/comics<span class="n">61</span></a></li>
+</ul>
+</section>
+<hr>
+<p class="status"><span class="ok">●</span> 1 job running · <a href="jobs.html">42%</a><br>trash: 3 items · 1.9 GB</p>
+</aside>
+
+<main>
+<div class="toolbar"><h1>naming · <b>fix-up queue · 3</b></h1><a href="rename.html">back to the plan</a></div>
+<p class="note">Files Koma-1 cannot name by itself. Fill what it could not read; the new name is shown before anything changes. “Keep the name it has” takes a file out of the queue for good (until it changes).</p>
+<form class="box form" method="post">
+<div><b>manga/Starfall Academy/extras.cbz</b><br><span class="pending">no number, and not the series' only book</span></div>
+<div class="row"><label>series<input name="series" value="Starfall Academy" size="18"></label><label>kind<select name="kind"><option selected>—</option><option>volume</option><option>chapter</option><option>extra</option></select></label><label>number<input name="number" value="" size="12"></label><label>author<input name="author" value="Mirelle" size="18"></label><label>circle<input name="circle" value="Moonforge" size="18"></label></div>
+<p class="hint">becomes <code>[Moonforge (Mirelle)] Starfall Academy - Extra 1 [EN].cbz</code></p>
+<div class="row"><button class="btn primary" type="submit">rename</button><button class="btn" type="submit" name="keep" value="1">keep the name it has</button><a href="#">open the book</a></div>
+</form>
+<form class="box form" method="post">
+<div><b>manga/Starfall Academy/Starfall Academy - Ch. 12.cbz</b><br><span class="pending">two files would both be Ch. 12</span><br><small>the other: manga/Starfall Academy/SA 12 (fixed).cbz</small></div>
+<div class="row"><label>series<input name="series" value="Starfall Academy" size="18"></label><label>kind<select name="kind"><option>—</option><option>volume</option><option selected>chapter</option><option>extra</option></select></label><label>number<input name="number" value="12" size="12"></label><label>author<input name="author" value="Mirelle" size="18"></label><label>circle<input name="circle" value="Moonforge" size="18"></label></div>
+<p class="hint">becomes <code>[Moonforge (Mirelle)] Starfall Academy - Ch. 12 [EN].cbz</code></p>
+<div class="row"><button class="btn primary" type="submit">rename</button><button class="btn" type="submit" name="keep" value="1">keep the name it has</button><a href="#">open the book</a></div>
+</form>
+<form class="box form" method="post">
+<div><b>cosplay/Summer Beach</b><br><span class="pending">no cosplayer in the name</span></div>
+<div class="row"><label>cosplayer<input name="cosplayer" value="" size="18"></label><label>set<input name="set" value="Summer Beach" size="18"></label><label>variant<input name="variant" value="" size="12"></label><label>circle<input name="circle" value="" size="18"></label></div>
+<p class="hint">becomes <code>cosplay/<i>cosplayer</i>/Summer Beach/Summer Beach: fill in the cosplayer</code></p>
+<div class="row"><button class="btn primary" type="submit">rename</button><button class="btn" type="submit" name="keep" value="1">keep the name it has</button><a href="#">open the book</a></div>
+</form>
+
+</main>
+</div>
+</body>
+</html>
